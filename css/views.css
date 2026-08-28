@@ -1,0 +1,323 @@
+/* views.css — page headers, heroes, grids, shelves, panel, settings. */
+
+/* ------------------------------------------------------------------ page head */
+
+.page-head { padding: 26px 0 18px; }
+.eyebrow {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 660;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  transition: color var(--dur-3) var(--ease);
+}
+.page-title { font-size: 30px; letter-spacing: -.028em; }
+.page-sub { color: var(--text-3); font-size: 13.5px; margin-top: 6px; }
+
+.toolbar { display: flex; align-items: center; gap: 10px; padding-bottom: 18px; flex-wrap: wrap; }
+.block .toolbar { padding-top: 14px; padding-bottom: 0; }
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0 12px;
+}
+.section-title { font-size: 17px; letter-spacing: -.02em; }
+
+.block { padding-bottom: 26px; }
+
+/* On an album by a single artist, repeating their name on every row is noise. */
+.plain-list.no-sub .trow-sub { display: none; }
+.plain-list.no-sub .trow-title { font-size: 14px; }
+
+/* ------------------------------------------------------------------ hero */
+
+.hero {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 26px;
+  padding: 30px 26px 26px;
+  margin: 8px 0 22px;
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--surface);
+}
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(120% 160% at 0% 0%, rgb(var(--hero-rgb, var(--accent-rgb)) / .45), transparent 62%),
+    linear-gradient(160deg, rgb(var(--hero-rgb, var(--accent-rgb)) / .22), transparent 70%);
+  transition: background 600ms var(--ease);
+}
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  box-shadow: inset 0 0 0 1px var(--line);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.hero-art {
+  width: 196px;
+  height: 196px;
+  flex: none;
+  border-radius: var(--r-md);
+  box-shadow: var(--sh-3);
+}
+.hero-art.round { border-radius: var(--r-full); }
+.hero-artist .hero-art { width: 168px; height: 168px; }
+
+.hero-meta { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding-bottom: 4px; }
+.hero-title {
+  font-size: clamp(26px, 3.4vw, 46px);
+  letter-spacing: -.035em;
+  line-height: 1.06;
+  overflow-wrap: anywhere;
+}
+.hero-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+.hero-link { color: var(--text); font-weight: 600; transition: color var(--dur-1) linear; }
+.hero-link:hover { color: var(--accent); }
+.dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: .5; }
+
+.hero-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+
+/* ------------------------------------------------------------------ grids */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px;
+}
+
+.shelf { padding-bottom: 20px; }
+
+.rail-wrap { position: relative; margin: 0 calc(var(--gutter) * -1); }
+
+.rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 172px;                  /* fixed, so every shelf matches */
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  padding: 0 var(--gutter) 6px;
+  scroll-padding-inline: var(--gutter);      /* snap to the gutter, not past it */
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+}
+.rail::-webkit-scrollbar { display: none; }
+.rail > * { scroll-snap-align: start; }
+
+@media (max-width: 1000px) { .rail { grid-auto-columns: 148px; } }
+
+/* Arrows for pointer users; the rail scrolls natively for everyone else. */
+.rail-nav {
+  position: absolute;
+  top: 34%;
+  width: 36px; height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: var(--sh-2), inset 0 0 0 1px var(--line-2);
+  opacity: 0;
+  transform: scale(.86);
+  transition: opacity var(--dur-2) var(--ease), transform var(--dur-2) var(--ease-back);
+  z-index: 3;
+}
+.rail-nav[hidden] { display: none; }
+.rail-wrap:hover .rail-nav { opacity: 1; transform: none; }
+.rail-nav:hover { background: var(--surface-3); }
+.rail-nav.prev { left: calc(var(--gutter) - 18px); }
+.rail-nav.next { right: calc(var(--gutter) - 18px); }
+.rail-nav .ico { width: 18px; height: 18px; }
+
+@media (hover: none) { .rail-nav { display: none; } }
+
+/* ------------------------------------------------------------------ empty */
+
+.empty {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  padding: 64px 24px;
+  text-align: center;
+  color: var(--text-2);
+}
+.empty-ico {
+  display: grid;
+  place-items: center;
+  width: 64px; height: 64px;
+  border-radius: var(--r-xl);
+  background: var(--surface-hi);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.empty-ico .ico { width: 28px; height: 28px; }
+.empty h3 { font-size: 17px; color: var(--text); }
+.empty p { max-width: 44ch; font-size: 13.5px; color: var(--text-3); }
+.empty .btn { margin-top: 10px; }
+
+/* ------------------------------------------------------------------ settings */
+
+.rows { display: flex; flex-direction: column; gap: 6px; }
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--surface-hi);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.settings-ico {
+  display: grid;
+  place-items: center;
+  width: 36px; height: 36px;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text-2);
+  flex: none;
+}
+.settings-ico .ico { width: 18px; height: 18px; }
+.settings-text { flex: 1; min-width: 0; }
+.settings-name { color: var(--text); font-weight: 560; font-size: 13.5px; }
+.settings-note { color: var(--text-3); font-size: 12.5px; margin-top: 1px; }
+.settings-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.about p { max-width: 68ch; margin-bottom: 8px; }
+
+/* ------------------------------------------------------------------ now playing */
+
+.np {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  position: relative;
+}
+.np[hidden] { display: none; }
+.np-empty { padding-top: 80px; }
+
+/* The spectrum sits inside the artwork rather than claiming a row of its own,
+   so the panel looks the same whether or not anything is playing. */
+.np-stage { position: relative; will-change: transform; }
+
+.np-art {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-3);
+}
+
+.np-viz {
+  position: absolute;
+  left: 6px; bottom: 6px;
+  /* An absolutely positioned <canvas> is a replaced element: with width:auto it
+     takes its intrinsic (attribute) size and ignores `right`, so be explicit. */
+  width: calc(100% - 12px);
+  height: 32%;
+  pointer-events: none;
+  /* A soft scrim so the bars read against pale artwork too. */
+  background: linear-gradient(to top, rgb(0 0 0 / .38), transparent 78%);
+  border-radius: 0 0 calc(var(--r-lg) - 4px) calc(var(--r-lg) - 4px);
+}
+
+.np-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.np-title { font-size: 18px; letter-spacing: -.022em; overflow-wrap: anywhere; }
+.np-artist { color: var(--text); font-size: 13.5px; font-weight: 560; transition: color var(--dur-1) linear; }
+.np-artist:hover { color: var(--accent); }
+.np-album { color: var(--text-3); font-size: 12.5px; transition: color var(--dur-1) linear; }
+.np-album:hover { color: var(--text-2); }
+
+.np-facts { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.np-next { margin-top: 2px; display: flex; flex-direction: column; gap: 6px; }
+.np-next-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: var(--surface-hi);
+  box-shadow: inset 0 0 0 1px var(--line);
+  text-align: left;
+  transition: background var(--dur-1) linear, transform var(--dur-2) var(--ease);
+}
+.np-next-row:hover { background: var(--surface-3); transform: translateY(-1px); }
+.np-next-label {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 640;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+.np-next-text { min-width: 0; display: flex; flex-direction: column; }
+.np-next-title { color: var(--text); font-size: 13px; font-weight: 540; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-next-artist { color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ------------------------------------------------------------------ queue */
+
+.queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px 8px;
+  color: var(--text-3);
+  font-size: 12px;
+  flex: none;
+}
+.queue-head[hidden] { display: none; }
+.queue-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 16px; }
+
+.qrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 56px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  contain: layout style;
+  transition: background var(--dur-1) linear, opacity var(--dur-2) linear;
+}
+.qrow:hover { background: var(--surface-hi); }
+.qrow.is-past { opacity: .45; }
+.qrow.is-current { background: var(--accent-soft); }
+.qrow.is-current .qrow-title { color: var(--accent); }
+.qrow.is-dragging { opacity: .4; }
+.qrow.is-drop { box-shadow: inset 0 2px 0 var(--accent); }
+
+.qrow-grip { color: var(--text-3); opacity: 0; cursor: grab; flex: none; transition: opacity var(--dur-1) linear; }
+.qrow-grip .ico { width: 16px; height: 16px; }
+.qrow:hover .qrow-grip { opacity: 1; }
+
+.qrow-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.qrow-title { color: var(--text); font-size: 13px; font-weight: 540; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qrow-sub { color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qrow-time { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
+.qrow-remove { opacity: 0; transition: opacity var(--dur-1) linear; }
+.qrow:hover .qrow-remove { opacity: 1; }
+.qrow:hover .qrow-time { display: none; }
