@@ -1,0 +1,243 @@
+/* base.css — design tokens, reset, typography. */
+
+:root {
+  /* ---- surfaces ---- */
+  --bg:          #08080b;
+  --bg-grad:     #0b0b12;
+  --surface:     #101015;
+  --surface-2:   #16161d;
+  --surface-3:   #1d1d27;
+  --surface-hi:  rgba(255 255 255 / .045);
+  --line:        rgba(255 255 255 / .075);
+  --line-2:      rgba(255 255 255 / .14);
+
+  /* ---- ink ---- */
+  --text:   #ecebf2;
+  --text-2: #a4a2b5;
+  --text-3: #706e82;
+  --on-accent: #ffffff;
+
+  /* ---- accent (replaced at runtime by the current album's colour) ---- */
+  --accent-rgb: 124 108 255;
+  --accent:      rgb(var(--accent-rgb));
+  --accent-soft: rgb(var(--accent-rgb) / .16);
+  --accent-line: rgb(var(--accent-rgb) / .34);
+  --accent-glow: rgb(var(--accent-rgb) / .40);
+
+  --danger: #ff5f6d;
+
+  /* ---- geometry ---- */
+  --r-xs: 6px;  --r-sm: 9px;  --r-md: 13px;  --r-lg: 18px;  --r-xl: 26px;  --r-full: 999px;
+
+  --sidebar-w: 244px;
+  --pane-w:    340px;
+  --player-h:  92px;
+  --topbar-h:  64px;
+  --gutter:    32px;
+
+  /* ---- depth ---- */
+  --sh-1: 0 1px 2px rgb(0 0 0 / .30);
+  --sh-2: 0 10px 30px -12px rgb(0 0 0 / .60);
+  --sh-3: 0 28px 70px -20px rgb(0 0 0 / .72);
+  --sh-art: 0 12px 34px -14px rgb(0 0 0 / .78);
+
+  /* ---- motion ---- */
+  --dur-1: 130ms;
+  --dur-2: 240ms;
+  --dur-3: 420ms;
+  --ease:      cubic-bezier(.22, 1, .36, 1);
+  --ease-soft: cubic-bezier(.33, 1, .68, 1);
+  --ease-back: cubic-bezier(.34, 1.4, .64, 1);
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+          "Noto Sans", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg:         #f6f6f9;
+  --bg-grad:    #eeeef4;
+  --surface:    #ffffff;
+  --surface-2:  #f2f2f6;
+  --surface-3:  #e7e7ee;
+  --surface-hi: rgb(10 10 25 / .04);
+  --line:       rgb(12 12 28 / .09);
+  --line-2:     rgb(12 12 28 / .17);
+
+  --text:   #14141b;
+  --text-2: #56566a;
+  --text-3: #86869a;
+
+  --sh-1: 0 1px 2px rgb(20 20 40 / .07);
+  --sh-2: 0 10px 28px -14px rgb(20 20 45 / .28);
+  --sh-3: 0 26px 60px -22px rgb(20 20 45 / .30);
+  --sh-art: 0 12px 30px -14px rgb(20 20 45 / .34);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:         #f6f6f9;
+    --bg-grad:    #eeeef4;
+    --surface:    #ffffff;
+    --surface-2:  #f2f2f6;
+    --surface-3:  #e7e7ee;
+    --surface-hi: rgb(10 10 25 / .04);
+    --line:       rgb(12 12 28 / .09);
+    --line-2:     rgb(12 12 28 / .17);
+    --text:   #14141b;
+    --text-2: #56566a;
+    --text-3: #86869a;
+    --sh-1: 0 1px 2px rgb(20 20 40 / .07);
+    --sh-2: 0 10px 28px -14px rgb(20 20 45 / .28);
+    --sh-3: 0 26px 60px -22px rgb(20 20 45 / .30);
+    --sh-art: 0 12px 30px -14px rgb(20 20 45 / .34);
+    color-scheme: light;
+  }
+}
+
+/* ------------------------------------------------------------------ reset */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* The UA rule for [hidden] is a bare attribute selector, so any author rule
+   that sets `display` beats it — including the ones the virtualiser's recycled
+   rows carry. Recycled nodes must actually disappear, so make it stick. */
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;                 /* the app manages its own scrolling */
+  overscroll-behavior: none;
+}
+
+h1, h2, h3, h4, p, dl, dd, figure { margin: 0; }
+ul, ol { margin: 0; padding: 0; list-style: none; }
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+  margin: 0;
+}
+
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+
+a { color: inherit; text-decoration: none; }
+
+img { display: block; max-width: 100%; }
+
+canvas { display: block; }
+
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+/* ------------------------------------------------------------------ type */
+
+h1, h2, h3 { font-weight: 660; letter-spacing: -.018em; line-height: 1.15; }
+
+.muted  { color: var(--text-2); }
+.faint  { color: var(--text-3); }
+.small  { font-size: 12.5px; }
+.truncate, .clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------ icons */
+
+.ico {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ focus */
+
+:focus { outline: none; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
+::selection { background: rgb(var(--accent-rgb) / .32); }
+
+/* ------------------------------------------------------------------ scrollbars */
+
+* { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border: 3px solid transparent;
+  border-radius: var(--r-full);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ------------------------------------------------------------------ boot */
+
+.boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  z-index: 900;
+  transition: opacity var(--dur-3) var(--ease), visibility var(--dur-3);
+}
+
+.boot-mark {
+  width: 56px; height: 56px;
+  display: grid; place-items: center;
+  border-radius: var(--r-lg);
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 12px 40px -8px var(--accent-glow);
+  animation: boot-pulse 1.4s var(--ease-soft) infinite;
+}
+.boot-mark .ico { width: 30px; height: 30px; }
+
+@keyframes boot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(.9); opacity: .72; }
+}
+
+body.is-ready .boot { opacity: 0; visibility: hidden; }
+
+/* ------------------------------------------------------------------ a11y */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing * { pointer-events: none; }
