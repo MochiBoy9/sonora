@@ -1,132 +1,167 @@
 /* base.css — design tokens, reset, typography.
  *
- * Surfaces are declared as raw channel triplets (`--surface-rgb`) and composed
- * into both opaque and translucent forms, because the app now sits on a live
- * WebGL backdrop: every chrome surface is a piece of glass over it, and glass
- * needs an alpha it can vary. Nothing here uses a colour function newer than
- * `rgb()` with a slash, which every engine that can run the app supports.
+ * Sonora is drawn as an instrument: hairlines instead of borders, chamfered
+ * corners instead of radii, monospace for anything numeric, and one electric
+ * cyan doing the pointing. Nothing is rounded by accident — `--r-*` is gone,
+ * and every corner that is not square is cut on a 45° with `clip-path`, which
+ * is what makes the whole interface read as vector geometry rather than as a
+ * stack of soft cards.
+ *
+ * Two accents, deliberately separate:
+ *   --accent-rgb  the brand cyan. Structure, focus, controls, state. Fixed.
+ *   --art-rgb     the colour of the current album. Only ever used next to the
+ *                 artwork it came from, so one loud cover can never repaint
+ *                 the whole instrument.
  */
 
 :root {
-  /* ---- surfaces ---- */
-  --bg-rgb:        7 7 11;
-  --bg-2-rgb:      12 12 19;
-  --surface-rgb:   16 16 22;
-  --surface-2-rgb: 23 23 31;
-  --surface-3-rgb: 32 32 43;
+  /* ---- surfaces: near-black with a blue cast ---- */
+  --bg-rgb:        4 8 14;
+  --bg-2-rgb:      7 13 22;
+  --surface-rgb:   9 16 26;
+  --surface-2-rgb: 13 22 36;
+  --surface-3-rgb: 20 33 51;
 
-  --bg:          rgb(var(--bg-rgb));
-  --bg-grad:     rgb(var(--bg-2-rgb));
-  --surface:     rgb(var(--surface-rgb));
-  --surface-2:   rgb(var(--surface-2-rgb));
-  --surface-3:   rgb(var(--surface-3-rgb));
-  --surface-hi:  rgb(255 255 255 / .05);
-  --line:        rgb(255 255 255 / .08);
-  --line-2:      rgb(255 255 255 / .15);
+  --bg:        rgb(var(--bg-rgb));
+  --bg-grad:   rgb(var(--bg-2-rgb));
+  --surface:   rgb(var(--surface-rgb));
+  --surface-2: rgb(var(--surface-2-rgb));
+  --surface-3: rgb(var(--surface-3-rgb));
+  --surface-hi: rgb(120 200 255 / .055);
 
-  /* Chrome that the backdrop shows through. */
-  --glass:       rgb(var(--surface-rgb) / .62);
-  --glass-2:     rgb(var(--surface-2-rgb) / .78);
-  --glass-bar:   rgb(var(--bg-rgb) / .58);
-  --blur:        blur(26px) saturate(180%);
+  /* Hairlines are tinted, never grey: a neutral rule on a blue ground reads
+     as dirt, a blue one reads as drawn. */
+  --line:   rgb(120 200 255 / .13);
+  --line-2: rgb(120 200 255 / .26);
+  --line-3: rgb(120 200 255 / .46);
+
+  --glass:     rgb(var(--surface-rgb) / .58);
+  --glass-2:   rgb(var(--surface-2-rgb) / .82);
+  --glass-bar: rgb(var(--bg-rgb) / .62);
+  --blur:      blur(24px) saturate(150%);
 
   /* ---- ink ---- */
-  --text:   #eeedf4;
-  --text-2: #a6a4b8;
-  --text-3: #726f85;
-  --on-accent: #ffffff;
+  --text:   #e8f5ff;
+  --text-2: #8ba6c0;
+  --text-3: #55708b;
+  --on-accent: #00131c;
 
-  /* ---- accent (replaced at runtime by the current album's colour) ---- */
-  --accent-rgb: 124 108 255;
+  /* ---- accents ---- */
+  --accent-rgb:   0 209 255;      /* electric cyan */
+  --accent-2-rgb: 58 132 255;     /* bright blue   */
+  --art-rgb:      0 209 255;      /* replaced at runtime by the album colour */
+
   --accent:      rgb(var(--accent-rgb));
-  --accent-soft: rgb(var(--accent-rgb) / .16);
-  --accent-line: rgb(var(--accent-rgb) / .34);
+  --accent-2:    rgb(var(--accent-2-rgb));
+  --accent-soft: rgb(var(--accent-rgb) / .14);
+  --accent-line: rgb(var(--accent-rgb) / .42);
   --accent-glow: rgb(var(--accent-rgb) / .40);
+  --accent-grad: linear-gradient(115deg, rgb(var(--accent-rgb)), rgb(var(--accent-2-rgb)));
 
-  --danger: #ff5f6d;
+  --danger: #ff4d6a;
+  --warn:   #ffc857;
 
   /* ---- geometry ---- */
-  --r-xs: 6px;  --r-sm: 10px;  --r-md: 14px;  --r-lg: 20px;  --r-xl: 28px;  --r-full: 999px;
+  --cut:    9px;                  /* the corner chamfer, everywhere */
+  --cut-sm: 5px;
+  --cut-lg: 16px;
+  --hair:   1px;
 
-  --sidebar-w: 248px;
-  --pane-w:    348px;
-  --player-h:  94px;
-  --topbar-h:  66px;
-  --gutter:    32px;
+  --sidebar-w: 252px;
+  --pane-w:    352px;
+  --player-h:  96px;
+  --topbar-h:  62px;
+  --gutter:    34px;
 
-  /* ---- depth ---- */
-  --sh-1: 0 1px 2px rgb(0 0 0 / .32);
-  --sh-2: 0 10px 30px -12px rgb(0 0 0 / .62);
-  --sh-3: 0 28px 70px -20px rgb(0 0 0 / .74);
-  --sh-art: 0 18px 44px -18px rgb(0 0 0 / .82);
-  --sh-glow: 0 14px 40px -14px var(--accent-glow);
+  /* ---- depth: crisp, directional, never a soft halo ---- */
+  --sh-1: 0 1px 0 rgb(0 0 0 / .5);
+  --sh-2: 0 12px 30px -14px rgb(0 0 0 / .85);
+  --sh-3: 0 30px 70px -26px rgb(0 0 0 / .92);
+  --sh-art: 0 24px 48px -22px rgb(0 0 0 / .9);
+  --sh-glow: 0 0 0 1px var(--accent-line), 0 12px 34px -14px var(--accent-glow);
 
   /* ---- motion ---- */
-  --dur-1: 130ms;
-  --dur-2: 240ms;
+  --dur-1: 120ms;
+  --dur-2: 220ms;
   --dur-3: 420ms;
-  --ease:      cubic-bezier(.22, 1, .36, 1);
+  --ease:      cubic-bezier(.2, .9, .25, 1);      /* quick out, long settle */
   --ease-soft: cubic-bezier(.33, 1, .68, 1);
-  --ease-back: cubic-bezier(.34, 1.4, .64, 1);
+  --ease-back: cubic-bezier(.3, 1.5, .6, 1);
+  --ease-step: cubic-bezier(.85, 0, .15, 1);      /* mechanical, for wipes */
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
           "Noto Sans", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono",
+          Consolas, monospace;
 
   color-scheme: dark;
 }
 
-:root[data-theme="light"] {
-  --bg-rgb:        246 246 250;
-  --bg-2-rgb:      238 238 245;
-  --surface-rgb:   255 255 255;
-  --surface-2-rgb: 244 244 248;
-  --surface-3-rgb: 233 233 240;
+/* ------------------------------------------------------------------ light */
 
-  --surface-hi: rgb(10 10 25 / .045);
-  --line:       rgb(12 12 28 / .10);
-  --line-2:     rgb(12 12 28 / .18);
+/* Not "the dark theme inverted": a drafting-table light theme — ice white,
+   ink-blue hairlines, the same cyan doing the same job. */
+:root[data-theme="light"] {
+  --bg-rgb:        238 243 248;
+  --bg-2-rgb:      228 236 244;
+  --surface-rgb:   255 255 255;
+  --surface-2-rgb: 243 247 251;
+  --surface-3-rgb: 229 237 245;
+
+  --surface-hi: rgb(10 60 100 / .05);
+  --line:   rgb(12 60 100 / .16);
+  --line-2: rgb(12 60 100 / .30);
+  --line-3: rgb(12 60 100 / .48);
 
   --glass:     rgb(var(--surface-rgb) / .72);
-  --glass-2:   rgb(var(--surface-2-rgb) / .86);
-  --glass-bar: rgb(var(--bg-rgb) / .70);
+  --glass-2:   rgb(var(--surface-2-rgb) / .88);
+  --glass-bar: rgb(var(--bg-rgb) / .74);
 
-  --text:   #14141b;
-  --text-2: #55556a;
-  --text-3: #85859a;
+  --text:   #06131f;
+  --text-2: #3f5771;
+  --text-3: #6d8399;
+  --on-accent: #001620;
 
-  --sh-1: 0 1px 2px rgb(20 20 40 / .07);
-  --sh-2: 0 10px 28px -14px rgb(20 20 45 / .28);
-  --sh-3: 0 26px 60px -22px rgb(20 20 45 / .30);
-  --sh-art: 0 16px 36px -16px rgb(20 20 45 / .34);
+  --accent-rgb:   0 137 179;
+  --accent-2-rgb: 30 96 214;
+
+  --sh-1: 0 1px 0 rgb(12 40 70 / .1);
+  --sh-2: 0 12px 26px -16px rgb(12 40 70 / .4);
+  --sh-3: 0 26px 56px -26px rgb(12 40 70 / .45);
+  --sh-art: 0 20px 40px -22px rgb(12 40 70 / .45);
 
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg-rgb:        246 246 250;
-    --bg-2-rgb:      238 238 245;
+    --bg-rgb:        238 243 248;
+    --bg-2-rgb:      228 236 244;
     --surface-rgb:   255 255 255;
-    --surface-2-rgb: 244 244 248;
-    --surface-3-rgb: 233 233 240;
+    --surface-2-rgb: 243 247 251;
+    --surface-3-rgb: 229 237 245;
 
-    --surface-hi: rgb(10 10 25 / .045);
-    --line:       rgb(12 12 28 / .10);
-    --line-2:     rgb(12 12 28 / .18);
+    --surface-hi: rgb(10 60 100 / .05);
+    --line:   rgb(12 60 100 / .16);
+    --line-2: rgb(12 60 100 / .30);
+    --line-3: rgb(12 60 100 / .48);
 
     --glass:     rgb(var(--surface-rgb) / .72);
-    --glass-2:   rgb(var(--surface-2-rgb) / .86);
-    --glass-bar: rgb(var(--bg-rgb) / .70);
+    --glass-2:   rgb(var(--surface-2-rgb) / .88);
+    --glass-bar: rgb(var(--bg-rgb) / .74);
 
-    --text:   #14141b;
-    --text-2: #55556a;
-    --text-3: #85859a;
+    --text:   #06131f;
+    --text-2: #3f5771;
+    --text-3: #6d8399;
+    --on-accent: #001620;
 
-    --sh-1: 0 1px 2px rgb(20 20 40 / .07);
-    --sh-2: 0 10px 28px -14px rgb(20 20 45 / .28);
-    --sh-3: 0 26px 60px -22px rgb(20 20 45 / .30);
-    --sh-art: 0 16px 36px -16px rgb(20 20 45 / .34);
+    --accent-rgb:   0 137 179;
+    --accent-2-rgb: 30 96 214;
+
+    --sh-1: 0 1px 0 rgb(12 40 70 / .1);
+    --sh-2: 0 12px 26px -16px rgb(12 40 70 / .4);
+    --sh-3: 0 26px 56px -26px rgb(12 40 70 / .45);
+    --sh-art: 0 20px 40px -22px rgb(12 40 70 / .45);
 
     color-scheme: light;
   }
@@ -160,29 +195,68 @@ body {
 h1, h2, h3, h4, p, dl, dd, figure { margin: 0; }
 ul, ol { margin: 0; padding: 0; list-style: none; }
 
-button, input, select, textarea {
-  font: inherit;
-  color: inherit;
-  margin: 0;
-}
-
+button, input, select, textarea { font: inherit; color: inherit; margin: 0; }
 button { background: none; border: 0; padding: 0; cursor: pointer; }
-
 a { color: inherit; text-decoration: none; }
-
 img { display: block; max-width: 100%; }
-
 canvas { display: block; }
 
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 
+/* ------------------------------------------------------------------ shapes */
+
+/* The chamfer. One corner cut on every panel — bottom-right by default, which
+   gives the whole interface a consistent reading direction. */
+.cut {
+  clip-path: polygon(
+    0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
+    100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+}
+.cut-sm {
+  clip-path: polygon(
+    0 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
+    100% 100%, var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)));
+}
+.cut-lg {
+  clip-path: polygon(
+    0 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg),
+    100% 100%, var(--cut-lg) 100%, 0 calc(100% - var(--cut-lg)));
+}
+/* Cut on both diagonals — used where a shape has to read as a machined part
+   rather than as a panel: the transport buttons, the artwork frames. */
+.cut-both {
+  clip-path: polygon(
+    var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut),
+    100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%,
+    var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut));
+}
+
+/* Corner brackets: four L-shaped hairlines, drawn with one gradient stack so
+   a panel costs no extra elements. */
+.brackets {
+  position: relative;
+}
+.brackets::before,
+.brackets::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+  border: var(--hair) solid var(--line-3);
+}
+.brackets::before { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+.brackets::after { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+
 /* ------------------------------------------------------------------ type */
 
-h1, h2, h3 { font-weight: 660; letter-spacing: -.02em; line-height: 1.14; }
+h1, h2, h3 { font-weight: 640; letter-spacing: -.022em; line-height: 1.1; }
 
 .muted  { color: var(--text-2); }
 .faint  { color: var(--text-3); }
 .small  { font-size: 12.5px; }
+.mono   { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
 .truncate, .clip {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -190,10 +264,20 @@ h1, h2, h3 { font-weight: 660; letter-spacing: -.02em; line-height: 1.14; }
   min-width: 0;
 }
 
-/* Display headings get a whisper of a gradient — enough to catch the light,
-   not enough to notice as an effect. */
+/* The micro-label: the instrument's voice. Uppercase, wide, small, quiet. */
+.label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* Display type is cut from the accent gradient, so headings glow rather than
+   simply being bright. */
 .grad-text {
-  background: linear-gradient(180deg, var(--text) 26%, rgb(var(--accent-rgb) / .82) 190%);
+  background: linear-gradient(96deg, var(--text) 8%, rgb(var(--accent-rgb)) 92%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -201,15 +285,17 @@ h1, h2, h3 { font-weight: 660; letter-spacing: -.02em; line-height: 1.14; }
 
 /* ------------------------------------------------------------------ icons */
 
+/* Butt caps and miter joins: the icons are drawn with the same pen as the
+   rest of the interface. */
 .ico {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   flex: none;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-width: 1.5;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
   pointer-events: none;
 }
 
@@ -218,26 +304,25 @@ h1, h2, h3 { font-weight: 660; letter-spacing: -.02em; line-height: 1.14; }
 :focus { outline: none; }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: var(--r-xs);
+  outline: var(--hair) solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 0;
 }
 
-::selection { background: rgb(var(--accent-rgb) / .32); }
+::selection { background: rgb(var(--accent-rgb) / .3); color: var(--text); }
 
 /* ------------------------------------------------------------------ scrollbars */
 
 * { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 
-::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--line-2);
   border: 3px solid transparent;
-  border-radius: var(--r-full);
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-line); background-clip: content-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 /* ------------------------------------------------------------------ backdrop */
@@ -255,6 +340,22 @@ h1, h2, h3 { font-weight: 660; letter-spacing: -.02em; line-height: 1.14; }
   transition: opacity var(--dur-3) var(--ease);
 }
 .backdrop.is-off { opacity: 0; }
+
+/* A one-pixel grid over the whole window, at the threshold of visible. It is
+   what tells you the interface is drawn on graph paper. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgb(120 200 255 / .028) var(--hair), transparent var(--hair)),
+    linear-gradient(to bottom, rgb(120 200 255 / .028) var(--hair), transparent var(--hair));
+  background-size: 44px 44px;
+  mask-image: radial-gradient(120% 100% at 50% 0%, #000 20%, transparent 78%);
+  -webkit-mask-image: radial-gradient(120% 100% at 50% 0%, #000 20%, transparent 78%);
+}
 
 /* ------------------------------------------------------------------ a11y */
 

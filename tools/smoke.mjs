@@ -261,8 +261,11 @@ ok('mode switches', await page.evaluate(() => localStorage.getItem('sonora:viz')
 await shot('18-stage-radial');
 
 await page.keyboard.press('Escape');
-await page.waitForTimeout(1200);
-ok('stage closes on Escape', await page.locator('.stage').count() === 0);
+// Waiting for the node to go rather than for a fixed interval: the exit is an
+// animation, and how long one takes depends on the machine.
+const closed = await page.waitForSelector('.stage', { state: 'detached', timeout: 6000 })
+  .then(() => true).catch(() => false);
+ok('stage closes on Escape', closed);
 ok('backdrop returns to the page', await page.evaluate(() =>
   document.body.firstElementChild?.classList.contains('backdrop')));
 

@@ -73,9 +73,9 @@ and go-to-album. Drag rows in the queue to reorder. Drag the sidebar edge to res
 ```
 index.html          shell, intro markup, inline SVG icon sprite
 css/
-  base.css          design tokens, reset, typography
+  base.css          design tokens, chamfers, reset, typography
   intro.css         the welcome sequence
-  layout.css        app frame: sidebar, main, right pane, player bar
+  layout.css        app frame: sidebar, main, right pane, transport
   components.css    buttons, artwork, rows, cards, sliders, overlays
   views.css         page headers, heroes, shelves, settings, queue
   visualizer.css    spectrum canvases and the immersive stage
@@ -87,9 +87,10 @@ js/
   metadata.worker.js  the import pipeline, off the main thread
   db.js             IndexedDB persistence
   virtual.js        windowed list and grid rendering
-  motion.js         ~3 KB animation core: springs, one shared ticker, WAAPI
-  intro.js          the opening sequence
-  backdrop.js       the WebGL depth field behind the interface
+  motion.js         animation core: springs, one shared ticker, WAAPI, text
+  gl.js             the 3D layer: shaders, 4×4 matrices, wireframe geometry
+  intro.js          the opening sequence, in three dimensions
+  backdrop.js       the wireframe world behind the interface
   visualizer.js     four spectrum renderers over one analyser reading
   stage.js          the full-screen immersive view
   views.js          every route
@@ -98,6 +99,36 @@ js/
   ui.js             shared widgets: menus, dialogs, toasts, track rows
   util.js           DOM and data helpers
 ```
+
+## The look
+
+Sonora is drawn as an instrument rather than as a stack of cards.
+
+**Nothing is rounded by accident.** There are no border radii in the app at
+all: corners are either square or cut on a 45° with `clip-path`, from one token
+(`--cut`) that every panel, button, sleeve and dialog shares. Surfaces are
+separated by tinted hairlines instead of shadows, panels carry corner brackets,
+and the whole window sits on a faint 44px grid — so the interface reads as
+something drawn on graph paper, which is what makes the 3D world behind it
+believable.
+
+**Two accents, deliberately separate.** `--accent-rgb` is the instrument's own
+electric cyan, and it never moves: it is the colour that points at things, and
+an interface whose pointing colour changes every three minutes is one you
+cannot learn. `--art-rgb` is the colour of the album currently playing, and it
+is only ever used beside that album's artwork — the hero wash, the sleeve glow,
+the far end of a spectrum gradient. One loud cover can tint its own corner of
+the app; it cannot repaint the controls.
+
+**Numbers are monospace, labels are small caps.** Times, counts, track indices,
+sort headers and section titles are set in the mono stack with wide tracking,
+because an instrument's readouts should line up in columns and never reflow as
+the digits change.
+
+**Light is a drafting table, not an inversion.** The light theme is ice white
+with ink-blue hairlines and the same cyan doing the same job, and the 3D world
+paints itself as a darker tint there, because light added to white is
+invisible.
 
 **Metadata is read by hand.** `tags.js` parses ID3v2.2/2.3/2.4 (including
 unsynchronisation, all four text encodings and embedded APIC art), ID3v1, MP4
@@ -137,13 +168,17 @@ frame callback entirely, so an idle Sonora asks for no frames at all.
 `prefers-reduced-motion` turns the lot off — the visualiser and the backdrop
 draw one still frame and then stop.
 
-**There is always an introduction.** The opening sequence ships as markup in
-`index.html`, not as something a module builds, so it is on screen at first
-paint rather than after the JavaScript arrives. It plays while the library is
-being read out of IndexedDB — the time it takes is time that was being spent
-anyway — and the first key, click or scroll skips it. A repeat visit gets the
-same sequence at roughly half the length. If the scripts never load at all, a
-CSS animation removes it after eight seconds rather than leaving a locked door.
+**There is always an introduction, and it is a 3D scene.** Five wireframe bars
+stand on a grid plane and rise out of the floor in sequence while the camera
+swings around and settles, with tunnel rings running past; the wordmark
+assembles a letter at a time over the top. The markup ships in `index.html`,
+not built by a module, so it is on screen at first paint rather than after the
+JavaScript arrives, and the flat SVG mark it ships with is also the fallback for
+machines without WebGL. It plays while the library is being read out of
+IndexedDB — the time it takes is time that was being spent anyway — and the
+first key, click or scroll skips it. A repeat visit gets the same sequence at
+roughly half the length. If the scripts never load at all, a CSS animation
+removes it after eight seconds rather than leaving a locked door.
 
 **The spectrum is banded once per frame.** `player.analysis()` reads the
 `AnalyserNode` at 2048 points and folds it into 64 logarithmic bands between 32
@@ -156,29 +191,52 @@ period so one kick does not register three times. Every visualiser on screen
 reads that same object, so the FFT is banded once no matter how many canvases
 are drawing.
 
-**Four renderers, three places.** `visualizer.js` draws bars, an oscilloscope,
-a rotating radial ring or stacked ribbons; the same renderer runs inside the
-now-playing artwork, as a hairline along the top of the transport bar, and
-full-bleed on the immersive stage (`V`). The stage puts the artwork on a real
-perspective tilt that follows the pointer and leans into the beat, and hides its
-own chrome when the pointer goes still.
+**Four renderers, three places.** `visualizer.js` draws square bars with
+falling peak caps, an oscilloscope over a ticked axis, spokes around an
+instrument dial, or **mesh** — the last second of spectrum drawn as a wireframe
+surface running away toward a horizon, which is a spectrogram you can read as a
+landscape. The same renderer runs inside the now-playing artwork, as a hairline
+along the top of the transport, and full-bleed on the immersive stage (`V`). The
+stage puts the artwork on a real perspective tilt that follows the pointer and
+leans into the beat, and hides its own chrome when the pointer goes still.
 
-**The background is a 3D scene.** `backdrop.js` is one WebGL canvas behind the
-whole app: an aurora of three slow metaballs in the current accent colour, and a
-few thousand points scattered through a volume, rotated and projected with a
-real perspective divide, looping toward the camera. Bass widens the field, level
-brightens it, a beat pushes a pulse through it. Two draw calls, static geometry,
-and it renders below native resolution because it is soft by construction. On a
-light page the same shapes are painted as a darker tint, because light added to
-white is invisible. It watches its own frame budget: a device that cannot hold
-the pace gets it at half rate, and then not at all. No WebGL, or a lost context,
-and the CSS gradients that were always underneath are simply what you see.
+**The background is a wireframe world.** `backdrop.js` is one WebGL canvas
+behind the whole app, drawing an actual 3D scene rather than a gradient
+pretending to be one: a ground plane of lines running to the horizon, scrolling
+toward the camera and rippling with the bass; square tunnel sections receding
+into the distance and swelling on a beat; a wireframe icosahedron turning above
+the horizon; and a fullscreen pass for the horizon glow, the vignette and the
+scanlines. Perspective is a real projection matrix — `js/gl.js` carries a
+column-major 4×4 stack and the geometry builders, and every matrix routine
+writes into a caller-owned array, so a frame allocates nothing.
 
-**Every chrome surface is glass.** The sidebar, top bar, queue panel, player
-bar, heroes, menus and dialogs are translucent and blurred, so the scene behind
-them is present without ever competing with a track title. Surfaces are declared
-as channel triplets and composed into opaque and translucent forms, which is
-what makes one set of tokens serve both.
+Geometry is uploaded once and animated entirely in the vertex shader, which
+makes a frame four draw calls. It renders below native resolution because it is
+soft by construction, and it watches its own frame budget: a device that cannot
+hold the pace gets it at half rate, and then not at all. No WebGL, or a lost
+context, and the CSS gradients that were always underneath are simply what you
+see.
+
+One trap worth naming, because it cost an evening: GLSL ES requires a name
+declared in both shader stages to carry the same precision, and the two stages
+have *different defaults*. A `float` uniform shared between a highp vertex
+shader and a mediump fragment shader does not warn — the program fails to link
+and the scene silently vanishes. Every shared varying here is qualified
+explicitly, and no uniform is shared at all.
+
+**Every chrome surface is glass.** The sidebar, top bar, queue panel, transport,
+heroes, menus and dialogs are translucent and blurred, so the world behind them
+is present without ever competing with a track title. Surfaces are declared as
+channel triplets and composed into opaque and translucent forms, which is what
+makes one set of tokens serve both.
+
+**Motion is orchestrated, not decorated.** Springs retarget mid-flight, so the
+nav marker and the artwork tilt follow the pointer rather than chasing it;
+entrances stagger and wipe from the leading edge; headings resolve out of noise
+one character at a time; counts roll up rather than appearing. All of it is
+gated on the route having actually changed, because a title that re-dissolves
+every time the library updates underneath reads as a fault rather than a
+flourish.
 
 **The interface takes its colour from the artwork.** The accent is extracted in
 the worker by quantising a 24×24 sample and picking the most vivid mid-tone that
@@ -203,12 +261,19 @@ Chromium, 3,000 tracks across 300 albums, 1460×900:
 
 Reproduce with `tools/perf.mjs` (below).
 
-The backdrop and the visualisers do not change that. Re-measured after they were
-added, on a slower machine than the table above: scroll frame time is still a
-median of 16.7 ms with 27 live nodes, import holds at ~475 files/second, and the
-JS heap is 6–7 MB. The spectrum is banded once per frame and shared; the
-backdrop is two draw calls over static geometry at a capped pixel ratio, and
-backs itself off when frames start slipping.
+The 3D world and the visualisers do not change what the lists cost. Re-measured
+after the rework, on a slower machine than the table above (a container with a
+software GL renderer, so the WebGL figures are a worst case): scroll frame time
+is still a median of **16.7 ms** with 28 live nodes, import holds at ~410–425
+files/second, and the JS heap is 8–10 MB.
+
+Two honest notes. Drawing the world costs the main thread something, so the
+backdrop **stops while an import is running** — the worker's throughput is what
+someone is actually waiting on, and the room can hold still for six seconds.
+And cold start to a painted library reads slower here (~0.9 s against 250 ms on
+the machine in the table) because the intro now compiles shaders and renders a
+scene during boot; the library is painted behind it either way, and the intro is
+on screen for longer than the difference.
 
 ## Testing
 
@@ -242,5 +307,12 @@ on the machine instead of the one Playwright downloads for itself.
 - The visualiser style, the backdrop and the artwork tint are all switchable in
   **Settings → Appearance** and **Visualiser**; the choice follows every canvas
   in the app at once.
+- The design owes its conventions to a few places worth naming: motion.dev and
+  anime.js for spring-based orchestration, staggered timelines and treating text
+  as a list of targets; KokonutUI and bklit-ui for the token-driven,
+  customisation-first way of composing primitives. Both of those are React and
+  Tailwind libraries, so nothing was imported — Sonora still ships with no
+  dependencies, no build step and no network requests. What was borrowed is how
+  they think, not their code.
 - Works down to ~520px wide: the sidebar collapses to an icon rail and the queue
   panel becomes an overlay.

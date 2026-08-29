@@ -9,12 +9,12 @@
  * canvas, no ticker task and no listeners.
  */
 
-import { $, el, ico, fmtTime, clamp } from './util.js';
+import { $, el, ico, fmtTime, clamp, formatName } from './util.js';
 import * as player from './player.js';
 import * as lib from './library.js';
 import { paintArt } from './ui.js';
 import { createVisualizer, MODES, isMode } from './visualizer.js';
-import { tick, animate, spring, draggable, ease, reduceMotion } from './motion.js';
+import { tick, animate, spring, draggable, settled, ease, reduceMotion } from './motion.js';
 
 const MODE_KEY = 'sonora:viz';
 const IDLE_MS = 3200;
@@ -60,7 +60,7 @@ export function openStage(backdrop) {
 
   const title = el('h2', { class: 'stage-title' });
   const artist = el('p', { class: 'stage-artist' });
-  const album = el('p', { class: 'stage-album' });
+  const tags = el('div', { class: 'stage-tags' });
 
   const elapsed = el('span', { class: 'stage-time', text: '0:00' });
   const total = el('span', { class: 'stage-time', text: '0:00' });
@@ -81,7 +81,7 @@ export function openStage(backdrop) {
     canvas,
     el('div', { class: 'stage-veil' }),
     el('div', { class: 'stage-top' }, modeBar, closeBtn),
-    el('div', { class: 'stage-body' }, artWrap, el('div', { class: 'stage-meta' }, title, artist, album)),
+    el('div', { class: 'stage-body' }, artWrap, el('div', { class: 'stage-meta' }, title, artist, tags)),
     el('div', { class: 'stage-foot' },
       el('div', { class: 'stage-scrub' }, elapsed, seek, total),
       transport));
@@ -129,7 +129,7 @@ export function openStage(backdrop) {
     if (!t) {
       title.textContent = 'Nothing playing';
       artist.textContent = 'Choose a track to fill the room';
-      album.textContent = '';
+      tags.textContent = '';
       paintArt(artImg, '');
       return;
     }
@@ -141,7 +141,13 @@ export function openStage(backdrop) {
         { duration: 560, easing: ease.out });
     }
     artist.textContent = t.artist;
-    album.textContent = [t.album, t.year || null].filter(Boolean).join(' · ');
+
+    // The readout: album, year, genre and the container it came off disk in.
+    tags.textContent = '';
+    for (const bit of [t.album, t.year || null, t.genre || null, formatName(t.name || '')]) {
+      if (bit) tags.appendChild(el('span', { class: 'chip', text: String(bit) }));
+    }
+
     paintArt(artImg, t.albumKey);
     total.textContent = fmtTime(t.duration || player.state.duration || 0);
   }
@@ -259,7 +265,7 @@ export function openStage(backdrop) {
     if (backdrop) backdrop.setIntensity(1);
     const out = animate(host, { opacity: [1, 0], transform: ['scale(1)', 'scale(1.03)'] },
       { duration: 260, easing: ease.inOut, commit: false });
-    (out ? out.finished.catch(() => {}) : Promise.resolve()).then(() => host.remove());
+    settled(out, 260).then(() => host.remove());
     $('#playerbar')?.querySelector('.pb-stage')?.focus?.();
   };
 }

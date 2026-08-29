@@ -240,7 +240,7 @@ function buildQueue(host) {
         row.classList.remove('is-drop');
         const to = +row.dataset.index;
         if (dragFrom < 0 || dragFrom === to) return;
-        reorder(dragFrom, to);
+        player.moveInQueue(dragFrom, to);
       });
       return row;
     },
@@ -254,16 +254,6 @@ function buildQueue(host) {
       row.querySelector('.qrow-time').textContent = track.duration ? fmtTime(track.duration) : '';
     },
   });
-
-  function reorder(from, to) {
-    const q = player.state.queue;
-    const [moved] = q.splice(from, 1);
-    q.splice(to, 0, moved);
-    if (from === player.state.index) player.state.index = to;
-    else if (from < player.state.index && to >= player.state.index) player.state.index--;
-    else if (from > player.state.index && to <= player.state.index) player.state.index++;
-    player.events.emit('queue');
-  }
 
   function update(follow) {
     items = player.state.queue.map((id) => lib.getTrack(id)).filter(Boolean);

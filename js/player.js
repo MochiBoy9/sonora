@@ -414,6 +414,33 @@ export function removeAt(i) {
   warmNext();
 }
 
+/**
+ * Moves a queued track. The panel used to splice `state.queue` itself, which
+ * left `baseOrder` describing an order the queue no longer had — so turning
+ * shuffle off afterwards restored the wrong sequence. Reordering belongs to
+ * whoever owns both arrays, which is here.
+ */
+export function moveInQueue(from, to) {
+  const n = state.queue.length;
+  if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
+  const [moved] = state.queue.splice(from, 1);
+  state.queue.splice(to, 0, moved);
+
+  if (from === state.index) state.index = to;
+  else if (from < state.index && to >= state.index) state.index--;
+  else if (from > state.index && to <= state.index) state.index++;
+
+  // Keep the un-shuffled order describing the same set in the same relative
+  // order, so switching shuffle off lands somewhere sensible.
+  const b = baseOrder.indexOf(moved);
+  if (b >= 0) {
+    baseOrder.splice(b, 1);
+    baseOrder.splice(Math.min(to, baseOrder.length), 0, moved);
+  }
+  events.emit('queue');
+  warmNext();
+}
+
 export function clearQueue() {
   const kept = new Set(state.queue.slice(0, state.index + 1));
   state.queue = state.queue.slice(0, state.index + 1);

@@ -12,6 +12,8 @@ import { startIntro } from './intro.js';
 import { mountBackdrop } from './backdrop.js';
 import { toggleStage, isOpen as stageOpen } from './stage.js';
 
+/* Destinations are numbered, like channels on a desk — the number is part of
+   how you learn where things are, not decoration. */
 const NAV = [
   { route: 'home', label: 'Home', icon: 'home' },
   { route: 'songs', label: 'Songs', icon: 'music' },
@@ -19,6 +21,17 @@ const NAV = [
   { route: 'artists', label: 'Artists', icon: 'artist' },
   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
 ];
+
+/** What the top-bar readout says for a given route. */
+function routeLabel(route) {
+  if (route.name === 'album') return 'Album';
+  if (route.name === 'artist') return 'Artist';
+  if (route.name === 'playlist') return 'Playlist';
+  if (route.name === 'search') return 'Search';
+  if (route.name === 'settings') return 'Settings';
+  const nav = NAV.find((n) => n.route === route.name);
+  return nav ? nav.label : 'Home';
+}
 
 const scrollMemory = new Map();
 let teardown = () => {};
@@ -48,6 +61,7 @@ function navigate() {
 
   teardown = renderView(host, route);
   paintNav(route);
+  paintRouteTag(route);
   syncSearchInput(route);
 
   const remembered = scrollMemory.get(currentHash);
@@ -72,21 +86,24 @@ let pill = null;
 function buildSidebar() {
   const side = $('#sidebar');
 
-  const brand = el('a', { class: 'brand', href: '#/home' },
+  const brand = el('a', { class: 'brand', href: '#/home', 'aria-label': 'Sonora — home' },
     el('span', { class: 'brand-mark', html: ico('logo') }),
-    el('span', { class: 'brand-name', text: 'Sonora' }));
+    el('span', { class: 'brand-name', html: 'SON<b>ORA</b>' }));
 
   const nav = el('nav', { class: 'nav', 'aria-label': 'Library' });
   pill = el('div', { class: 'nav-pill' });
   nav.appendChild(pill);
-  for (const item of NAV) {
+  NAV.forEach((item, i) => {
     nav.appendChild(el('a', {
       class: 'nav-item', href: '#/' + item.route, data: { route: item.route },
-    }, el('span', { class: 'nav-ico', html: ico(item.icon) }), el('span', { class: 'nav-label', text: item.label })));
-  }
+    },
+      el('span', { class: 'nav-num', text: String(i + 1).padStart(2, '0') }),
+      el('span', { class: 'nav-ico', html: ico(item.icon) }),
+      el('span', { class: 'nav-label', text: item.label })));
+  });
 
   const playlistHead = el('div', { class: 'side-head' },
-    el('span', { text: 'Playlists' }),
+    el('span', { class: 'label', text: 'Playlists' }),
     el('button', {
       class: 'icon-btn ghost sm', title: 'New playlist', html: ico('plus'),
       onclick: () => {
@@ -229,7 +246,8 @@ function buildTopbar() {
 
   const addBtn = el('button', { class: 'btn ghost sm topbar-add', html: ico('plus') + '<span>Add music</span>', onclick: addMusic });
 
-  bar.append(el('div', { class: 'topbar-nav' }, back, fwd), search, progress, addBtn);
+  const tag = el('div', { class: 'route-tag', id: 'route-tag' });
+  bar.append(el('div', { class: 'topbar-nav' }, back, fwd), tag, search, progress, addBtn);
 
   lib.events.on('progress', ({ done, total }) => {
     progress.hidden = false;
@@ -243,6 +261,15 @@ function buildTopbar() {
       setTimeout(() => { progress.hidden = true; }, 1400);
     }
   });
+}
+
+/** The readout in the corner of the instrument: SONORA / ALBUMS. */
+function paintRouteTag(route) {
+  const tag = $('#route-tag');
+  if (!tag) return;
+  tag.innerHTML = '';
+  tag.append('SONORA \u2009/\u2009 ');
+  tag.appendChild(el('b', { text: routeLabel(route).toUpperCase() }));
 }
 
 function syncSearchInput(route) {
@@ -358,13 +385,24 @@ function applyTheme(value) {
   localStorage.setItem('sonora:theme', value);
 }
 
-const DEFAULT_ACCENT = '124 108 255';
-
+/**
+ * Two colours, deliberately separate.
+ *
+ * `--accent-rgb` is the instrument's own cyan and never moves: it is what
+ * points at things, and an interface whose pointing colour changes every three
+ * minutes is an interface you cannot learn. `--art-rgb` is the colour of the
+ * album that is playing, and it is only ever used next to that album's
+ * artwork — the hero wash, the sleeve glow, the far end of a gradient.
+ *
+ * The transition is eased in CSS by whatever reads it; here we only set it.
+ */
 function applyAccent() {
   const on = localStorage.getItem('sonora:accent') !== '0';
   const track = player.state.current;
   const rgb = on && track ? lib.accentFor(track.albumKey) : null;
-  document.documentElement.style.setProperty('--accent-rgb', rgb ? rgb.join(' ') : DEFAULT_ACCENT);
+  const brand = getComputedStyle(document.documentElement)
+    .getPropertyValue('--accent-rgb').trim() || '0 209 255';
+  document.documentElement.style.setProperty('--art-rgb', rgb ? rgb.join(' ') : brand);
 }
 
 /* ------------------------------------------------------------------ shortcuts */
@@ -416,7 +454,6 @@ function toggleQueuePane(force) {
 
 async function boot() {
   applyTheme(localStorage.getItem('sonora:theme') || 'system');
-  document.documentElement.style.setProperty('--accent-rgb', DEFAULT_ACCENT);
 
   // The intro is already on screen (it ships in the HTML); this starts its
   // timeline and hands back a promise for the earliest moment it may leave.
@@ -508,6 +545,15 @@ function mountAppBackdrop() {
     return;
   }
   backdrop.setEnabled(on);
+
+  // While files are being imported the main thread has better things to do
+  // than draw a room, and the worker's throughput is what the person is
+  // actually waiting on. The world holds still until the scan finishes.
+  lib.events.on('scan', (scanning) => {
+    if (localStorage.getItem('sonora:backdrop') === '0') return;
+    backdrop.setEnabled(!scanning);
+  });
+
   // Nothing to draw over while the stage is closing, and nothing to draw at
   // all in a background tab.
   document.addEventListener('visibilitychange', () => {

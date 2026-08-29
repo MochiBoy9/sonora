@@ -14,12 +14,35 @@ import {
   artBox, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
-import { enter } from './motion.js';
+import { enter, scramble, countTo, tilt3d } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
 
 const ROW_H = 56;
 
 /* ------------------------------------------------------------------ helpers */
+
+/**
+ * Views are rebuilt whenever the library changes underneath them, which during
+ * an import is several times a second. Entrance effects must not restart on
+ * those repaints — a title that keeps dissolving back into noise reads as a
+ * fault — so they are gated on the route having actually changed.
+ */
+let lastRouteKey = null;
+let freshRoute = true;
+
+/** Resolves a heading out of noise, once per arrival. */
+function decode(node, text, opts) {
+  if (!node) return;
+  if (!freshRoute) { node.textContent = text; return; }
+  scramble(node, text, opts);
+}
+
+/** Rolls a number up, once per arrival. */
+function readout(node, value, opts) {
+  if (!node) return;
+  if (!freshRoute) { node.textContent = value.toLocaleString(); return; }
+  countTo(node, value, opts);
+}
 
 const albumOf = (key) => lib.state.albumBy.get(key);
 const artistOf = (key) => lib.state.artistBy.get(key);
@@ -98,9 +121,16 @@ function columnHeader(columns, sortState, onSort) {
 export function albumCard(album, { onOpen } = {}) {
   const card = el('article', { class: 'card', tabindex: '0', role: 'button' });
   card.innerHTML =
-    '<div class="card-art"><div class="art"><img class="art-img" alt="" decoding="async"></div>' +
-    '<button class="fab card-fab" tabindex="-1" aria-label="Play">' + ico('play') + '</button></div>' +
+    '<div class="card-art">' +
+      '<div class="art"><img class="art-img" alt="" decoding="async"></div>' +
+      '<i class="card-tick tl"></i><i class="card-tick br"></i>' +
+      '<button class="fab card-fab" tabindex="-1" aria-label="Play">' + ico('play') + '</button>' +
+    '</div>' +
     '<div class="card-title"></div><div class="card-sub"></div>';
+
+  // The artwork turns toward the pointer on a spring. The card supplies the
+  // perspective; only the plate inside it moves.
+  tilt3d(card.querySelector('.card-art'), { max: 8, lift: 16, scale: 1.015 });
 
   card.querySelector('.card-fab').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -137,6 +167,7 @@ function artistCard(artist) {
     '<div class="card-art round"><div class="art"><img class="art-img" alt="" decoding="async"></div>' +
     '<button class="fab card-fab" tabindex="-1" aria-label="Play">' + ico('play') + '</button></div>' +
     '<div class="card-title"></div><div class="card-sub"></div>';
+  tilt3d(card.querySelector('.card-art'), { max: 7, lift: 12, scale: 1.02 });
   const open = () => (location.hash = '#/artist/' + card.dataset.key);
   card.addEventListener('click', open);
   card.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
@@ -187,9 +218,10 @@ function shelf(title, items, makeCard, { seeAll } = {}) {
 /* ------------------------------------------------------------------ flourish */
 
 /**
- * The vector on the home header: 56 spokes and two rings, laid out by hand
- * rather than drawn by hand. Generated geometry means it scales to any size,
- * takes the accent colour with it, and costs one element and no requests.
+ * The vector on the home header: a dial. Fifty-six spokes, two rings, a
+ * crosshair and a sweep, all generated rather than drawn by hand — so it
+ * scales to any size, takes the accent with it, and costs one element and no
+ * requests.
  */
 function soundBloom() {
   const R = 110, spokes = 56;
@@ -197,22 +229,36 @@ function soundBloom() {
   for (let i = 0; i < spokes; i++) {
     const angle = (i / spokes) * Math.PI * 2;
     const wobble = Math.sin(i * 0.72) * 0.5 + Math.sin(i * 0.23 + 1.7) * 0.5;
-    const inner = 52 + wobble * 5;
-    const len = 12 + Math.abs(Math.sin(i * 0.9 + 0.6)) * 30;
+    const inner = 54 + wobble * 4;
+    const len = 10 + Math.abs(Math.sin(i * 0.9 + 0.6)) * 30;
     const cos = Math.cos(angle), sin = Math.sin(angle);
     d += `M${(R + cos * inner).toFixed(2)} ${(R + sin * inner).toFixed(2)}` +
          `L${(R + cos * (inner + len)).toFixed(2)} ${(R + sin * (inner + len)).toFixed(2)}`;
   }
+
+  // A 70° wedge from the centre — the sweep.
+  const a0 = -0.61, a1 = 0.61, rad = 96;
+  const wedge = `M${R} ${R} L${(R + Math.cos(a0) * rad).toFixed(2)} ${(R + Math.sin(a0) * rad).toFixed(2)}` +
+                ` A${rad} ${rad} 0 0 1 ${(R + Math.cos(a1) * rad).toFixed(2)} ${(R + Math.sin(a1) * rad).toFixed(2)} Z`;
+
   const node = el('div', { class: 'bloom', 'aria-hidden': 'true' });
   node.innerHTML =
     `<svg viewBox="0 0 220 220" fill="none">
-       <circle class="bloom-ring" cx="110" cy="110" r="46"/>
+       <defs>
+         <radialGradient id="bloomSweep" cx="0.5" cy="0.5" r="0.5">
+           <stop offset="0" stop-color="rgb(var(--accent-rgb))" stop-opacity=".34"/>
+           <stop offset="1" stop-color="rgb(var(--accent-rgb))" stop-opacity="0"/>
+         </radialGradient>
+       </defs>
+       <path class="bloom-sweep" d="${wedge}"/>
+       <circle class="bloom-ring" cx="110" cy="110" r="48"/>
        <circle class="bloom-ring bloom-ring-2" cx="110" cy="110" r="96"/>
+       <path class="bloom-cross" d="M110 6 V38 M110 182 V214 M6 110 H38 M182 110 H214"/>
        <g class="bloom-spokes"><path d="${d}"/></g>
        <g class="bloom-core">
-         <rect x="98" y="98" width="5" height="24" rx="2.5"/>
-         <rect x="107" y="90" width="5" height="40" rx="2.5"/>
-         <rect x="116" y="100" width="5" height="20" rx="2.5"/>
+         <rect x="99" y="99" width="4" height="22"/>
+         <rect x="106" y="92" width="4" height="36"/>
+         <rect x="113" y="102" width="4" height="18"/>
        </g>
      </svg>`;
   return node;
@@ -239,12 +285,13 @@ function viewHome(host) {
   const all = lib.allTracks();
   const recentTrack = lib.recentTracks()[0];
 
+  const title = el('h1', { class: 'page-title grad-text', text: 'Your library' });
+  const stats = el('p', { class: 'page-sub' });
   const head = el('header', { class: 'home-hero' },
     el('div', { class: 'home-hero-text' },
       el('p', { class: 'eyebrow', text: greeting }),
-      el('h1', { class: 'page-title grad-text', text: 'Your library' }),
-      el('p', { class: 'page-sub', text:
-        `${fmtCount(total, 'track')} · ${fmtCount(lib.state.albums.length, 'album')} · ${fmtCount(lib.state.artists.length, 'artist')} · ${fmtTotal(all.reduce((n, t) => n + (t.duration || 0), 0))}` }),
+      title,
+      stats,
       el('div', { class: 'hero-actions' },
         el('button', {
           class: 'btn primary', html: ico('shuffle') + '<span>Shuffle everything</span>',
@@ -261,6 +308,14 @@ function viewHome(host) {
         }))),
     soundBloom());
   frag.appendChild(head);
+
+  // The count rolls up rather than appearing: a readout settling on a value.
+  const counted = el('span');
+  stats.append(counted, ' tracks \u00b7 ',
+    `${lib.state.albums.length} albums \u00b7 ${lib.state.artists.length} artists \u00b7 ` +
+    fmtTotal(all.reduce((n, t) => n + (t.duration || 0), 0)).toUpperCase());
+  readout(counted, total, { duration: 1100 });
+  decode(title, 'Your library', { duration: 700 });
 
   const recent = lib.recentAlbums(10);
   const shelfRecent = shelf('Jump back in', recent, (a) => albumCard(a));
@@ -294,6 +349,7 @@ function viewSongs(host) {
   const columns = ['index', 'art', 'title', 'album', 'duration'];
   const all = lib.allTracks();
   const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Songs' }),
     el('p', { class: 'page-sub', text: `${fmtCount(all.length, 'track')} · ${fmtTotal(all.reduce((s, t) => s + (t.duration || 0), 0))}` }));
   const get = () => lib.sortTracks(lib.allTracks(), songSort.key, songSort.dir);
@@ -304,6 +360,7 @@ function viewSongs(host) {
 
   host.appendChild(head);
   host.appendChild(bar);
+  decode(head.querySelector('.page-title'), 'Songs');
 
   const header = columnHeader(columns, songSort, () => table.update());
   host.appendChild(header);
@@ -320,9 +377,11 @@ function viewSongs(host) {
 function viewAlbums(host) {
   const albums = lib.state.albums;
   const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Albums' }),
     el('p', { class: 'page-sub', text: fmtCount(albums.length, 'album') }));
   host.appendChild(head);
+  decode(head.querySelector('.page-title'), 'Albums');
 
   if (!albums.length) {
     host.appendChild(emptyState({ icon: 'album', title: 'No albums yet', note: 'Add a folder to get started.' }));
@@ -373,6 +432,7 @@ function viewAlbum(host, key) {
   hero.append(art, meta);
   host.appendChild(hero);
   applyHeroTint(hero, key);
+  decode(hero.querySelector('.hero-title'), album.title, { duration: 620 });
 
   const columns = ['index', 'title', 'duration'];
   const oneArtist = album.tracks.every((t) => t.artist === album.artist);
@@ -399,8 +459,8 @@ function viewAlbum(host, key) {
   });
 
   host.appendChild(list);
-  enter([hero], { y: 14 });
-  enter(list.children, { each: 14, y: 8, delay: 60 });
+  enter([hero], { y: 16, wipe: true });
+  enter(list.children, { each: 13, y: 8, delay: 80 });
 
   const refresh = () => {
     for (const row of list.children) {
@@ -428,9 +488,11 @@ function applyHeroTint(hero, key) {
 function viewArtists(host) {
   const artists = lib.state.artists;
   const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Artists' }),
     el('p', { class: 'page-sub', text: fmtCount(artists.length, 'artist') }));
   host.appendChild(head);
+  decode(head.querySelector('.page-title'), 'Artists');
 
   if (!artists.length) {
     host.appendChild(emptyState({ icon: 'artist', title: 'No artists yet' }));
@@ -521,6 +583,7 @@ function viewArtist(host, key) {
 
 function viewPlaylists(host) {
   const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Playlists' }),
     el('p', { class: 'page-sub', text: fmtCount(lib.state.playlists.length, 'playlist') }));
   host.appendChild(head);
@@ -544,8 +607,10 @@ function viewPlaylists(host) {
       const cover = tracks[0]?.albumKey;
       card.innerHTML =
         `<div class="card-art"><div class="art" style="background:${placeholderStyle(p.id)}"><img class="art-img" alt="" decoding="async"></div>` +
+        '<i class="card-tick tl"></i><i class="card-tick br"></i>' +
         `<button class="fab card-fab" tabindex="-1" aria-label="Play">${ico('play')}</button></div>` +
         '<div class="card-title"></div><div class="card-sub"></div>';
+      tilt3d(card.querySelector('.card-art'), { max: 8, lift: 16, scale: 1.015 });
       if (cover) paintArt(card.querySelector('.art-img'), cover);
       card.querySelector('.card-title').textContent = p.name;
       card.querySelector('.card-sub').textContent = fmtCount(p.tracks.length, 'track');
@@ -692,8 +757,9 @@ function viewSearch(host, query) {
 
 function viewSettings(host) {
   const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'System' }),
     el('h1', { class: 'page-title', text: 'Settings' }),
-    el('p', { class: 'page-sub', text: 'Folders, appearance and storage' }));
+    el('p', { class: 'page-sub', text: 'Folders · appearance · visualiser · storage' }));
   host.appendChild(head);
 
   /* --- folders --- */
@@ -891,6 +957,10 @@ const ROUTES = {
 };
 
 export function renderView(host, route) {
+  const key = route.name + '/' + route.arg;
+  freshRoute = key !== lastRouteKey;
+  lastRouteKey = key;
+
   const fn = ROUTES[route.name] || viewHome;
   return fn(host, route.arg) || (() => {});
 }

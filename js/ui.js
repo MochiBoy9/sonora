@@ -3,7 +3,7 @@
 import { el, ico, fmtTime, clamp, canDecode } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
-import { animate, ease, enter, spring } from './motion.js';
+import { animate, ease, enter, spring, settled } from './motion.js';
 
 /* ------------------------------------------------------------------ artwork */
 
@@ -14,11 +14,15 @@ import { animate, ease, enter, spring } from './motion.js';
 export function placeholderStyle(key) {
   let h = 0;
   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-  const hue = h % 360;
-  return `linear-gradient(140deg,
-    hsl(${hue} 42% 34%) 0%,
-    hsl(${(hue + 38) % 360} 36% 22%) 60%,
-    hsl(${(hue + 70) % 360} 30% 16%) 100%)`;
+  // Hues are folded into the cool half of the wheel — cyan through blue to
+  // indigo — so a wall of coverless albums still reads as one instrument
+  // rather than as a bag of sweets. Each album keeps its own place in that
+  // band, so they remain distinguishable from one another.
+  const hue = 168 + (h % 108);
+  return `linear-gradient(150deg,
+    hsl(${hue} 46% 26%) 0%,
+    hsl(${hue + 16} 38% 17%) 58%,
+    hsl(${hue + 30} 30% 11%) 100%)`;
 }
 
 /** Fills an <img> from the art cache — synchronously when it is already warm. */
@@ -129,9 +133,9 @@ export function closeMenu() {
   if (!openMenu) return;
   const node = openMenu;
   openMenu = null;
-  animate(node, { opacity: [1, 0], transform: ['scale(1)', 'scale(.96)'] },
-          { duration: 110, easing: 'ease-in', commit: false })
-    .finished.then(() => node.remove()).catch(() => node.remove());
+  settled(animate(node, { opacity: [1, 0], transform: ['scale(1)', 'scale(.96)'] },
+                  { duration: 110, easing: 'ease-in', commit: false }), 110)
+    .then(() => node.remove());
 }
 
 /**
@@ -221,8 +225,8 @@ export function dialog({ title, body, actions = [], width = 420 }) {
 
   function close() {
     animate(panel, { opacity: [1, 0], transform: ['scale(1)', 'scale(.97)'] }, { duration: 130, commit: false });
-    animate(scrim, { opacity: [1, 0] }, { duration: 150, commit: false })
-      .finished.then(() => scrim.remove()).catch(() => scrim.remove());
+    settled(animate(scrim, { opacity: [1, 0] }, { duration: 150, commit: false }), 150)
+      .then(() => scrim.remove());
     document.removeEventListener('keydown', onKey, true);
   }
   function onKey(e) {
@@ -347,8 +351,8 @@ export function toast(message, { action, duration = 2600 } = {}) {
 
   function dismiss() {
     clearTimeout(timer);
-    animate(node, { opacity: [1, 0], transform: ['translateY(0)', 'translateY(8px)'] },
-            { duration: 180, commit: false }).finished.then(() => node.remove()).catch(() => node.remove());
+    settled(animate(node, { opacity: [1, 0], transform: ['translateY(0)', 'translateY(8px)'] },
+                    { duration: 180, commit: false }), 180).then(() => node.remove());
   }
   return dismiss;
 }
