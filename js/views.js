@@ -17,9 +17,11 @@ import {
 import { enter, scramble, countTo, tilt3d } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
 import { mountCircles } from './circles.js';
+import { mountSound } from './sound.js';
 import * as stats from './stats.js';
 import * as band from './band.js';
 import * as session from './session.js';
+import * as looks from './looks.js';
 
 const ROW_H = 56;
 
@@ -778,6 +780,10 @@ function viewCircles(host) {
   return () => { host.removeEventListener('circles:reset', onReset); api.destroy(); };
 }
 
+/* ------------------------------------------------------------------ SOUND */
+
+const viewSound = (host) => mountSound(host);
+
 /* ------------------------------------------------------------------ BAND */
 
 /**
@@ -1015,15 +1021,11 @@ function viewSettings(host) {
   conn.appendChild(stateRow);
   host.appendChild(conn);
 
+  /* --- looks --- */
+  host.appendChild(looksPanel());
+
   /* --- appearance --- */
   const appearance = el('section', { class: 'block' }, sectionHead('Appearance'));
-  const themeRow = el('div', { class: 'settings-row' },
-    el('div', { class: 'settings-ico', html: ico('sun') }),
-    el('div', { class: 'settings-text' },
-      el('div', { class: 'settings-name', text: 'Theme' }),
-      el('div', { class: 'settings-note', text: 'Dark, light, or follow the system' })),
-    el('div', { class: 'settings-actions' }, themeSwitch()));
-  appearance.appendChild(themeRow);
 
   const accentRow = el('div', { class: 'settings-row' },
     el('div', { class: 'settings-ico', html: ico('palette') }),
@@ -1137,21 +1139,127 @@ function viewSettings(host) {
   return () => off();
 }
 
-function themeSwitch() {
-  const wrap = el('div', { class: 'segmented' });
-  const current = localStorage.getItem('sonora:theme') || 'system';
-  for (const [value, label] of [['light', 'Light'], ['dark', 'Dark'], ['system', 'Auto']]) {
-    wrap.appendChild(el('button', {
-      class: 'seg' + (current === value ? ' is-on' : ''),
-      text: label,
-      onclick: (e) => {
-        for (const b of wrap.children) b.classList.remove('is-on');
-        e.currentTarget.classList.add('is-on');
-        document.dispatchEvent(new CustomEvent('sonora:theme', { detail: value }));
-      },
-    }));
+/**
+ * The look panel: every visual preference in the app, in one place, drawn
+ * from the schema rather than written out.
+ *
+ * Nothing here knows what any setting *does* — it reads `looks.SCHEMA`, draws
+ * the right control for each kind, and writes back. Adding a setting is one
+ * line in looks.js and it appears here, correctly grouped, with its hint, its
+ * units and its keyboard handling already working.
+ */
+function looksPanel() {
+  const block = el('section', { class: 'block' }, sectionHead('Look'));
+
+  const swatches = el('div', { class: 'look-grid' });
+  const paintSwatches = () => {
+    const current = looks.currentLook();
+    for (const btn of swatches.children) {
+      btn.classList.toggle('is-on', btn.dataset.look === current);
+    }
+  };
+
+  for (const look of looks.LOOKS) {
+    // Each card is painted in its own colours, so the choice is visible
+    // rather than described.
+    const want = { ...looks.defaults(), ...look.patch };
+    const btn = el('button', {
+      class: 'look-swatch', data: { look: look.id },
+      onclick: () => { looks.useLook(look.id); paintAllRows(); paintSwatches(); },
+    },
+      el('span', { class: 'look-name', text: look.label }),
+      el('span', { class: 'look-note', text: look.note }),
+      el('span', { class: 'look-bar' }, el('i'), el('i'), el('i')));
+    btn.style.setProperty('--sw-a', hueRGB(want.hue, want.chroma, .52));
+    btn.style.setProperty('--sw-b', hueRGB(want.hue + want.spread, want.chroma, .60));
+    btn.style.setProperty('--sw-c', hueRGB(want.hue + want.spread * 2, want.chroma, .68));
+    swatches.appendChild(btn);
   }
-  return wrap;
+  block.appendChild(swatches);
+
+  const rows = [];
+  const paintAllRows = () => { for (const r of rows) r(); };
+
+  for (const [group, specs] of looks.groups()) {
+    const panel = el('div', { class: 'rack-panel look-group' },
+      el('div', { class: 'rack-head' }, el('span', { class: 'label', text: group })));
+
+    for (const spec of specs) {
+      const name = spec.label || spec.id;
+      let control, sync;
+
+      if (spec.kind === 'range') {
+        const val = el('span', { class: 'rack-val' });
+        const input = el('input', {
+          type: 'range', min: String(spec.min), max: String(spec.max), step: String(spec.step || 1),
+          'aria-label': name,
+          oninput: (e) => { looks.set(spec.id, +e.target.value); sync(); paintSwatches(); },
+        });
+        control = [input, val];
+        sync = () => {
+          const v = looks.state[spec.id];
+          if (document.activeElement !== input) input.value = String(v);
+          val.textContent = v + (spec.unit || '');
+        };
+      } else if (spec.kind === 'toggle') {
+        const btn = el('button', {
+          class: 'preset',
+          onclick: () => { looks.set(spec.id, !looks.state[spec.id]); sync(); paintSwatches(); },
+        });
+        control = [el('span', {}), btn];
+        sync = () => {
+          const on = !!looks.state[spec.id];
+          btn.textContent = on ? 'On' : 'Off';
+          btn.classList.toggle('is-on', on);
+        };
+      } else {
+        const seg = el('div', { class: 'segmented', role: 'group', 'aria-label': name });
+        for (const [value, label] of spec.options) {
+          seg.appendChild(el('button', {
+            class: 'seg', text: label, data: { value },
+            onclick: () => { looks.set(spec.id, value); sync(); paintSwatches(); },
+          }));
+        }
+        control = [el('span', {}), seg];
+        sync = () => {
+          for (const b of seg.children) {
+            const on = b.dataset.value === looks.state[spec.id];
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-pressed', String(on));
+          }
+        };
+      }
+
+      const row = el('div', { class: 'rack-row look-row' },
+        el('span', { class: 'rack-name', text: name, title: spec.hint || name }), ...control);
+      panel.appendChild(row);
+      rows.push(sync);
+      sync();
+    }
+    block.appendChild(panel);
+  }
+
+  block.appendChild(el('div', { class: 'settings-actions look-actions' },
+    el('button', {
+      class: 'btn ghost sm', text: 'Back to the shipped look',
+      onclick: () => { looks.reset(); paintAllRows(); paintSwatches(); toast('Look reset'); },
+    })));
+
+  paintSwatches();
+  return block;
+}
+
+/** The same HSL the look engine uses, for painting the swatches. */
+function hueRGB(h, chroma, l) {
+  h = ((h % 360) + 360) % 360;
+  const s = Math.max(0, Math.min(1.4, chroma / 100)) * 0.86 + 0.14;
+  const c = (1 - Math.abs(2 * l - 1)) * Math.min(1, s);
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const [r, g, b] =
+    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] :
+    h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return `${Math.round((r + m) * 255)} ${Math.round((g + m) * 255)} ${Math.round((b + m) * 255)}`;
 }
 
 function connectionNote() {
@@ -1244,6 +1352,7 @@ const ROUTES = {
   playlist: viewPlaylist,
   search: viewSearch,
   circles: viewCircles,
+  sound: viewSound,
   settings: viewSettings,
 };
 

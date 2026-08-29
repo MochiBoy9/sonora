@@ -8,9 +8,10 @@ directly and the index lives in local storage on the device.
 No build step, no dependencies, no framework. Open it and it runs.
 
 It also reopens where you left it, folds an album back together when it is
-split across folders, draws what you have actually been listening to, and — only
-if you ask it to — will look an artist up online. Those four are described
-below and specified in full in [`docs/SPEC.md`](docs/SPEC.md).
+split across folders, draws what you have actually been listening to, gives you
+a full processing rack to bend the sound with, lets you rebuild the interface
+around your own colour, and — only if you ask it to — will look an artist up
+online. All of it is specified in full in [`docs/SPEC.md`](docs/SPEC.md).
 
 ---
 
@@ -88,10 +89,55 @@ When an import merges something, the summary says so by name.
 | `M` | mute |
 | `Q` | queue panel |
 | `V` | immersive visualiser |
+| `B` | bypass the rack (A/B what it is doing) |
+| `E` | open the Sound page |
 | `/` or `⌘K` | search |
 
 Right-click any track, album or artist for play-next, add-to-queue, add-to-playlist
 and go-to-album. Drag rows in the queue to reorder. Drag the sidebar edge to resize it.
+
+## The Rack
+
+`Sound` in the sidebar, or `E` from anywhere.
+
+Ten bands, a curve you can grab, and every knob a decent amplifier has: a
+preamp, bass and treble shelves, a compressor with a real threshold and ratio,
+a limiter so a boost cannot clip, stereo width from mono to wide, balance, and
+five reverbs — Room, Chamber, Plate, Hall, Cathedral — built out of decaying
+noise rather than downloaded, because a room *is* a dense cloud of reflections
+and Sonora is not going to ship a megabyte of impulse responses.
+
+**Pitch and speed are two different knobs.** `playbackRate` moves both, because
+that is what spinning a record faster does. Here, *speed* changes the tempo and
+leaves the key alone, and *pitch* changes the key and leaves the tempo alone —
+±12 semitones, using a delay line read at a different rate than it is written,
+with two read heads half a grain apart so it never clicks. Either works on its
+own. Both at once is a legitimate thing to want.
+
+The curve in the middle is not a drawing of the slider positions. It is the
+combined response of the actual filters, asked of the filters themselves — so
+it shows you the places where neighbouring bands overlap and add, which is
+where an equaliser surprises you. Drag a handle or move its fader; they are the
+same edit. Double-click a handle to flatten that band, or use the arrow keys.
+
+Eleven presets, and you can save your own. **`B` bypasses the whole rack from
+anywhere**, which is the only honest way to tell whether any of it is helping.
+
+## Making it yours
+
+**Settings → Look.** Nineteen things, and eight looks to start from.
+
+The hue the whole app is lit by, and how far its gradient travels around the
+wheel. Saturation. How much of that colour bleeds into the panels. Whether
+corners are chamfered, rounded or square, and how big. Density and text size.
+How much gloss sits on a raised surface, how far the glass blurs, how much the
+accent blooms, how visible the graph paper is. Which of the five backdrop
+scenes is drawn, how strongly, and whether bubbles rise through it. How far
+panels lift when you point at them. How much anything is allowed to move.
+
+None of it is a theme file. Every setting writes CSS custom properties, and
+every stylesheet reads only those — so `Plain` really does switch everything
+off and leave a working app, and `Solar` really is a daylit one.
 
 ## Picking up where you left off
 
@@ -165,10 +211,16 @@ css/
   components.css    buttons, artwork, rows, cards, sliders, overlays
   views.css         page headers, heroes, shelves, settings, queue
   visualizer.css    spectrum canvases and the immersive stage
+  sound.css         the rack's own layout
+  aero.css          the material: atmosphere, glass, sheen, specular edges
 js/
   app.js            routing, navigation, search, shortcuts, theming, ingestion
   library.js        the collection: scanning, indexes, album merging, playlists
   player.js         playback, queue, Web Audio graph, spectrum analysis
+  audio.js          the rack: EQ, dynamics, space, stereo, pitch, speed
+  pitch-worklet.js  pitch without tempo, on the audio thread
+  sound.js          the Sound page: the response curve and every control
+  looks.js          nineteen visual settings and eight named looks
   session.js        reconnect and resume: what you were playing, put back
   stats.js          the listening-time meter, rolled up by artist, genre, year
   circles.js        the Circle Analysis Center, packed by hand into one SVG
@@ -193,15 +245,19 @@ docs/
 tools/
   make-testlib.py   a synthetic library with real containers and real tags
   smoke.mjs         interactions.mjs   perf.mjs
+  layout.mjs        eight widths × eight routes: overflow, overlap, centring
+  audio.mjs         does the rack change the sound, measured after the rack
 ```
 
 ## The look
 
 Sonora is drawn as an instrument rather than as a stack of cards.
 
-**Nothing is rounded by accident.** There are no border radii in the app at
-all: corners are either square or cut on a 45° with `clip-path`, from one token
-(`--cut`) that every panel, button, sleeve and dialog shares. Surfaces are
+**Nothing is rounded by accident.** Out of the box there are no border radii at
+all: corners are square or cut on a 45° with `clip-path`. Every one of those
+chamfers is one of three shape tokens that read their size off the element
+using them, which is what lets *Settings → Look* turn the whole app rounded or
+square with one control instead of a rewrite. Surfaces are
 separated by tinted hairlines instead of shadows, panels carry corner brackets,
 and the whole window sits on a faint 44px grid — so the interface reads as
 something drawn on graph paper, which is what makes the 3D world behind it
@@ -346,13 +402,13 @@ Chromium, 3,000 tracks across 300 albums, 1460×900:
 
 | | |
 | --- | --- |
-| Import (parse + index + thumbnail + persist) | 6.4–7.3 s — ~410–470 files/second |
-| Cold start from IndexedDB to a painted library | 250 ms |
-| First paint: Songs / Albums / Artists | 41 / 20 / 28 ms |
+| Import (parse + index + thumbnail + persist) | 7.0–7.5 s — ~400–430 files/second |
+| Cold start from IndexedDB to a painted library | 770–906 ms |
+| First paint: Songs / Albums / Artists | 106 / 44 / 41 ms |
 | Scroll frame time, 60-frame flick | median **16.7 ms**, p95 16.8 ms |
-| Live DOM nodes while scrolling | 27 (songs), 30 (albums) |
-| Search latency per keystroke | 0.2–6 ms |
-| JS heap | 10 MB |
+| Live DOM nodes while scrolling | 28 (songs), 30 (albums) |
+| Search latency per keystroke | 0.3–0.5 ms |
+| JS heap | 7 MB |
 
 Reproduce with `tools/perf.mjs` (below).
 
@@ -361,6 +417,25 @@ after the rework, on a slower machine than the table above (a container with a
 software GL renderer, so the WebGL figures are a worst case): scroll frame time
 is still a median of **16.7 ms** with 19–30 live nodes, import holds at
 ~370–410 files/second, and the JS heap is 6–10 MB.
+
+Nor do the rack, the atmosphere or the look engine: with a full processing
+chain in the graph and three enormous soft lights behind the interface, the
+scroll is still a **16.7 ms median with a 16.8 ms p95** — every frame, on time.
+
+Two things that were *not* free, and are worth knowing before adding anything
+similar:
+
+- **`backdrop-filter` on a surface that scrolls.** It reads back everything
+  behind the element on every frame. Putting frost on the shelves took the
+  scroll from 16.7 ms to 66 ms — three frames of work per frame, visible as
+  stutter. The frost is on the chrome, which does not move.
+- **Any animation on a full-viewport layer behind frosted chrome.** The blur
+  has to be recomputed because its backdrop moved. A 34-second ambient drift
+  behind the interface cost 18 ms per scroll frame, and pausing the animation
+  did not give it back — Chromium keeps paying for an animation on that layer
+  whether it is running or not. So the atmosphere holds still, and the motion
+  in the app belongs to the wireframe world, which is drawn on the GPU and
+  throttles itself.
 
 Album merging and the listening meter do not show up in these numbers. The merge
 is one grouping pass per reindex behind a `requestAnimationFrame`; on the 300-album
@@ -394,7 +469,22 @@ node tools/smoke.mjs        /tmp/testlib ./shots   # boot, intro, import, metada
                                                    # persistence, auto-reconnect
 node tools/interactions.mjs /tmp/testlib           # keyboard, dragging, sorting, queue editing
 node tools/perf.mjs         /tmp/biglib            # the table above
+node tools/layout.mjs       /tmp/testlib ./shots   # 8 widths × 8 routes: overflow,
+                                                   # overlapping regions, unreachable
+                                                   # controls, off-centre glyphs
+node tools/audio.mjs        /tmp/testlib           # does the rack change the sound
 ```
+
+`layout.mjs` is the one that found the off-centre transport icons, the one-pixel
+sideways scroll and the 768px overflow; it now reports the app clean at 360, 414,
+620, 768, 1024, 1280, 1680 and 2400 pixels on every route.
+
+`audio.mjs` does not check that the sliders move. It plays a tone, reads the
+app's own analyser — which sits *after* the rack — and checks that boosting the
+low bands raises the low end, that cutting them lowers it, that bypass gives the
+original back, and that a tone shifted up seven semitones has moved its energy
+upward. The pitch shifter is separately verified in an `OfflineAudioContext`:
+240 Hz becomes 357 Hz at +7 and 181 Hz at −5, with the level unchanged.
 
 Set `SONORA_CHROMIUM=/path/to/chrome` to run against a Chromium that is already
 on the machine instead of the one Playwright downloads for itself.
@@ -421,7 +511,12 @@ the cache.
   is no flash.
 - The visualiser style, the backdrop and the artwork tint are all switchable in
   **Settings → Appearance** and **Visualiser**; the choice follows every canvas
-  in the app at once.
+  in the app at once. Everything else about how it looks is in **Settings →
+  Look**.
+- The rack is saved with your library and comes back with it. If a track ever
+  sounds wrong, press `B`: that is the whole rack out of the signal path, and
+  it will tell you in one keystroke whether the problem is the file or a knob
+  you left somewhere.
 - The design owes its conventions to a few places worth naming: motion.dev and
   anime.js for spring-based orchestration, staggered timelines and treating text
   as a list of targets; KokonutUI and bklit-ui for the token-driven,

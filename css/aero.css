@@ -1,0 +1,235 @@
+/* aero.css — the material.
+ *
+ * Everything in here is one idea: the interface is made of a wet, slightly
+ * thick glass sitting a few centimetres in front of a lit world. Instrument
+ * hairlines are drawn *on* that glass; the glass itself has a top edge that
+ * catches the light, a body that bends what is behind it, and a bottom that
+ * falls into shadow.
+ *
+ * That is the whole of the Frutiger Aero borrowing, and it is deliberately
+ * confined to this file so it can be turned off by one slider. Every effect
+ * here is multiplied by `--gloss`, `--frost` or `--glow`; at zero the file
+ * contributes nothing at all and the app is the flat instrument it was.
+ *
+ * Nothing here costs a compositor layer per row. The sheen is a gradient on a
+ * pseudo-element of surfaces that already exist; there is no filter on
+ * anything that scrolls.
+ */
+
+/* ------------------------------------------------------------------ air */
+
+/* The atmosphere: three enormous soft lights behind everything.
+ *
+ * This is the single move that separates a dark interface from an interface
+ * that looks like it is underwater, and it is why the glass has anything to
+ * refract. Three radial gradients on one fixed pseudo-element — no filter, no
+ * blur, and nothing above it repaints because of it.
+ *
+ * It does not move, and that is a decision rather than an omission. The chrome
+ * above it is frosted glass, so anything drifting behind that glass forces the
+ * blur to be recomputed from scratch on every frame: measured on a 3,000-track
+ * list, a 34-second drift turned a 17 ms scroll into 35 ms, and pausing the
+ * animation did not give it back — once Chromium has an animation on a
+ * full-viewport layer it keeps paying for it whether it is running or not. A
+ * drift that slow is invisible in any single glance and costs a fifth of the
+ * frame budget in every one. The motion in this app belongs to the wireframe
+ * world behind this layer, which is drawn on the GPU and throttles itself.
+ */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: calc(.72 * var(--glow));
+  background:
+    radial-gradient(38% 44% at 18% 12%, rgb(var(--accent-rgb) / .30), transparent 68%),
+    radial-gradient(42% 38% at 84% 26%, rgb(var(--aero-rgb) / .22), transparent 66%),
+    radial-gradient(52% 46% at 62% 96%, rgb(var(--accent-2-rgb) / .26), transparent 70%);
+  contain: strict;
+}
+
+/* On a light ground the same lights have to be paler and fewer, or the page
+   turns into a bruise. */
+:root[data-theme="light"] body::after { opacity: calc(.34 * var(--glow)); }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) body::after { opacity: calc(.34 * var(--glow)); }
+}
+
+/* The stack, front to back: the interface, the graph paper it is drawn on,
+   the wireframe world, and the air the world sits in. */
+.app { position: relative; z-index: 3; }
+body::before { z-index: 2; }
+.backdrop { z-index: 1; }
+body::after { z-index: 0; }
+
+/* ------------------------------------------------------------------ glass */
+
+/* The specular top edge: one pixel of light where the pane meets the air.
+   Every raised surface gets it, which is what makes them read as one
+   material rather than as differently-coloured rectangles.
+
+   Only surfaces that are `static` by default are given a position here. A
+   blanket `position: relative` on this list is how the queue panel stops
+   being `fixed` at narrow widths — this file loads last, so it would quietly
+   win against the media query that puts the panel on top of the layout. */
+.card, .panel, .block, .shelf, .hero, .band-card, .settings-row,
+.home-hero, .rack-panel {
+  position: relative;
+}
+
+.sidebar::after, .topbar::after, .pane::after, .playerbar::after,
+.dialog::after, .menu::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  box-shadow: var(--spec);
+  border-radius: inherit;
+  clip-path: inherit;
+}
+
+/* Content surfaces are glass, not paint.
+ *
+ * The point of putting a lit world behind the interface is that you can see it
+ * through the interface. A panel with an opaque fill hides the thing that makes
+ * the app look like anything, so the big surfaces are translucent instead.
+ *
+ * Translucent, and *not* blurred. `backdrop-filter` on a surface that scrolls
+ * is the single most expensive thing this app can ask for: it reads back
+ * everything behind the element on every frame, and putting it on the shelves
+ * took the scroll from a 16.7 ms median to 66 ms — four frames of work per
+ * frame, which you can see. The frost stays on the chrome, which does not
+ * move, and where it reads best anyway; the content surfaces get their depth
+ * from transparency, the specular edge and the light behind them. */
+.home-hero, .hero, .shelf, .block, .band-card, .rack-panel, .circle-stage, .np {
+  background: rgb(var(--surface-rgb) / calc(.42 + .30 * (1 - var(--gloss))));
+}
+
+/* Artwork is the one thing that must never be tinted or blurred: it is the
+   only part of the screen that belongs to the listener rather than to us. */
+.art, .art-img { backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+/* ------------------------------------------------------------------ sheen */
+
+/* A single soft highlight across the top of a raised control, brightest at
+   the left where the horizon light comes from. This is the aero move, and it
+   is the only one applied to controls. */
+.btn.primary, .fab, .pb-play, .stage-play, .seg.is-on, .chip.is-on,
+.switch.is-on, .look-swatch, .preset.is-on {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.btn.primary::after, .fab::after, .pb-play::after, .stage-play::after,
+.seg.is-on::after, .chip.is-on::after, .switch.is-on::after,
+.look-swatch::after, .preset.is-on::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 54%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(140% 100% at 22% -30%, var(--sheen), transparent 72%);
+}
+
+/* The old hard 50% gloss bar on the transport is replaced by the radial
+   above, which curves the way a lens does. */
+.pb-play::before, .stage-play::before { display: none; }
+
+/* ------------------------------------------------------------------ depth */
+
+/* Panels sit *in front of* the world rather than on top of a colour, so their
+   edges get a hairline of the accent where light wraps around them. */
+.card, .band-card, .block, .hero, .shelf, .circle-stage, .rack-panel {
+  box-shadow:
+    var(--spec),
+    0 1px 0 rgb(var(--accent-rgb) / calc(.05 * var(--gloss))) inset,
+    0 18px 40px -30px rgb(0 0 0 / calc(.7 + .2 * var(--gloss)));
+}
+
+/* A pointed-at card lifts, and the lift is a preference. */
+.card {
+  transition: transform var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease);
+}
+.card:hover {
+  transform: translateY(calc(-4px * var(--parallax)));
+}
+
+/* ------------------------------------------------------------------ bloom */
+
+/* The accent is a light source, so anything wearing it spills a little. */
+.fab, .pb-play, .stage-play, .btn.primary {
+  box-shadow:
+    0 calc(10px * var(--glow)) calc(30px * var(--glow)) calc(-14px * var(--glow)) var(--accent-glow),
+    var(--spec);
+}
+
+/* ------------------------------------------------------------------ round */
+
+/* In the rounded corner mode the chamfers are gone and the shapes want to be
+   softer everywhere, not only where a radius was already asked for. */
+:root[data-corner="round"] .card,
+:root[data-corner="round"] .btn,
+:root[data-corner="round"] .fab,
+:root[data-corner="round"] .pb-play,
+:root[data-corner="round"] .icon-btn,
+:root[data-corner="round"] .chip,
+:root[data-corner="round"] .seg,
+:root[data-corner="round"] .art,
+:root[data-corner="round"] .band-card,
+:root[data-corner="round"] .block,
+:root[data-corner="round"] .panel,
+:root[data-corner="round"] .dialog,
+:root[data-corner="round"] .menu,
+:root[data-corner="round"] .toast,
+:root[data-corner="round"] .rack-panel,
+:root[data-corner="round"] .input,
+:root[data-corner="round"] .search { border-radius: var(--radius); }
+
+:root[data-corner="round"] .icon-btn,
+:root[data-corner="round"] .pb-play,
+:root[data-corner="round"] .fab { border-radius: 999px; }
+
+/* ------------------------------------------------------------------ light */
+
+/* On the light theme the highlight has to come off the *bottom* as well —
+   glass over a bright ground picks up a second edge — and the sheen itself
+   has to be cooler, or white on white disappears. */
+:root[data-theme="light"] {
+  --sheen: rgb(255 255 255 / calc(.72 * var(--gloss)));
+  --sheen-soft: rgb(255 255 255 / calc(.45 * var(--gloss)));
+  --spec: inset 0 1px 0 rgb(255 255 255 / calc(.9 * var(--gloss))),
+          inset 0 -1px 0 rgb(var(--accent-rgb) / calc(.06 * var(--gloss)));
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --sheen: rgb(255 255 255 / calc(.72 * var(--gloss)));
+    --sheen-soft: rgb(255 255 255 / calc(.45 * var(--gloss)));
+    --spec: inset 0 1px 0 rgb(255 255 255 / calc(.9 * var(--gloss))),
+            inset 0 -1px 0 rgb(var(--accent-rgb) / calc(.06 * var(--gloss)));
+  }
+}
+
+/* ------------------------------------------------------------------ calm */
+
+/* The motion setting is honoured here as well as in JS, because a transition
+   is cheaper to cancel in CSS than to guard at every call site. */
+:root[data-motion="none"] *,
+:root[data-motion="none"] *::before,
+:root[data-motion="none"] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+  scroll-behavior: auto !important;
+}
+:root[data-motion="calm"] {
+  --dur-2: 140ms;
+  --dur-3: 200ms;
+  --ease-back: var(--ease);
+}
+:root[data-motion="calm"] .card:hover { transform: none; }

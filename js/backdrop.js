@@ -20,7 +20,7 @@
 
 import { tick, reduceMotion } from './motion.js';
 import * as player from './player.js';
-import { program, uniforms, staticBuffer, mat4, gridLines, icosahedronLines, ringLines } from './gl.js';
+import { program, uniforms, staticBuffer, mat4, gridLines, icosahedronLines, ringLines, sphereLines } from './gl.js';
 
 /* ------------------------------------------------------------------ sky */
 
@@ -96,6 +96,12 @@ void main() {
     // Tunnel rings: run past the camera and swell on a beat.
     p.z = mod(p.z + u_time * 5.0, u_span) - u_span;
     p.xy *= 1.0 + u_pulse * 0.06 + u_level * 0.05;
+  } else if (u_mode > 2.5) {
+    // A bubble: it breathes, and it is squashed a little as it rises, the way
+    // a real one is by the water it is pushing out of the way.
+    float squash = 1.0 + sin(u_time * 1.7 + u_span) * 0.035 + u_bass * 0.07;
+    p.xz *= squash;
+    p.y /= squash;
   }
 
   vec4 clip = u_mvp * vec4(p, 1.0);
@@ -117,6 +123,23 @@ uniform float u_alpha;
 void main() {
   vec3 col = mix(u_color, u_color2, v_seed);
   float a = v_fade * u_alpha;
+  gl_FragColor = vec4(col * a, a);
+}`;
+
+/* Bubbles get their own fragment stage: the same line, but brighter towards
+   the top of the sphere, which is the one cue that makes a wireframe ball
+   read as something with a wet surface rather than as a wire ball. */
+const FRAG_BUBBLE = `
+precision mediump float;
+varying mediump float v_fade;
+varying mediump float v_seed;
+uniform vec3 u_color, u_color2;
+uniform float u_alpha;
+
+void main() {
+  float lift = pow(v_seed, 1.6);
+  vec3 col = mix(u_color, u_color2, 0.25 + lift * 0.75);
+  float a = v_fade * u_alpha * (0.30 + lift * 1.05);
   gl_FragColor = vec4(col * a, a);
 }`;
 
@@ -150,15 +173,22 @@ export function mountBackdrop(host, { enabled = true } = {}) {
     });
   } catch { gl = null; }
 
-  const dead = { supported: false, canvas: null, setEnabled() {}, setIntensity() {}, destroy() {} };
+  const dead = {
+    supported: false, canvas: null,
+    setEnabled() {}, setIntensity() {}, setLook() {}, destroy() {},
+  };
   if (!gl) { canvas.remove(); return dead; }
 
   const sky = program(gl, VERT_QUAD, FRAG_SKY);
   const lines = program(gl, VERT_LINES, FRAG_LINES);
-  if (!sky || !lines) { canvas.remove(); return dead; }
+  const bubbles = program(gl, VERT_LINES, FRAG_BUBBLE);
+  if (!sky || !lines || !bubbles) { canvas.remove(); return dead; }
 
   const uSky = uniforms(gl, sky, ['u_res', 'u_time', 'u_level', 'u_bass', 'u_alpha', 'u_ink', 'u_accent', 'u_art']);
-  const uLin = uniforms(gl, lines, ['u_mvp', 'u_time', 'u_bass', 'u_level', 'u_mode', 'u_span', 'u_pulse', 'u_color', 'u_color2', 'u_alpha']);
+  const LINE_UNIFORMS = ['u_mvp', 'u_time', 'u_bass', 'u_level', 'u_mode', 'u_span',
+                         'u_pulse', 'u_color', 'u_color2', 'u_alpha'];
+  const uLin = uniforms(gl, lines, LINE_UNIFORMS);
+  const uBub = uniforms(gl, bubbles, LINE_UNIFORMS);
   // How much the music brightens the lines. Folded in on this side so the two
   // stages share no uniform at all.
   const lit = (base, a) => base * (0.55 + a * 0.7);
@@ -169,6 +199,18 @@ export function mountBackdrop(host, { enabled = true } = {}) {
   const RING_SPAN = 46;
   const rings = staticBuffer(gl, ringLines({ count: 10, size: 7.4, spacing: RING_SPAN / 10 }), 4);
   const solid = staticBuffer(gl, icosahedronLines(1), 4);
+  // One bubble, drawn several times. Seven draw calls of a small buffer is
+  // cheaper than one big buffer that has to be rebuilt when the count changes.
+  const bubble = staticBuffer(gl, sphereLines(1, { lat: 4, lon: 7, segs: 20 }), 4);
+  const BUBBLES = [
+    { x: -4.6, z: -9,  r: 0.62, speed: 0.19, sway: 1.3, phase: 0.0 },
+    { x: 5.2,  z: -12, r: 0.94, speed: 0.13, sway: 0.9, phase: 1.7 },
+    { x: -2.1, z: -17, r: 1.35, speed: 0.09, sway: 1.7, phase: 3.1 },
+    { x: 6.8,  z: -21, r: 1.9,  speed: 0.07, sway: 1.1, phase: 4.4 },
+    { x: -7.4, z: -24, r: 1.5,  speed: 0.10, sway: 2.0, phase: 5.6 },
+    { x: 1.4,  z: -28, r: 2.4,  speed: 0.05, sway: 1.4, phase: 2.3 },
+    { x: -1.2, z: -6,  r: 0.34, speed: 0.26, sway: 0.7, phase: 0.9 },
+  ];
 
   const aXY = gl.getAttribLocation(sky, 'a_xy');
   const aPos = gl.getAttribLocation(lines, 'a_pos');
@@ -193,6 +235,21 @@ export function mountBackdrop(host, { enabled = true } = {}) {
   let accentAt = 0;
   let intensity = 1;
   let on = enabled;
+
+  /* What the look asks the world to be. Each scene is a subset of the same
+     passes rather than a different renderer, so switching between them costs
+     nothing and cannot get out of step with the rest. */
+  const SCENES = {
+    world:  { sky: 1, grid: 1, rings: 1, solid: 1, bubbles: 1 },
+    tunnel: { sky: 1, grid: 0, rings: 1, solid: 1, bubbles: 1 },
+    grid:   { sky: 1, grid: 1, rings: 0, solid: 0, bubbles: 0 },
+    still:  { sky: 1, grid: 0, rings: 0, solid: 0, bubbles: 0 },
+    off:    { sky: 0, grid: 0, rings: 0, solid: 0, bubbles: 0 },
+  };
+  let scene = SCENES.world;
+  let sceneName = 'world';
+  let depth = 0.7;
+  let wantBubbles = true;
   let lost = false;
   const t0 = performance.now();
 
@@ -267,11 +324,11 @@ export function mountBackdrop(host, { enabled = true } = {}) {
     const light = document.documentElement.getAttribute('data-theme') === 'light' ||
       (!document.documentElement.getAttribute('data-theme') &&
         matchMedia('(prefers-color-scheme: light)').matches);
-    const alpha = intensity * (light ? 0.5 : 1);
+    const alpha = intensity * (light ? 0.55 : 1.25) * (0.35 + depth * 0.93);
     const ink = light ? 1 : 0;
 
-    if (still) {
-      const key = `${w}x${h}|${accent.join()}|${art.join()}|${alpha}`;
+    if (still || sceneName === 'still') {
+      const key = `${w}x${h}|${accent.join()}|${art.join()}|${alpha}|${sceneName}`;
       if (key === staticKey) return;                  // already on screen
       staticKey = key;
     } else staticKey = '';
@@ -283,6 +340,7 @@ export function mountBackdrop(host, { enabled = true } = {}) {
     gl.bindBuffer(gl.ARRAY_BUFFER, quad.buf);
     gl.enableVertexAttribArray(aXY);
     gl.vertexAttribPointer(aXY, 2, gl.FLOAT, false, 0, 0);
+    if (!scene.sky) { gl.disableVertexAttribArray(aXY); return; }
     gl.uniform2f(uSky.u_res, w, h);
     gl.uniform1f(uSky.u_time, t);
     gl.uniform1f(uSky.u_level, a.level);
@@ -307,6 +365,7 @@ export function mountBackdrop(host, { enabled = true } = {}) {
     gl.uniform1f(uLin.u_pulse, a.pulse);
 
     /* -- ground --------------------------------------------------------- */
+    if (scene.grid) {
     mat4.identity(model);
     mat4.multiply(mvp, view, model);
     mat4.multiply(mvp, proj, mvp);
@@ -318,8 +377,10 @@ export function mountBackdrop(host, { enabled = true } = {}) {
     gl.uniform1f(uLin.u_alpha, lit(alpha * 0.62, a.level));
     bindLines(grid);
     gl.drawArrays(gl.LINES, 0, grid.count);
+    }
 
     /* -- rings ---------------------------------------------------------- */
+    if (scene.rings) {
     mat4.identity(model);
     mat4.translate(model, 0, 3.4, 0);
     mat4.multiply(mvp, view, model);
@@ -330,8 +391,10 @@ export function mountBackdrop(host, { enabled = true } = {}) {
     gl.uniform1f(uLin.u_alpha, lit(alpha * 0.36, a.level));
     bindLines(rings);
     gl.drawArrays(gl.LINES, 0, rings.count);
+    }
 
     /* -- the solid ------------------------------------------------------ */
+    if (scene.solid) {
     mat4.identity(model);
     mat4.translate(model, 3.1, 3.5, -13);
     mat4.rotateY(model, t * 0.22);
@@ -345,6 +408,42 @@ export function mountBackdrop(host, { enabled = true } = {}) {
     gl.uniform1f(uLin.u_alpha, lit(alpha * 0.7, a.level));
     bindLines(solid);
     gl.drawArrays(gl.LINES, 0, solid.count);
+    }
+
+    /* -- bubbles -------------------------------------------------------- */
+    // The aero half of the picture: wireframe spheres rising through the
+    // scene, each on its own clock so they never fall into step.
+    if (scene.bubbles && wantBubbles) {
+      gl.useProgram(bubbles);
+      gl.uniform1f(uBub.u_time, t);
+      gl.uniform1f(uBub.u_bass, a.bass);
+      gl.uniform1f(uBub.u_level, a.level);
+      gl.uniform1f(uBub.u_pulse, a.pulse);
+      gl.uniform1f(uBub.u_mode, 3);
+      gl.uniform3fv(uBub.u_color, accent);
+      gl.uniform3fv(uBub.u_color2, art);
+      bindLines(bubble);
+
+      for (const b of BUBBLES) {
+        // Rise, wrap, and drift sideways. `u_span` doubles as the per-bubble
+        // phase for the breathing in the vertex stage — one fewer uniform.
+        const y = ((t * b.speed + b.phase) % 1) * 15 - 4.2;
+        const sway = Math.sin(t * b.speed * 2.4 + b.phase) * b.sway;
+        const fadeIn = Math.min(1, (y + 4.2) / 2.4);
+        const fadeOut = Math.min(1, (10.8 - y) / 3.4);
+        mat4.identity(model);
+        mat4.translate(model, b.x + sway, y, b.z);
+        const r = b.r * (1 + a.level * 0.10);
+        mat4.scale(model, r, r, r);
+        mat4.multiply(mvp, view, model);
+        mat4.multiply(mvp, proj, mvp);
+        gl.uniformMatrix4fv(uBub.u_mvp, false, mvp);
+        gl.uniform1f(uBub.u_span, b.phase);
+        gl.uniform1f(uBub.u_alpha,
+          lit(alpha * 0.30, a.level) * Math.max(0, fadeIn) * Math.max(0, fadeOut));
+        gl.drawArrays(gl.LINES, 0, bubble.count);
+      }
+    }
 
     gl.disableVertexAttribArray(aPos);
     gl.disableVertexAttribArray(aSeed);
@@ -358,6 +457,15 @@ export function mountBackdrop(host, { enabled = true } = {}) {
       canvas.classList.toggle('is-off', !on);
       staticKey = '';
       if (!on && w && h) gl.clear(gl.COLOR_BUFFER_BIT);
+    },
+    /** Everything the look has to say about the world behind the interface. */
+    setLook(look) {
+      if (!look) return;
+      sceneName = SCENES[look.scene] ? look.scene : 'world';
+      scene = SCENES[sceneName];
+      depth = Math.max(0, Math.min(1, (look.depth ?? 70) / 100));
+      wantBubbles = look.bubbles !== false;
+      staticKey = '';
     },
     /** 1 in the app, higher on the immersive stage. */
     setIntensity(v) {

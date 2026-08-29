@@ -1,0 +1,284 @@
+/* sound.css — the rack.
+ *
+ * The Sound page is the one screen in Sonora that looks like hardware: a
+ * curve you can grab, ten faders under it, and a column of modules down the
+ * side. It borrows its proportions from a channel strip rather than from a
+ * settings page, because that is what it is.
+ */
+
+.rack {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr);
+  gap: var(--pad);
+  align-items: start;
+}
+
+.rack-panel {
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  background: var(--glass-2);
+  border: var(--hair) solid var(--line);
+  padding: var(--pad);
+  min-width: 0;
+}
+
+.rack-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.rack-head .label { margin-right: auto; }
+.rack-title { font-size: calc(13px * var(--scale)); font-weight: 600; }
+
+/* ------------------------------------------------------------------ curve */
+
+/* The response display. Its own stacking context so the grid, the fill and
+   the handles can be layered without a z-index war. */
+.eq-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2.4;
+  min-height: 190px;
+  max-height: 320px;
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(120% 140% at 50% 0%, rgb(var(--accent-rgb) / calc(.10 * var(--glow))), transparent 70%),
+    rgb(var(--bg-rgb) / .55);
+  border: var(--hair) solid var(--line);
+  overflow: hidden;
+  touch-action: none;
+}
+.eq-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.eq-grid line { stroke: rgb(var(--accent-rgb) / .13); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.eq-grid line.zero { stroke: rgb(var(--accent-rgb) / .34); }
+/* The labels and the handles live above the stretched path layer, in HTML, so
+   they keep their proportions whatever shape the box is. */
+.eq-overlay, .eq-handles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.eq-mark {
+  position: absolute;
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  letter-spacing: .1em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.eq-mark-x { bottom: 5px; transform: translateX(4px); }
+.eq-mark-y { left: 7px; transform: translateY(-100%); margin-top: -3px; }
+
+.eq-handles { pointer-events: none; }
+
+.eq-handle {
+  position: absolute;
+  width: 30px; height: 30px;
+  margin: -15px 0 0 -15px;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  transition: top var(--dur-1) linear;
+}
+.eq-handle:active { cursor: grabbing; }
+.eq-handle-cap {
+  width: 15px; height: 15px;
+  border-radius: 50%;
+  background: rgb(var(--bg-rgb) / .92);
+  box-shadow: inset 0 0 0 2px var(--accent), var(--spec);
+  transition: width var(--dur-1) var(--ease), height var(--dur-1) var(--ease),
+              background var(--dur-1) linear;
+}
+.eq-handle.is-set .eq-handle-cap { width: 19px; height: 19px; background: var(--accent); }
+.eq-handle:hover .eq-handle-cap { background: var(--accent); }
+.eq-handle:focus-visible { outline: none; }
+.eq-handle:focus-visible .eq-handle-cap {
+  box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 3px rgb(var(--accent-rgb) / .45);
+}
+
+/* The value rides above the handle, but only while it matters. */
+.eq-handle::after {
+  content: attr(data-db);
+  position: absolute;
+  bottom: 100%;
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity var(--dur-1) linear;
+  pointer-events: none;
+}
+.eq-handle.is-set::after, .eq-handle:hover::after, .eq-handle:focus-visible::after { opacity: 1; }
+
+.eq-fill { fill: url(#eq-grad); opacity: .5; }
+.eq-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 calc(6px * var(--glow)) var(--accent-glow));
+}
+
+/* ------------------------------------------------------------------ faders */
+
+.eq-faders {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 14px;
+}
+.fader { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+.fader input[type="range"] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 22px;
+  height: 96px;
+  accent-color: var(--accent);
+}
+.fader-hz, .fader-db {
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .06em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.fader-db { color: var(--text-2); }
+.fader.is-boosted .fader-db { color: var(--accent); }
+.fader.is-cut .fader-db { color: var(--warn); }
+
+/* ------------------------------------------------------------------ knobs */
+
+.rack-row {
+  display: grid;
+  grid-template-columns: minmax(84px, 8rem) minmax(0, 1fr) minmax(46px, auto);
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  min-width: 0;
+}
+.rack-row + .rack-row { border-top: var(--hair) solid rgb(var(--accent-rgb) / .07); }
+.rack-row > .rack-name {
+  font-size: calc(11.5px * var(--scale));
+  color: var(--text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rack-row input[type="range"] { width: 100%; min-width: 0; accent-color: var(--accent); }
+.rack-val {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  color: var(--text-3);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rack-row.is-set .rack-val { color: var(--accent); }
+
+.rack-note {
+  font-size: calc(11px * var(--scale));
+  color: var(--text-3);
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------------------------ chips */
+
+.preset-strip, .look-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.preset {
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  padding: 6px 11px;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: rgb(var(--accent-rgb) / .05);
+  border: var(--hair) solid var(--line);
+  transition: color var(--dur-1) linear, background var(--dur-1) linear, border-color var(--dur-1) linear;
+}
+.preset:hover { color: var(--text); border-color: var(--line-2); }
+.preset.is-on {
+  color: var(--on-accent);
+  background: var(--accent-grad);
+  border-color: transparent;
+}
+
+/* ------------------------------------------------------------------ looks */
+
+.look-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+}
+.look-swatch {
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  padding: 10px 12px 11px;
+  text-align: left;
+  border: var(--hair) solid var(--line);
+  background: linear-gradient(145deg,
+    rgb(var(--sw-a) / .30), rgb(var(--sw-b) / .12) 60%, transparent);
+  transition: border-color var(--dur-1) linear, transform var(--dur-2) var(--ease);
+}
+.look-swatch:hover { border-color: var(--line-3); transform: translateY(-2px); }
+.look-swatch.is-on { border-color: rgb(var(--sw-a)); }
+.look-name { font-size: calc(12px * var(--scale)); font-weight: 580; color: var(--text); }
+.look-note {
+  font-size: calc(10.5px * var(--scale));
+  color: var(--text-3);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.look-bar { display: flex; gap: 3px; margin-top: 9px; }
+.look-bar i { height: 5px; flex: 1; background: rgb(var(--sw-a)); }
+.look-bar i:nth-child(2) { background: rgb(var(--sw-b)); opacity: .8; }
+.look-bar i:nth-child(3) { background: rgb(var(--sw-c)); opacity: .55; }
+
+/* ------------------------------------------------------------------ narrow */
+
+@media (max-width: 1080px) {
+  .rack { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 620px) {
+  .eq-faders { grid-template-columns: repeat(5, minmax(0, 1fr)); row-gap: 12px; }
+  .fader input[type="range"] { height: 74px; }
+  .rack-row { grid-template-columns: minmax(0, 1fr) minmax(46px, auto); }
+  .rack-row input[type="range"] { grid-column: 1 / -1; }
+}
+
+/* ------------------------------------------------------------------ look */
+
+/* The look panel reuses the rack's controls, because it is the same idea:
+   a column of named parameters with live readouts. */
+.look-group { margin-top: 12px; }
+.look-group .rack-row { grid-template-columns: minmax(96px, 9rem) minmax(0, 1fr) minmax(46px, auto); }
+.look-row .segmented { grid-column: 2 / -1; justify-self: start; flex-wrap: wrap; }
+.look-row .preset { grid-column: 3; justify-self: end; }
+.look-actions { margin-top: 14px; justify-content: flex-start; }
+
+@media (max-width: 620px) {
+  .look-group .rack-row { grid-template-columns: minmax(0, 1fr) minmax(46px, auto); }
+  .look-row .segmented { grid-column: 1 / -1; }
+  .look-row .preset { grid-column: 2; }
+}

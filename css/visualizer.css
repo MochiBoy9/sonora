@@ -118,7 +118,7 @@
   padding: 7px 16px;
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   font-weight: 500;
   letter-spacing: .18em;
   text-transform: uppercase;
@@ -181,12 +181,12 @@
 
 .stage-meta { text-align: center; max-width: 60ch; display: grid; justify-items: center; gap: 10px; }
 .stage-title {
-  font-size: clamp(26px, 3.6vw, 44px);
+  font-size: calc(clamp(26px, 3.6vw, 44px) * var(--scale));
   letter-spacing: -.032em;
   line-height: 1.04;
   overflow-wrap: anywhere;
 }
-.stage-artist { color: var(--accent); font-size: 14px; font-weight: 560; letter-spacing: .01em; }
+.stage-artist { color: var(--accent); font-size: calc(14px * var(--scale)); font-weight: 560; letter-spacing: .01em; }
 .stage-tags { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 
 .stage-foot {
@@ -207,7 +207,7 @@
   min-width: 46px;
   font-family: var(--mono);
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--scale));
   letter-spacing: .06em;
   font-variant-numeric: tabular-nums;
 }

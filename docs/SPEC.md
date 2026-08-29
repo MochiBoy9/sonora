@@ -1,6 +1,6 @@
 # Sonora — Feature Specification & UX Plan
 
-**Version** 2.1 · **Status** implemented and verified unless a section says
+**Version** 2.2 · **Status** implemented and verified unless a section says
 otherwise · **Audience** full-stack, design, QA
 
 ---
@@ -43,10 +43,18 @@ and does it send anything anywhere the listener did not ask for?*
 | F2 | **Band Overview** | Optional online context for an artist: biography, activity, discography, line-up, with citations. | **Off** |
 | F3 | **File selection & album auto-merge** | Pick loose files as well as folders; an album split across folders lands as one album. | On |
 | F4 | **Circle Analysis Center** | Listening *time* — the honest metric — drawn as area-proportional circles by artist, genre or year. | On |
+| F5 | **The Rack** | Ten-band parametric EQ, dynamics, space, stereo width, and pitch and speed as two separate controls. | Unity |
+| F6 | **Looks** | Nineteen visual settings and eight named looks, all of it CSS custom properties. | Aqua |
 
 ### 1.3 The shape of the change
 
 ```
+js/audio.js     NEW   the rack: EQ, dynamics, space, stereo, pitch, speed
+js/pitch-worklet.js NEW  pitch without tempo, on the audio thread
+js/sound.js     NEW   the Sound page: the response curve and every control
+js/looks.js     NEW   nineteen visual settings and eight named looks
+css/aero.css    NEW   the material: atmosphere, glass, sheen, specular edges
+css/sound.css   NEW   the rack's own layout
 js/session.js   NEW   reconnect + resume, the playhead mirror
 js/stats.js     NEW   the listening-time meter
 js/circles.js   NEW   the Circle Analysis Center (hand-packed SVG)
@@ -55,8 +63,13 @@ js/library.js   CHG   album merge, loose-file root, guessed-artist verdict
 js/tags.js      CHG   records which fields it had to guess from the folder tree
 js/player.js    CHG   setQueueSilently, cue, moveInQueue
 js/db.js        CHG   schema v1 → v2, adds the `band` cache store
-js/app.js       CHG   Analysis route, add-music menu, connection readout
-js/views.js     CHG   Circle view, Band Overview, three settings sections
+js/app.js       CHG   Analysis and Sound routes, add-music menu, look boot
+js/views.js     CHG   Circle view, Band Overview, the Look panel, settings
+js/backdrop.js  CHG   selectable scenes, bubbles, look-driven intensity
+js/gl.js        CHG   sphereLines, for the bubbles
+css/base.css    CHG   the shape and material tokens the look engine writes
+tools/layout.mjs NEW  eight widths × eight routes: overflow, overlap, centring
+tools/audio.mjs  NEW  does the rack change the sound, measured after the rack
 ```
 
 ### 1.4 What did **not** change
@@ -82,18 +95,27 @@ as the whole look. Aero was a material; retro-futurism is the argument.
 1. **Vector, not decoration.** Every shape is drawable with a pen: hairlines,
    chamfers, ticks, brackets, wireframe. No blobs, no soft illustration, no
    drop-shadowed cards pretending to be paper.
-2. **Corners are cut, never rounded.** `clip-path` chamfers (`--cut: 9px`) on
-   panels, cards, buttons and dialogs. A radius anywhere is a bug.
+2. **Corners are cut by default, and the cut is a setting.** Every `clip-path`
+   in the app is one of three shape tokens that read `--k` off the element
+   using them, so the corner style — chamfer, rounded, square — and its size
+   are preferences rather than a rewrite. A hard-coded radius is a bug; a
+   `border-radius: var(--radius)` beside a shape token is correct.
 3. **One accent, earned.** Cyan `0 209 255` → blue `58 132 255`. Album colour
    lives in a *separate* token (`--art-rgb`) and is allowed only next to the
    artwork it came from, so the chrome never drifts.
 4. **Numbers are monospace.** Durations, counts, percentages, timecodes — all
    `--mono` with `tabular-nums`, so nothing twitches as it counts.
 5. **Depth is real, not painted.** The background is WebGL: a wireframe grid,
-   tunnel rings and a rotating icosahedron reacting to the audio. Panels sit
-   above it on frosted glass. Nothing fakes a shadow that a light source would
-   not cast.
-6. **Motion explains, then stops.** One shared `requestAnimationFrame` ticker
+   tunnel rings, a rotating icosahedron and rising bubbles, all reacting to the
+   audio, over an atmosphere of three enormous soft lights. Panels sit above it
+   on glass you can see through. Nothing fakes a shadow that a light source
+   would not cast.
+6. **Aero at the fringes, never as the whole look.** Gloss, frost, specular
+   edges and bubbles are the wet-glass borrowing; the hairlines, chamfers,
+   mono labels and wireframe are the instrument. Aero was a material;
+   retro-futurism is the argument. Both are dials — at zero gloss the app is
+   the flat instrument it was, and it still holds together.
+7. **Motion explains, then stops.** One shared `requestAnimationFrame` ticker
    for the whole app. Transitions are short (120/220/420 ms) and always
    directional — a thing arrives from where it came from.
 
@@ -105,9 +127,16 @@ as the whole look. Aero was a material; retro-futurism is the argument.
 | Hairlines | `--line` `--line-2` `--line-3` (cyan at 13% / 26% / 46%) |
 | Glass | `--glass` `--glass-2` `--glass-bar` `--blur: blur(24px) saturate(150%)` |
 | Text | `--text` `--text-2` `--text-3` `--on-accent` |
-| Accent | `--accent-rgb` `--accent-2-rgb` `--art-rgb` + `-soft` `-line` `-glow` `-grad` |
-| Geometry | `--cut` `--cut-sm` `--cut-lg` `--hair` |
+| Accent | `--accent-rgb` `--accent-2-rgb` `--aero-rgb` `--art-rgb` + `-soft` `-line` `-glow` `-grad` |
+| Geometry | `--cut` `--cut-sm` `--cut-lg` `--radius` `--hair` `--k` |
+| Shape | `--nick-ne` `--nick-nw` `--nick-all` — the three chamfers, blanked to square the app |
+| Material | `--gloss` `--frost` `--glow` `--grid-a` `--parallax` `--sheen` `--spec` |
+| Space | `--sidebar-w` `--pane-w` `--player-h` `--topbar-h` `--gutter` `--pad` `--row-h` `--scale` |
 | Motion | `--dur-1..3`, `--ease`, `--ease-soft`, `--ease-back`, `--ease-step` |
+
+Anything a listener can change is one of these, written by `looks.apply()`. A
+component that reads a setting directly is a component that will be missed the
+next time one is added.
 
 Colours are stored as **channel triplets** (`--accent-rgb: 0 209 255`) so any
 component can take an alpha of them without a second token. Every new colour
@@ -625,6 +654,262 @@ never live only inside it.
 
 ---
 
+---
+
+## F5 · The Rack (audio processing)
+
+> `js/audio.js`, `js/pitch-worklet.js`, `js/sound.js`, `css/sound.css`, route `#/sound`
+
+### F5.1 Objective
+
+Give the listener more control over the sound than any streaming service
+offers, without a plugin, an account, or a second application — and make the
+controls legible enough that someone who has never seen an equaliser can tell
+what one does.
+
+### F5.2 User stories
+
+- *As a listener with bad headphones*, I can pull the boxy 250 Hz out and put
+  the air back at 10 kHz, and hear the difference immediately.
+- *As someone learning a part*, I can slow a track to 70% without it dropping
+  a tone, or drop it a semitone without it slowing down.
+- *As someone falling asleep*, I can compress the dynamics so the loud bits
+  stop waking me up.
+- *As anyone*, I can press one key to hear it without any of that, because
+  that is the only way to tell whether it is helping.
+
+### F5.3 The chain
+
+```
+gain → [rack] → analyser → speakers
+
+  preamp → 31 62 125 250 500 1k 2k 4k 8k 16k → bass shelf → treble shelf
+         → pitch (detour) → compressor → mid/side width → balance
+         → dry + convolver·wet → limiter → out
+```
+
+Ten bands: the ends are shelves, the eight between are bells at Q 1.1 — about
+1.3 octaves, wide enough to cover the spectrum without gaps and narrow enough
+that each one does something. Range ±12 dB.
+
+**The chain is always connected.** Bypassing an effect sets it to unity — a
+biquad at 0 dB is transparent, a compressor at a ratio of 1 is transparent —
+because rewiring a live graph clicks. Every parameter change is a 20 ms
+`setTargetAtTime` ramp for the same reason.
+
+**The reverb is made of noise.** A convolution reverb needs a recording of a
+real space, and shipping one would mean shipping a megabyte of audio into an
+app whose whole argument is that it has no dependencies. Exponentially decaying
+noise is the textbook stand-in and sounds like a room because a room *is* a
+dense cloud of decaying reflections; a one-pole filter that closes as the tail
+decays supplies the air, and six discrete early reflections supply the size.
+Five spaces: Room, Chamber, Plate, Hall, Cathedral.
+
+**Stereo width is a real mid/side matrix**, not a pan law: mid = (L+R)/2,
+side = (L−R)/2, out = mid ± width·side. The node feeding it is pinned to two
+channels explicitly, so a mono recording stays in both ears rather than
+becoming a one-eared one at any width setting.
+
+### F5.4 Pitch and speed, separately
+
+`playbackRate` moves pitch and tempo together, because that is what spinning a
+record faster does. Sonora offers them as two controls:
+
+| Control | Range | How |
+|---|---|---|
+| **Speed** | 0.5×–2× | `playbackRate` with `preservesPitch`, re-applied on every source load because some engines reset it |
+| **Pitch** | ±12 semitones | A delay line read at a different rate than it is written, in an AudioWorklet |
+
+The shifter is the classic two-tap delay-line design. Read the line 3% faster
+than you write it and everything comes out a semitone up — but the read pointer
+catches the write pointer and clicks twelve times a second. So there are two
+read pointers half a grain apart, windowed by `sin(πp)` and `sin(π(p+½))`,
+whose squares sum to one: a constant-power crossfade, which is what two
+decorrelated copies of the same sound want. One multiply-add per tap per
+sample, no allocation after construction, no FFT.
+
+It is not a phase vocoder and a large shift on a sustained note will warble.
+For the ±12 semitones anyone actually uses on music it is clean, and it does
+not cost 40 ms of latency.
+
+> **Ordering matters, and getting it wrong is two bugs at once.** Everything
+> about the shifter is configured *after* the node exists and never from
+> `apply()`. Reading the node from `apply()` means the first call finds
+> nothing constructed, so the ratio is never written and the audio plays at
+> its original pitch; and the crossfade to the wet path starts before there
+> is anything on the wet path, so the sound drops out for as long as the
+> module takes to fetch. Both of those shipped in the first draft and both
+> are covered by tests now.
+
+The worklet module is not fetched until someone asks for a pitch change, and
+the signal routes around the node entirely at zero semitones — it costs an
+audio-thread hop and 85 ms of delay line, which is not worth paying for
+nothing.
+
+### F5.5 The page
+
+The centre is the **response curve**: the combined shape of all twelve filters,
+obtained from `getFrequencyResponse()` on the filters themselves rather than
+derived from the slider positions. What is on screen is what is in the signal,
+including the skirts where neighbouring bands overlap and add — which is where
+an equaliser surprises you.
+
+The curve layer is stretched to fill its box, because a curve squeezed into a
+band in the middle does not read as a curve. Labels and handles are HTML on
+top, positioned in percent, so text stays crisp and handles stay circular
+whatever shape the box is.
+
+Drag a handle or move its fader: both are the same edit, and both redraw from
+the same measurement. Double-click a handle to flatten that band; arrow keys
+move it in 0.5 dB steps, Shift for 3 dB, Home for flat.
+
+Eleven presets (Flat, Bass Boost, Sub, Vocal, Acoustic, Electronic, Loudness,
+Late Night, Spoken, Classical, Headphones) and any number of saved racks. One
+line under the title says what the rack is doing in plain language.
+
+### F5.6 Acceptance criteria
+
+| # | Criterion | Measure |
+|---|---|---|
+| AC-5.1 | Moving a band changes the audio, not only the picture. | Analyser (which sits after the rack) reads a ≥6% band change on a ±12 dB move. **Verified.** |
+| AC-5.2 | Bypass returns the untouched signal. | Within 25% of the flat reading. **Verified.** |
+| AC-5.3 | Pitch changes the key without the tempo. | A 240 Hz tone reads 357 Hz at +7 semitones and 181 Hz at −5, with RMS preserved. **Verified in an OfflineAudioContext.** |
+| AC-5.4 | Speed changes the tempo without the key. | `playbackRate` 1.5, `preservesPitch` true. **Verified.** |
+| AC-5.5 | Nothing clicks when a control moves. | Every parameter is ramped, never stepped. |
+| AC-5.6 | The curve matches the filters. | Read from `getFrequencyResponse`, not from the sliders. |
+| AC-5.7 | Every band is reachable without a pointer. | Handles are `role="slider"` buttons with arrow, Shift-arrow and Home. **Verified.** |
+| AC-5.8 | The rack survives a reload. | Debounced to IndexedDB; restored before the graph exists. **Verified.** |
+| AC-5.9 | Someone who never opens the page pays nothing. | The worklet is fetched on first pitch change; the graph is unity otherwise. |
+| AC-5.10 | A browser without AudioWorklet loses pitch and nothing else. | `canPitch()`; the failure is reported once and the dry path stays up. |
+
+### F5.7 API surface
+
+```js
+rack.attach(ctx, media)      // → { input, output }; called once by the player
+rack.bindElement(media)      // speed works before any graph exists
+rack.state                   // the whole rack, plain data
+rack.set(patch)  rack.setBand(i, dB)  rack.setComp(patch)  rack.setSpace(patch)
+rack.usePreset(id)  rack.reset()  rack.isDefault()  rack.canPitch()
+rack.response(freqs)         // → Float32Array of dB, measured off the filters
+rack.savedRacks()  rack.saveRack(name)  rack.deleteRack(name)  rack.loadRack(r)
+rack.BANDS  rack.PRESETS  rack.SPACES
+rack.events.on('change' | 'ready' | 'racks' | 'pitch-unavailable', fn)
+rack.__debug()               // node state and gain reduction, for the tests
+```
+
+### F5.8 Accessibility
+
+Every control is a native `input[type=range]` or `button` with a label and a
+live text readout — the curve is an illustration of numbers that are also
+written down, never the only way to read a value. Handles are focusable
+sliders with `aria-valuenow` and `aria-valuetext` in hertz and decibels. `B`
+bypasses from anywhere; `E` opens the page.
+
+### F5.9 Budgets
+
+About 40 Web Audio nodes, built once. Parameter changes are `setTargetAtTime`
+calls, not graph edits. The curve is 220 samples through twelve filters, only
+on the Sound page. Measured: no change to import throughput, route paint or
+scroll frame time.
+
+---
+
+## F6 · Looks (interface customisation)
+
+> `js/looks.js`, `css/aero.css`, Settings → Look
+
+### F6.1 Objective
+
+Let the interface be the listener's rather than ours, without letting it become
+unusable — and without every component having to know that a preference exists.
+
+### F6.2 How it works
+
+Nineteen settings, declared once in `looks.SCHEMA`:
+
+| Group | Settings |
+|---|---|
+| Base | theme (system / dark / light) |
+| Colour | accent hue, second hue (as a spread), saturation, surface tint, extra contrast |
+| Form | corner style (chamfer / rounded / square), corner size, density, text size |
+| Material | gloss, frost, bloom, graph paper |
+| Depth | backdrop scene, scene intensity, bubbles, parallax, motion |
+
+`apply()` turns the whole set into CSS custom properties on the root element.
+The stylesheets read those properties and nothing else, so **no component knows
+a setting exists** — adding one is a line in `looks.js` and it appears in the
+panel, correctly grouped, with its hint, its units and its keyboard handling
+already working.
+
+Three things make that possible:
+
+1. **Colours are stored as hue, chroma and lightness** and converted here, so
+   one slider moves the accent, its partner, every hairline, every glow and the
+   panel tint together and they stay in the same family. Accent *lightness* is
+   not a setting — it is whatever keeps the contrast on the current ground.
+2. **The chamfer is three shape tokens** (`--nick-ne`, `--nick-nw`,
+   `--nick-all`) that read `--k` off whatever element uses them. Every
+   `clip-path` in the app is one of those three. Setting them to `none` turns
+   every corner in the app square at once, which is how a corner style becomes
+   a preference rather than a rewrite.
+3. **The look is cached as its own output.** `apply()` writes the finished
+   `style` attribute and data-attributes to `localStorage`; four lines of
+   inline script in the document head replay them before first paint. A module
+   cannot run before first paint, and a second implementation there would
+   drift — this one cannot, because it is not an implementation.
+
+Eight named looks (Aqua, Blueprint, Lagoon, Ultraviolet, Ember, Solar,
+Graphite, Plain) are patches over the defaults, so each says only what makes it
+itself and gains any setting added later for free.
+
+### F6.3 Acceptance criteria
+
+| # | Criterion | Measure |
+|---|---|---|
+| AC-6.1 | Every setting takes effect immediately, with no reload. | Custom properties on `:root`. |
+| AC-6.2 | A look survives a reload with no flash of the previous one. | Head script replays the cached output. |
+| AC-6.3 | Contrast holds at every hue. | Accent lightness is derived from the ground, not chosen. |
+| AC-6.4 | "Plain" removes every effect and the app still works. | Gloss, bloom, grid, scene, parallax all at zero. |
+| AC-6.5 | A corrupt or partial stored look leaves the defaults. | Each field validated against its own spec on load. |
+| AC-6.6 | Nothing in the panel can produce an unreadable interface. | Ranges are bounded; text and background are never both settable. |
+
+### F6.7 The Aero layer
+
+`css/aero.css` is the Frutiger Aero half of the aesthetic, kept in one file so
+it can be turned off by one slider:
+
+- **The atmosphere** — three enormous soft lights behind everything. This is
+  the single move that separates a dark interface from one that looks like it
+  is underwater, and it is why the glass has anything to refract.
+- **Glass, not paint** — content surfaces are translucent so the lit world
+  shows through them.
+- **A specular top edge** on every raised surface: one pixel of light where
+  the panel meets the air.
+- **A radial sheen** across the top of raised controls, brightest where the
+  horizon light is.
+- **Bubbles** — wireframe spheres rising through the 3D scene, each on its own
+  clock, brighter towards the top the way a wet surface is.
+
+Every effect multiplies by `--gloss`, `--frost` or `--glow`. At zero the file
+contributes nothing and the app is the flat instrument it was.
+
+> **Two performance rules were learned the hard way and are load-bearing.**
+>
+> `backdrop-filter` never goes on a surface that scrolls. It reads back
+> everything behind the element on every frame; putting it on the shelves took
+> the scroll from a 16.7 ms median to 66 ms. The frost belongs on the chrome,
+> which does not move.
+>
+> The atmosphere does not animate. The chrome above it is frosted, so anything
+> drifting behind that glass forces the blur to be recomputed every frame: a
+> 34-second drift turned a 17 ms scroll into 35 ms, and pausing the animation
+> did not give it back — once Chromium has an animation on a full-viewport
+> layer it keeps paying for it whether it is running or not. The motion in this
+> app belongs to the wireframe world, which is drawn on the GPU and throttles
+> itself.
+
+---
+
 ## 4. User flows
 
 ### 4.1 First run
@@ -851,7 +1136,9 @@ than to a broken pane:
 | Auto-connect | Library loads; no session restored; phase `off`. |
 | Online lookups | The artist page shows no lookup affordance; `band.js` is never imported. |
 | Backdrop | Static gradient; WebGL context never created. |
-| Album accent | Chrome stays cyan next to artwork. |
+| Album accent | Chrome stays its own colour next to artwork. |
+| The rack | Every node at unity; the pitch worklet is never fetched. |
+| Gloss / frost / bloom | The Aero layer contributes nothing; the instrument remains. |
 
 Rules for new modules: **lazy-import** anything not on the boot path
 (`band.js`, `circles.js`, `stage.js` all are); **debounce** anything driven by
@@ -873,11 +1160,24 @@ Measured on the 3,000-track / 300-album library:
 | Live DOM nodes, 3,000 rows | < 60 | 28–30 |
 | Search keystroke | < 5 ms | 0.3–1.8 ms |
 | JS heap | < 20 MB | 8–10 MB |
-| Cold start to painted library | < 1.5 s | 939 ms |
-| Reconnect settle | < 3 s | 2785 ms worst case |
+| Cold start to painted library | < 1.5 s | 770–906 ms |
+| Reconnect settle | < 3 s | 2699 ms worst case |
+| Rack in the graph | no measurable cost | no change to any figure above |
 
 Regressions to watch for: a second rAF loop; a non-virtualised list; drawing
 during import; an unthrottled backdrop; a `layout` read inside a render pass.
+
+And two that this release found by measuring rather than by reasoning:
+
+- **`backdrop-filter` on anything that scrolls.** It reads back everything
+  behind the element every frame. On the shelves it cost 50 ms per scroll
+  frame — three frames of work per frame.
+- **Any animation on a full-viewport layer behind frosted chrome.** The blur
+  has to be recomputed because its backdrop moved. A 34-second ambient drift
+  cost 18 ms per scroll frame, and `animation-play-state: paused` did not give
+  it back: the layer stays animated in the compositor either way.
+
+Both are now stated in `css/aero.css` beside the code that obeys them.
 
 ---
 
@@ -927,7 +1227,9 @@ it is built to prove the rule rather than weaken it.
 | Keyboard | Every action reachable without a pointer. Shortcuts: Space, ←/→, ↑/↓, M, S, R, N, P, Q, V, `/`, Esc. |
 | Focus | A visible cyan focus ring on every interactive element; dialogs trap focus and return it. |
 | Screen readers | Landmarks throughout; `aria-selected` on the mode switch; live regions for the connection readout, scan progress and lookup status; every icon button has an `aria-label`. |
-| Motion | `prefers-reduced-motion` has a still-frame path in the intro, backdrop, visualiser and circles. |
+| Motion | `prefers-reduced-motion` has a still-frame path in the intro, backdrop, visualiser and circles, and the Motion setting offers Full / Calm / None independently of the system. |
+| Sizing | Text size, density and contrast are settings, so someone who needs 125% type does not have to zoom the whole layout to get it. |
+| Audio controls | Every rack parameter is a native range or button with a live text readout; the response curve illustrates numbers that are also written down. |
 | Colour | Never the only channel: pinned circles also gain a ring, the current queue row also gains a marker, undecodable tracks also carry a word. |
 | Targets | ≥ 32px, ≥ 40px on coarse pointers. |
 
@@ -1034,8 +1336,26 @@ off, so an upgrading listener is not opted in to anything.
 >   year; hover for exact figures, click to pin two side by side, drag to
 >   arrange, double-click to play.
 > - **Add individual files**, not just folders, on every browser.
+> - **The Rack.** A ten-band parametric equaliser with a curve you can grab,
+>   bass and treble shelves, a preamp, a compressor, a limiter, five reverbs
+>   built out of noise rather than downloaded, stereo width and balance — and
+>   pitch and speed as two separate controls, so you can drop a track a
+>   semitone without slowing it down or slow it to 70% without it dropping a
+>   tone. Eleven presets, and you can save your own. `B` bypasses the whole
+>   thing from anywhere, which is the only way to tell whether it is helping.
+> - **Looks.** Nineteen visual settings — the hue the whole app is lit by, how
+>   sharp its corners are, how much glass and gloss it wears, how dense the
+>   type is, how much of the 3D world is drawn behind it — and eight named
+>   looks to start from: Aqua, Blueprint, Lagoon, Ultraviolet, Ember, Solar,
+>   Graphite and Plain.
+> - **A phone layout.** Below 560px the side rail becomes a row of tabs under
+>   the transport and the whole width goes to the music.
 >
 > ### Changed
+> - **The interface is deeper.** An atmosphere of three enormous soft lights
+>   behind everything, glass you can see the world through, a specular edge
+>   where each panel meets the air, and wireframe bubbles rising through the
+>   3D scene.
 > - **Albums split across folders now land as one album.** The tag reader
 >   records which fields it had to guess from the folder tree, so half a record
 >   sitting in `Unsorted/Rips` is no longer treated as an album by an artist
@@ -1059,6 +1379,20 @@ off, so an upgrading listener is not opted in to anything.
 >   plays.
 > - The queue-row click test targeted the last row in a virtualised list, which
 >   is below the fold — scrolling to it recycled the node about to be clicked.
+> - The play button was a two-row grid holding two glyphs, so the visible one
+>   sat in the top half of the button. Every swap button had it — play/pause,
+>   mute, repeat, and the one on the immersive stage.
+> - The play triangle's bounding box was centred on 13.5 of 24 units, and the
+>   round play button added a 2px nudge on top of that.
+> - The sort header put its icon on the text baseline; a track row's number,
+>   meter and play button each found their own centre.
+> - The queue panel's border made a "0px" grid column one pixel wide, so every
+>   route in the app scrolled sideways by exactly one pixel, at every size.
+> - The transport's columns had hard minimums adding to 796px with no
+>   breakpoint between 761 and 900, so a 768px tablet overflowed.
+> - The queue panel kept its named grid area at widths where that area no
+>   longer existed, so a closed panel was auto-placed at a negative x and took
+>   the transport with it.
 
 ---
 
@@ -1073,9 +1407,15 @@ node tools/smoke.mjs <lib> <shots>    # 60 checks: boot, import, metadata, merge
                                       # circles, band, search, reload, reconnect
 node tools/interactions.mjs <lib>     # sorting, keyboard, dragging, queue editing
 node tools/perf.mjs <biglib>          # import, paint, scroll, search, heap
+node tools/layout.mjs <lib> <shots>   # 8 widths × 8 routes: overflow, overlapping
+                                      # regions, unreachable controls, glyph centring
+node tools/audio.mjs <lib>            # does the rack change the sound — measured
+                                      # on the app's own analyser, after the rack
 ```
 
-Current state: **all three suites pass, with no console errors.**
+Current state: **all five suites pass, with no console errors.** The layout
+audit reports the app clean at 360, 414, 620, 768, 1024, 1280, 1680 and 2400
+pixels on every route.
 
 The Band Overview is tested against intercepted routes — real `fetch`, real
 parse, real cache, no live service — which is also how the "zero requests
@@ -1102,3 +1442,7 @@ before consent" and "cached, not refetched" assertions are made.
 | B-4 | Keyboard route for reordering the queue | §10 |
 | B-5 | One-shot background re-tag to backfill `guessed` on pre-2.1 libraries | §13 |
 | B-6 | Per-album and per-song deep analysis surfaced on the album page, not only from the artist overview | §F2.3 |
+| B-7 | Per-album and per-artist racks, so a badly mastered record can carry its own correction | §F5 |
+| B-8 | Import and export a look or a rack as a file, for sharing | §F5.7, §F6.2 |
+| B-9 | A phase-vocoder pitch mode for large shifts, behind a quality setting | §F5.4 |
+| B-10 | Crossfade and gapless playback, which the rack's graph now makes reachable | §F5.3 |

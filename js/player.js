@@ -10,6 +10,7 @@
 
 import * as lib from './library.js';
 import * as db from './db.js';
+import * as rack from './audio.js';
 import { Emitter, clamp, canDecode } from './util.js';
 
 export const events = new Emitter();
@@ -77,7 +78,13 @@ function ensureGraph() {
     analyser.maxDecibels = -18;
     freqData = new Uint8Array(analyser.frequencyBinCount);
     timeData = new Uint8Array(analyser.frequencyBinCount);
-    source.connect(gain).connect(analyser).connect(ctx.destination);
+
+    // The rack sits between the volume control and the analyser, so the
+    // spectrum on screen is the sound leaving the speakers rather than the
+    // sound leaving the file: turn the bass up and the bars agree with you.
+    const fx = rack.attach(ctx, audio);
+    source.connect(gain).connect(fx.input);
+    fx.output.connect(analyser).connect(ctx.destination);
     applyVolume();
     return true;
   } catch (err) {
@@ -538,6 +545,10 @@ export function playTracks(tracks, startIndex = 0, origin = null) {
 audio.addEventListener('loadedmetadata', () => {
   const real = audio.duration;
   state.loading = false;
+  // `preservesPitch` is reset by some engines when a new source loads, and a
+  // speed setting that silently stops preserving pitch between tracks is worse
+  // than one that never worked.
+  rack.apply();
   if (isFinite(real) && real > 0) {
     state.duration = real;
     const t = state.current;
@@ -626,6 +637,11 @@ export async function init() {
   if (typeof shuffle === 'boolean') state.shuffle = shuffle;
   if (repeat === 'all' || repeat === 'one') state.repeat = repeat;
   applyVolume();
+  // The rack owns playback speed, which is a property of the element and works
+  // with or without a Web Audio graph — and the graph does not exist until the
+  // first play.
+  rack.bindElement(audio);
+  rack.preload();
   events.emit('volume');
   events.emit('state');
 }

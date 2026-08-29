@@ -38,7 +38,7 @@
   --glass:     rgb(var(--surface-rgb) / .58);
   --glass-2:   rgb(var(--surface-2-rgb) / .82);
   --glass-bar: rgb(var(--bg-rgb) / .62);
-  --blur:      blur(24px) saturate(150%);
+  --blur:      blur(var(--frost)) saturate(calc(100% + 62% * var(--gloss)));
 
   /* ---- ink ---- */
   --text:   #e8f5ff;
@@ -55,7 +55,7 @@
   --accent-2:    rgb(var(--accent-2-rgb));
   --accent-soft: rgb(var(--accent-rgb) / .14);
   --accent-line: rgb(var(--accent-rgb) / .42);
-  --accent-glow: rgb(var(--accent-rgb) / .40);
+  --accent-glow: rgb(var(--accent-rgb) / calc(.40 * var(--glow)));
   --accent-grad: linear-gradient(115deg, rgb(var(--accent-rgb)), rgb(var(--accent-2-rgb)));
 
   --danger: #ff4d6a;
@@ -66,12 +66,42 @@
   --cut-sm: 5px;
   --cut-lg: 16px;
   --hair:   1px;
+  --radius: 0px;                  /* non-zero only in the rounded corner mode */
+
+  /* The three chamfer shapes the whole interface is cut from. Each reads
+     `--k` off the element that uses it, so one shape token serves every size:
+     set `--k` and ask for the family you want. Setting a family to `none`
+     turns every chamfer in the app square at once, which is how the corner
+     style becomes a preference rather than a rewrite. */
+  --nick-ne: polygon(0 0, calc(100% - var(--k)) 0, 100% var(--k),
+                     100% 100%, var(--k) 100%, 0 calc(100% - var(--k)));
+  --nick-nw: polygon(var(--k) 0, 100% 0, 100% calc(100% - var(--k)),
+                     calc(100% - var(--k)) 100%, 0 100%, 0 var(--k));
+  --nick-all: polygon(var(--k) 0, calc(100% - var(--k)) 0, 100% var(--k),
+                      100% calc(100% - var(--k)), calc(100% - var(--k)) 100%,
+                      var(--k) 100%, 0 calc(100% - var(--k)), 0 var(--k));
+  --k: 0px;
 
   --sidebar-w: 252px;
   --pane-w:    352px;
   --player-h:  96px;
   --topbar-h:  62px;
   --gutter:    34px;
+  --pad:       18px;
+  --row-h:     56px;
+  --scale:     1;                 /* text size multiplier */
+
+  /* ---- material: the aero fringe, all of it dialled by one number each ---- */
+  --gloss:  .55;                  /* the wet highlight on raised surfaces */
+  --frost:  24px;                 /* how far glass blurs what is behind it */
+  --glow:   1;                    /* bloom multiplier */
+  --grid-a: 1;                    /* graph-paper opacity */
+  --parallax: .6;
+  --aero-rgb: 64 224 255;         /* the lighter, greener partner to the accent */
+  --aero: rgb(var(--aero-rgb));
+  --sheen: rgb(255 255 255 / calc(.30 * var(--gloss)));
+  --sheen-soft: rgb(255 255 255 / calc(.10 * var(--gloss)));
+  --spec: inset 0 1px 0 rgb(255 255 255 / calc(.16 * var(--gloss)));
 
   /* ---- depth: crisp, directional, never a soft halo ---- */
   --sh-1: 0 1px 0 rgb(0 0 0 / .5);
@@ -95,6 +125,18 @@
           Consolas, monospace;
 
   color-scheme: dark;
+}
+
+/* ------------------------------------------------------------------ corners */
+
+/* Two of the three corner styles have no chamfer at all. Blanking the shape
+   families is the whole switch — every clip-path in the app reads one of
+   these three, so nothing else has to know. */
+:root[data-corner="round"],
+:root[data-corner="square"] {
+  --nick-ne: none;
+  --nick-nw: none;
+  --nick-all: none;
 }
 
 /* ------------------------------------------------------------------ light */
@@ -183,7 +225,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 14px;
+  font-size: calc(14px * var(--scale));
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -208,27 +250,26 @@ canvas { display: block; }
 /* The chamfer. One corner cut on every panel — bottom-right by default, which
    gives the whole interface a consistent reading direction. */
 .cut {
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
-    100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .cut-sm {
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
-    100% 100%, var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)));
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .cut-lg {
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg),
-    100% 100%, var(--cut-lg) 100%, 0 calc(100% - var(--cut-lg)));
+  --k: var(--cut-lg);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 /* Cut on both diagonals — used where a shape has to read as a machined part
    rather than as a panel: the transport buttons, the artwork frames. */
 .cut-both {
-  clip-path: polygon(
-    var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut),
-    100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%,
-    var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut));
+  --k: var(--cut);
+  clip-path: var(--nick-all);
+  border-radius: var(--radius);
 }
 
 /* Corner brackets: four L-shaped hairlines, drawn with one gradient stack so
@@ -254,7 +295,7 @@ h1, h2, h3 { font-weight: 640; letter-spacing: -.022em; line-height: 1.1; }
 
 .muted  { color: var(--text-2); }
 .faint  { color: var(--text-3); }
-.small  { font-size: 12.5px; }
+.small  { font-size: calc(12.5px * var(--scale)); }
 .mono   { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .truncate, .clip {
@@ -267,7 +308,7 @@ h1, h2, h3 { font-weight: 640; letter-spacing: -.022em; line-height: 1.1; }
 /* The micro-label: the instrument's voice. Uppercase, wide, small, quiet. */
 .label {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--scale));
   font-weight: 500;
   letter-spacing: .2em;
   text-transform: uppercase;
@@ -350,8 +391,8 @@ body::before {
   z-index: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(to right, rgb(120 200 255 / .028) var(--hair), transparent var(--hair)),
-    linear-gradient(to bottom, rgb(120 200 255 / .028) var(--hair), transparent var(--hair));
+    linear-gradient(to right, rgb(var(--accent-rgb) / calc(.034 * var(--grid-a))) var(--hair), transparent var(--hair)),
+    linear-gradient(to bottom, rgb(var(--accent-rgb) / calc(.034 * var(--grid-a))) var(--hair), transparent var(--hair));
   background-size: 44px 44px;
   mask-image: radial-gradient(120% 100% at 50% 0%, #000 20%, transparent 78%);
   -webkit-mask-image: radial-gradient(120% 100% at 50% 0%, #000 20%, transparent 78%);

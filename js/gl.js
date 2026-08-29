@@ -221,6 +221,41 @@ export function icosahedronLines(radius = 1) {
 }
 
 /** Concentric square rings stacked along z — the tunnel. */
+/**
+ * A wireframe sphere: rings of latitude crossed by arcs of longitude.
+ *
+ * Reads as a bubble, which an icosahedron does not — the eye wants the curve
+ * of the horizon lines to tell it the thing is round. The seed carries the
+ * height up each vertex so the shader can light the top of the bubble more
+ * than the bottom, which is what a real one does under a sky.
+ */
+export function sphereLines(radius = 1, { lat = 5, lon = 8, segs = 22 } = {}) {
+  const out = [];
+  const at = (theta, phi) => [
+    radius * Math.sin(theta) * Math.cos(phi),
+    radius * Math.cos(theta),
+    radius * Math.sin(theta) * Math.sin(phi),
+  ];
+  const push = (a, b) => {
+    out.push(a[0], a[1], a[2], (a[1] / radius + 1) / 2);
+    out.push(b[0], b[1], b[2], (b[1] / radius + 1) / 2);
+  };
+
+  for (let i = 1; i <= lat; i++) {
+    const theta = (i / (lat + 1)) * Math.PI;
+    for (let j = 0; j < segs; j++) {
+      push(at(theta, (j / segs) * Math.PI * 2), at(theta, ((j + 1) / segs) * Math.PI * 2));
+    }
+  }
+  for (let j = 0; j < lon; j++) {
+    const phi = (j / lon) * Math.PI * 2;
+    for (let i = 0; i < segs; i++) {
+      push(at((i / segs) * Math.PI, phi), at(((i + 1) / segs) * Math.PI, phi));
+    }
+  }
+  return new Float32Array(out);
+}
+
 export function ringLines({ count = 9, size = 7, spacing = 4.6 } = {}) {
   const out = [];
   for (let i = 0; i < count; i++) {

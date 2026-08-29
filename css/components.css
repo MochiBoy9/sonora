@@ -16,14 +16,14 @@
   padding: 0 18px;
   font-family: var(--mono);
   font-weight: 500;
-  font-size: 11px;
+  font-size: calc(11px * var(--scale));
   letter-spacing: .14em;
   text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
-    100% 100%, var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)));
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
   transition: transform var(--dur-1) var(--ease-back), background var(--dur-2) var(--ease),
               color var(--dur-1) linear, box-shadow var(--dur-2) var(--ease);
 }
@@ -59,7 +59,7 @@
 .btn.danger { background: rgb(255 77 106 / .12); color: var(--danger); box-shadow: inset 0 0 0 var(--hair) rgb(255 77 106 / .4); }
 .btn.danger:hover { background: rgb(255 77 106 / .2); }
 
-.btn.sm { height: 30px; padding: 0 12px; font-size: 10px; }
+.btn.sm { height: 30px; padding: 0 12px; font-size: calc(10px * var(--scale)); }
 
 .icon-btn {
   position: relative;
@@ -68,11 +68,21 @@
   place-items: center;
   color: var(--text-3);
   flex: none;
-  clip-path: polygon(
-    var(--cut-sm) 0, 100% 0, 100% calc(100% - var(--cut-sm)),
-    calc(100% - var(--cut-sm)) 100%, 0 100%, 0 var(--cut-sm));
+  --k: var(--cut-sm);
+  clip-path: var(--nick-nw);
+  border-radius: var(--radius);
   transition: color var(--dur-1) linear, background var(--dur-1) linear, transform var(--dur-1) var(--ease-back);
 }
+/* A button that swaps between two glyphs — play/pause, mute/unmute,
+   repeat/repeat-one — holds both at once and hides one. Left to itself, grid
+   gives them a row each and the visible glyph sits in the top half of the
+   button, which is the "icons are off-centre" you can see on the transport.
+   Stacking them in one cell is the fix, and it is the fix for every such
+   button rather than for each one separately. */
+.icon-btn > .ico,
+.pb-play > .ico,
+.stage-play > .ico { grid-area: 1 / 1; }
+
 .icon-btn:hover { color: var(--accent); background: rgb(var(--accent-rgb) / .1); }
 .icon-btn:active { transform: scale(.92); }
 .icon-btn.sm { width: 24px; height: 24px; }
@@ -81,7 +91,7 @@
 .link-btn {
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--scale));
   font-weight: 500;
   letter-spacing: .16em;
   text-transform: uppercase;
@@ -100,15 +110,17 @@
   background: var(--accent-grad);
   color: var(--on-accent);
   box-shadow: 0 12px 28px -12px var(--accent-glow);
-  clip-path: polygon(
-    var(--cut-sm) 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
-    100% calc(100% - var(--cut-sm)), calc(100% - var(--cut-sm)) 100%,
-    var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)), 0 var(--cut-sm));
+  --k: var(--cut-sm);
+  clip-path: var(--nick-all);
+  border-radius: var(--radius);
   will-change: transform;
   transition: filter var(--dur-1) linear;
 }
 .fab:hover { filter: brightness(1.12); }
-.fab .ico { width: 18px; height: 18px; margin-left: 2px; stroke: none; fill: currentColor; }
+/* No optical nudge here: the play triangle carries its own half-unit offset
+   inside the sprite, and a margin on top of that pushes the icon off the
+   button's centre — which is exactly what it used to do. */
+.fab .ico { width: 18px; height: 18px; stroke: none; fill: currentColor; }
 
 /* ------------------------------------------------------------------ artwork */
 
@@ -120,9 +132,9 @@
   background: var(--surface-2);
   flex: none;
   isolation: isolate;
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
-    100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 /* A hairline that survives on any artwork, drawn inside the chamfer. */
 .art::after {
@@ -189,18 +201,24 @@
 .trow-index {
   position: relative;
   width: 28px;
+  height: 28px;
   flex: none;
+  display: grid;
+  place-items: center;
   text-align: right;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--scale));
   font-variant-numeric: tabular-nums;
   color: var(--text-3);
 }
+/* All three stack in the single cell above, so swapping between them never
+   moves anything. */
+.trow-index > * { grid-area: 1 / 1; }
+
 .trow-play {
-  position: absolute;
-  inset: 0;
   display: none;
   place-items: center;
+  width: 100%; height: 100%;
   color: var(--accent);
 }
 .trow-play .ico { width: 13px; height: 13px; stroke: none; fill: currentColor; }
@@ -212,14 +230,14 @@
 .trow-title {
   color: var(--text);
   font-weight: 530;
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--scale));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.trow-sub { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trow-sub { font-size: calc(12px * var(--scale)); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trow-album {
   flex: 1 1 32%;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--scale));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .trow-time {
@@ -227,7 +245,7 @@
   flex: none;
   text-align: right;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--scale));
   font-variant-numeric: tabular-nums;
   color: var(--text-3);
 }
@@ -240,17 +258,17 @@
 .trow.is-playing .trow-title { color: var(--accent); }
 .trow.is-playing .trow-index .n { display: none; }
 .trow.is-missing { opacity: .4; }
-.trow.is-missing .trow-title::after { content: " · OFFLINE"; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--warn); }
+.trow.is-missing .trow-title::after { content: " · OFFLINE"; font-family: var(--mono); font-size: calc(9.5px * var(--scale)); letter-spacing: .12em; color: var(--warn); }
 /* Indexed, tagged, and honest about the fact that this browser has no decoder
    for it — better than a row that simply refuses to play. */
 .trow.is-unsupported { opacity: .55; }
-.trow.is-unsupported .trow-title::after { content: " · NO DECODER"; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; color: var(--warn); }
+.trow.is-unsupported .trow-title::after { content: " · NO DECODER"; font-family: var(--mono); font-size: calc(9.5px * var(--scale)); letter-spacing: .12em; color: var(--warn); }
 
 .thead {
   height: 30px;
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: .18em;
@@ -266,6 +284,9 @@
 .thead::before { display: none; }
 .thead:hover { background: rgb(var(--bg-rgb) / .86); }
 .thead .sortable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: inherit;
   font: inherit;
   text-transform: inherit;
@@ -275,7 +296,7 @@
 }
 .thead .sortable:hover { color: var(--text-2); }
 .thead .sortable.is-active { color: var(--accent); }
-.thead .sortable.is-active::after { content: " ▲"; font-size: 7px; vertical-align: 2px; }
+.thead .sortable.is-active::after { content: " ▲"; font-size: calc(7px * var(--scale)); vertical-align: 2px; }
 .thead .sortable.is-active[data-dir="desc"]::after { content: " ▼"; }
 .thead .ico { width: 13px; height: 13px; }
 
@@ -301,7 +322,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   padding: 20px 14px 8px;
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   letter-spacing: .2em;
   text-transform: uppercase;
 }
@@ -326,9 +347,9 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   pointer-events: none;
   box-shadow: inset 0 0 0 var(--hair) transparent;
   transition: box-shadow var(--dur-2) var(--ease);
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
-    100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .card:hover { background: rgb(var(--surface-2-rgb) / .34); }
 .card:hover::after { box-shadow: inset 0 0 0 var(--hair) var(--line-2); }
@@ -367,13 +388,13 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .card-title {
   color: var(--text);
   font-weight: 540;
-  font-size: 13px;
+  font-size: calc(13px * var(--scale));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .card-sub {
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--scale));
   letter-spacing: .08em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -439,14 +460,16 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   background: var(--surface-3);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--scale));
   font-variant-numeric: tabular-nums;
   color: var(--accent);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-1) linear;
   white-space: nowrap;
-  clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
+  --k: 4px;
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .seek:hover .seek-tip, .seek.is-active .seek-tip { opacity: 1; }
 
@@ -477,11 +500,11 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   background: rgb(var(--surface-2-rgb) / .5);
   box-shadow: inset 0 0 0 var(--hair) var(--line);
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--scale));
   outline: none;
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
-    100% 100%, var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)));
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
   transition: box-shadow var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
 .search-input::placeholder { color: var(--text-3); }
@@ -502,11 +525,13 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
   color: var(--accent);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
   white-space: nowrap;
-  clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+  --k: 6px;
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .scan[hidden] { display: none; }
 .scan-spinner {
@@ -529,9 +554,9 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: var(--sh-3), inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
-    100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
   will-change: transform, opacity;
 }
 
@@ -543,7 +568,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   height: 32px;
   padding: 0 10px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--scale));
   text-align: left;
   border-left: 2px solid transparent;
   transition: background var(--dur-1) linear, color var(--dur-1) linear, border-color var(--dur-1) linear;
@@ -551,7 +576,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .menu-item:hover { background: rgb(var(--accent-rgb) / .1); color: var(--text); border-left-color: var(--accent); }
 .menu-item .ico { width: 15px; height: 15px; opacity: .8; }
 .menu-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.menu-hint { font-family: var(--mono); color: var(--text-3); font-size: 10px; }
+.menu-hint { font-family: var(--mono); color: var(--text-3); font-size: calc(10px * var(--scale)); }
 .menu-item.danger { color: var(--danger); }
 .menu-item.danger:hover { background: rgb(255 77 106 / .12); border-left-color: var(--danger); }
 .menu-sep { height: var(--hair); margin: 5px 8px; background: var(--line); }
@@ -578,9 +603,9 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: var(--sh-3), inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg),
-    100% 100%, var(--cut-lg) 100%, 0 calc(100% - var(--cut-lg)));
+  --k: var(--cut-lg);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
   will-change: transform, opacity;
 }
 .dialog::before {
@@ -592,21 +617,21 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 }
 .dialog-title {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--scale));
   font-weight: 500;
   letter-spacing: .18em;
   text-transform: uppercase;
   color: var(--accent);
   margin-bottom: 16px;
 }
-.dialog-body { margin-bottom: 22px; color: var(--text-2); font-size: 13.5px; }
+.dialog-body { margin-bottom: 22px; color: var(--text-2); font-size: calc(13.5px * var(--scale)); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .field { display: flex; flex-direction: column; gap: 8px; }
 .field-label {
   font-family: var(--mono);
   color: var(--text-3);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   letter-spacing: .2em;
   text-transform: uppercase;
 }
@@ -639,17 +664,17 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 }
 .pick-item:hover { background: rgb(var(--accent-rgb) / .1); border-left-color: var(--accent); }
 .pick-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pick-count { font-family: var(--mono); color: var(--text-3); font-size: 11px; }
+.pick-count { font-family: var(--mono); color: var(--text-3); font-size: calc(11px * var(--scale)); }
 
 .info-grid {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr);
   gap: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--scale));
 }
 .info-grid dt {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   letter-spacing: .16em;
   text-transform: uppercase;
   color: var(--text-3);
@@ -686,12 +711,14 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   padding: 11px 18px;
   background: var(--glass-2);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--scale));
   box-shadow: var(--sh-3), inset 0 0 0 var(--hair) var(--accent-line);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
   pointer-events: auto;
-  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+  --k: 8px;
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
   will-change: transform, opacity;
 }
 .toast::before {
@@ -705,7 +732,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   font-family: var(--mono);
   color: var(--accent);
   font-weight: 500;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--scale));
   letter-spacing: .14em;
   text-transform: uppercase;
 }
@@ -734,17 +761,16 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   text-align: center;
   animation: drop-in 320ms var(--ease-back);
 }
-.dropzone-card h3 { font-size: 18px; letter-spacing: -.01em; }
-.dropzone-card p { color: var(--text-2); font-size: 13px; }
+.dropzone-card h3 { font-size: calc(18px * var(--scale)); letter-spacing: -.01em; }
+.dropzone-card p { color: var(--text-2); font-size: calc(13px * var(--scale)); }
 .dropzone-ico {
   display: grid; place-items: center;
   width: 54px; height: 54px;
   background: var(--accent-grad);
   color: var(--on-accent);
-  clip-path: polygon(
-    var(--cut-sm) 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
-    100% calc(100% - var(--cut-sm)), calc(100% - var(--cut-sm)) 100%,
-    var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)), 0 var(--cut-sm));
+  --k: var(--cut-sm);
+  clip-path: var(--nick-all);
+  border-radius: var(--radius);
 }
 .dropzone-ico .ico { width: 24px; height: 24px; }
 @keyframes drop-in { from { transform: scale(.96); opacity: 0; } }
@@ -758,7 +784,9 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   flex: none;
   transition: box-shadow var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
-  clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
+  --k: 4px;
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .switch.is-on { background: rgb(var(--accent-rgb) / .18); box-shadow: inset 0 0 0 var(--hair) var(--accent); }
 .switch-knob {
@@ -772,6 +800,11 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 
 .segmented {
   display: inline-flex;
+  /* A row of choices is allowed to become two rows. Anything else and the
+     last option walks off the edge of a phone. */
+  flex-wrap: wrap;
+  max-width: 100%;
+  min-width: 0;
   padding: 3px;
   gap: 2px;
   background: rgb(var(--bg-rgb) / .6);
@@ -781,7 +814,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   padding: 5px 12px;
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   font-weight: 500;
   letter-spacing: .14em;
   text-transform: uppercase;
@@ -799,10 +832,12 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: inset 0 0 0 var(--hair) var(--line);
   color: var(--text-2);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
-  clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
+  --k: 4px;
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 
 /* ------------------------------------------------------------------ notice */
@@ -821,8 +856,8 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .notice[hidden] { display: none; }
 .notice-ico { display: grid; place-items: center; color: var(--warn); flex: none; }
 .notice-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.notice-title { font-size: 13px; font-weight: 580; }
-.notice-sub { color: var(--text-2); font-size: 12.5px; }
+.notice-title { font-size: calc(13px * var(--scale)); font-weight: 580; }
+.notice-sub { color: var(--text-2); font-size: calc(12.5px * var(--scale)); }
 
 @media (max-width: 760px) {
   .notice { flex-wrap: wrap; }
@@ -873,11 +908,13 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: inset 0 0 0 var(--hair) var(--line);
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   letter-spacing: .14em;
   text-transform: uppercase;
   white-space: nowrap;
-  clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px));
+  --k: 5px;
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .link-state[hidden] { display: none; }
 .link-dot {

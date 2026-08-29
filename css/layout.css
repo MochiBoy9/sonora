@@ -56,7 +56,7 @@ body.is-ready .app { opacity: 1; }
   gap: 12px;
   padding: 2px 18px 18px;
   font-weight: 620;
-  font-size: 15px;
+  font-size: calc(15px * var(--scale));
   letter-spacing: .01em;
 }
 
@@ -67,15 +67,14 @@ body.is-ready .app { opacity: 1; }
   color: var(--accent);
   background: rgb(var(--accent-rgb) / .1);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
-  clip-path: polygon(
-    var(--cut-sm) 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
-    100% calc(100% - var(--cut-sm)), calc(100% - var(--cut-sm)) 100%,
-    var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)), 0 var(--cut-sm));
+  --k: var(--cut-sm);
+  clip-path: var(--nick-all);
+  border-radius: var(--radius);
   transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease);
 }
 .brand:hover .brand-mark { background: rgb(var(--accent-rgb) / .2); }
 .brand-mark .ico { width: 17px; height: 17px; }
-.brand-name { font-family: var(--mono); letter-spacing: .16em; text-transform: uppercase; font-size: 13px; }
+.brand-name { font-family: var(--mono); letter-spacing: .16em; text-transform: uppercase; font-size: calc(13px * var(--scale)); }
 .brand-name b { font-weight: 600; color: var(--accent); }
 
 .nav { position: relative; display: flex; flex-direction: column; }
@@ -108,7 +107,7 @@ body.is-ready .app { opacity: 1; }
   height: 38px;
   padding: 0 18px;
   color: var(--text-2);
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--scale));
   font-weight: 520;
   transition: color var(--dur-1) linear, background var(--dur-1) linear;
 }
@@ -120,7 +119,7 @@ body.is-ready .app { opacity: 1; }
 /* Every destination is numbered, like channels on a desk. */
 .nav-num {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   letter-spacing: .1em;
   color: var(--text-3);
   opacity: .6;
@@ -160,15 +159,15 @@ body.is-ready .app { opacity: 1; }
   height: 32px;
   padding: 0 10px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--scale));
   border-left: 2px solid transparent;
   transition: background var(--dur-1) linear, color var(--dur-1) linear, border-color var(--dur-1) linear;
 }
 .side-playlist:hover { background: var(--surface-hi); color: var(--text); border-left-color: var(--line-3); }
 .side-playlist.is-active { color: var(--accent); background: rgb(var(--accent-rgb) / .09); border-left-color: var(--accent); }
 .side-playlist-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.side-playlist-count { font-family: var(--mono); color: var(--text-3); font-size: 11px; }
-.side-empty { padding: 4px 10px; color: var(--text-3); font-size: 12.5px; }
+.side-playlist-count { font-family: var(--mono); color: var(--text-3); font-size: calc(11px * var(--scale)); }
+.side-empty { padding: 4px 10px; color: var(--text-3); font-size: calc(12.5px * var(--scale)); }
 
 .side-foot {
   display: flex;
@@ -179,7 +178,7 @@ body.is-ready .app { opacity: 1; }
   border-top: var(--hair) solid var(--line);
 }
 .add-btn { width: 100%; }
-.side-foot .nav-item { height: 34px; padding: 0 4px; font-size: 13px; }
+.side-foot .nav-item { height: 34px; padding: 0 4px; font-size: calc(13px * var(--scale)); }
 
 .side-resize {
   position: absolute;
@@ -234,7 +233,7 @@ body.is-ready .app { opacity: 1; }
 /* The route, spelled out in the corner of the instrument. */
 .route-tag {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--scale));
   letter-spacing: .18em;
   text-transform: uppercase;
   color: var(--text-3);
@@ -268,7 +267,11 @@ body.is-ready .app { opacity: 1; }
   background: var(--glass);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  border-left: var(--hair) solid var(--line);
+  /* An inset shadow rather than a border: the pane's grid column collapses to
+     0px when it is closed, and a border cannot be squeezed below one pixel —
+     so a bordered pane made the whole document one pixel too wide, at every
+     size, on every route. */
+  box-shadow: inset 1px 0 0 var(--line);
   opacity: 0;
   visibility: hidden;
   transition: opacity var(--dur-2) var(--ease), visibility var(--dur-2);
@@ -291,7 +294,7 @@ body.is-ready .app { opacity: 1; }
   color: var(--text-3);
   font-family: var(--mono);
   font-weight: 500;
-  font-size: 11px;
+  font-size: calc(11px * var(--scale));
   letter-spacing: .14em;
   text-transform: uppercase;
   transition: color var(--dur-1) linear;
@@ -318,7 +321,11 @@ body.is-ready .app { opacity: 1; }
   position: relative;
   grid-area: player;
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) minmax(340px, 2fr) minmax(190px, 1fr);
+  /* Every column can shrink to nothing. A hard minimum here is how a
+     transport ends up wider than the window at some size nobody tested — the
+     content inside decides what it needs, and the breakpoints below decide
+     what stops being shown. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2.2fr) minmax(0, 1fr);
   align-items: center;
   gap: 18px;
   padding: 0 20px;
@@ -346,7 +353,7 @@ body.is-ready .app { opacity: 1; }
 
 .pb-title {
   font-weight: 580;
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--scale));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   transition: color var(--dur-1) linear;
 }
@@ -354,7 +361,7 @@ body.is-ready .app { opacity: 1; }
 
 .pb-artist {
   color: var(--text-3);
-  font-size: 12px;
+  font-size: calc(12px * var(--scale));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   transition: color var(--dur-1) linear;
 }
@@ -376,10 +383,9 @@ body.is-ready .app { opacity: 1; }
   margin: 0 6px;
   color: var(--on-accent);
   background: var(--accent-grad);
-  clip-path: polygon(
-    var(--cut-sm) 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
-    100% calc(100% - var(--cut-sm)), calc(100% - var(--cut-sm)) 100%,
-    var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)), 0 var(--cut-sm));
+  --k: var(--cut-sm);
+  clip-path: var(--nick-all);
+  border-radius: var(--radius);
   transition: filter var(--dur-1) linear, transform var(--dur-1) var(--ease-back);
   will-change: transform;
 }
@@ -420,7 +426,7 @@ body.is-ready .app { opacity: 1; }
 
 .pb-time {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--scale));
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   min-width: 40px;
@@ -429,7 +435,7 @@ body.is-ready .app { opacity: 1; }
 }
 .pb-elapsed { text-align: right; color: var(--text-2); }
 
-.pb-right { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.pb-right { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
 .pb-volume { display: flex; align-items: center; gap: 6px; }
 
 .pb-mute [href$="volume-off"] { display: none; }
@@ -442,14 +448,31 @@ body.is-ready .app { opacity: 1; }
 
 @media (max-width: 1180px) {
   :root { --gutter: 24px; --pane-w: 320px; }
-  .app.pane-open { grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 0px; }
-  .app.pane-open .pane {
+
+  /* The queue leaves the grid entirely at this width and becomes an overlay.
+     It has to leave whether it is open or not: a grid item whose named area no
+     longer exists is auto-placed into a row of its own, which is how a closed
+     panel ends up laying out at a negative x and dragging the transport with
+     it. Taken out of flow, closed is simply off to the right. */
+  .app, .app.pane-open { grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 0px; }
+  .pane {
     position: fixed;
     top: 0; right: 0; bottom: var(--player-h);
     width: min(360px, 86vw);
     z-index: 60;
     box-shadow: var(--sh-3);
   }
+  /* No slide-in transform. A fixed panel parked outside the right edge still
+     counts towards the page's scrollable width in Chromium, and 360px of
+     phantom horizontal scroll at every width is a worse bug than a panel that
+     fades rather than slides. */
+}
+
+/* The transport sheds parts in the order they stop being worth the room. Each
+   step is chosen by measuring, not by guessing at device names: these are the
+   widths at which the previous layout starts to press. */
+@media (max-width: 1000px) {
+  .playerbar .pb-more { display: none; }
 }
 
 @media (max-width: 900px) {
@@ -466,18 +489,82 @@ body.is-ready .app { opacity: 1; }
   .route-tag { display: none; }
 }
 
+@media (max-width: 860px) {
+  /* The volume *slider* goes; the mute button stays, because silence is the
+     one thing you may need in a hurry. */
+  .playerbar .vol { display: none; }
+  .playerbar { gap: 12px; padding: 0 14px; }
+}
+
 @media (max-width: 760px) {
   :root { --gutter: 16px; --player-h: 84px; --topbar-h: 56px; }
-  .playerbar { grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; padding: 0 12px; }
+  .playerbar { grid-template-columns: minmax(0, 1fr) auto minmax(0, auto); gap: 10px; padding: 0 12px; }
   .pb-center { gap: 4px; }
   .pb-scrub .pb-time { display: none; }
   .pb-scrub { gap: 0; }
   .playerbar .pb-volume { display: none; }
-  .playerbar .pb-more { display: none; }
   .topbar-add span { display: none; }
   .search { flex: 1 1 auto; }
 }
 
+/* ------------------------------------------------------------------ phone */
+
+/* Below this the side rail is the single most expensive thing on screen: 68px
+   of a 380px window, spent on seven icons that would rather be along the
+   bottom. So the grid is re-stacked — content, transport, tabs — which is the
+   shape a phone actually wants, and the whole width goes to the music. */
 @media (max-width: 560px) {
+  .app,
+  .app.pane-open {
+    grid-template-areas:
+      "main"
+      "player"
+      "sidebar";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) var(--player-h) auto;
+  }
+
+  .sidebar {
+    flex-direction: row;
+    align-items: stretch;
+    padding: 0;
+    height: 58px;
+    border-top: var(--hair) solid var(--line);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .sidebar::-webkit-scrollbar { display: none; }
+
+  .brand, .side-head, .side-playlists, .side-resize, .nav-num { display: none; }
+
+  .nav { flex-direction: row; width: auto; flex: 1 1 auto; }
+  .nav-item { flex: 1 1 0; min-width: 52px; height: 100%; }
+  .nav-pill { display: none; }
+  .nav-item.is-on { color: var(--accent); background: rgb(var(--accent-rgb) / .10); }
+
+  .side-foot {
+    flex-direction: row;
+    width: auto;
+    flex: none;
+    padding: 0;
+    border-top: 0;
+    margin-top: 0;
+  }
+  .side-foot .add-btn { display: none; }
+  .side-foot .nav-item { min-width: 52px; }
+
   .playerbar .pb-shuffle, .playerbar .pb-repeat { display: none; }
+  .playerbar .pb-stage { display: none; }
+
+  /* The queue slides over everything and clears the tabs as well as the
+     transport, or its own close button ends up under them. */
+  .app.pane-open .pane { bottom: calc(var(--player-h) + 58px); }
+}
+
+@media (max-width: 420px) {
+  :root { --gutter: 12px; }
+  .playerbar { padding: 0 8px; gap: 8px; }
+  .pb-now .art { display: none; }
+  .topbar .route-tag { display: none; }
 }

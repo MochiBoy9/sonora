@@ -9,6 +9,8 @@ import { mountQueue } from './queue.js';
 import { toast, closeMenu, promptDialog, menu } from './ui.js';
 import * as session from './session.js';
 import * as stats from './stats.js';
+import * as looks from './looks.js';
+import * as rack from './audio.js';
 import { animate, ease, reduceMotion } from './motion.js';
 import { startIntro } from './intro.js';
 import { mountBackdrop } from './backdrop.js';
@@ -23,6 +25,7 @@ const NAV = [
   { route: 'artists', label: 'Artists', icon: 'artist' },
   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
   { route: 'circles', label: 'Analysis', icon: 'circles' },
+  { route: 'sound', label: 'Sound', icon: 'sliders' },
 ];
 
 /** What the top-bar readout says for a given route. */
@@ -471,12 +474,9 @@ function buildDropZone() {
 
 /* ------------------------------------------------------------------ theme */
 
-function applyTheme(value) {
-  const root = document.documentElement;
-  if (value === 'system') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', value);
-  localStorage.setItem('sonora:theme', value);
-}
+/* The theme is one setting inside the look, so it goes through the same door
+   as the hue and the corner style rather than having its own. */
+const applyTheme = (value) => looks.set('theme', value);
 
 /**
  * Two colours, deliberately separate.
@@ -523,6 +523,13 @@ function bindKeys() {
       case 'm': case 'M': player.toggleMute(); break;
       case 'q': case 'Q': toggleQueuePane(); break;
       case 'v': case 'V': toggleStage(backdrop); break;
+      // A/B the whole rack from anywhere: the only way to hear what an
+      // equaliser is actually doing is to take it out and put it back.
+      case 'b': case 'B':
+        rack.set({ on: !rack.state.on });
+        toast(rack.state.on ? 'Rack in' : 'Rack bypassed');
+        break;
+      case 'e': case 'E': location.hash = '#/sound'; break;
       default: break;
     }
   });
@@ -546,7 +553,11 @@ function toggleQueuePane(force) {
 /* ------------------------------------------------------------------ boot */
 
 async function boot() {
-  applyTheme(localStorage.getItem('sonora:theme') || 'system');
+  // Before anything is measured or painted by a module: the look decides the
+  // hue, the corners, the density and the text size, and half of those change
+  // layout.
+  looks.init();
+
 
   // The intro is already on screen (it ships in the HTML); this starts its
   // timeline and hands back a promise for the earliest moment it may leave.
@@ -570,6 +581,13 @@ async function boot() {
   document.addEventListener('sonora:setting', (e) => {
     if (e.detail.name === 'accent') applyAccent();
     if (e.detail.name === 'backdrop') backdrop?.setEnabled(e.detail.value);
+  });
+  // A look can change the accent, which the artwork tint falls back to, and
+  // it can turn the world off entirely.
+  looks.events.on('change', () => {
+    applyAccent();
+    backdrop?.setLook?.(looks.state);
+    backdrop?.setEnabled(localStorage.getItem('sonora:backdrop') !== '0' && looks.state.scene !== 'off');
   });
   document.addEventListener('sonora:disconnect', () => {
     session.disconnect();
@@ -646,8 +664,9 @@ async function boot() {
 let backdrop = null;
 
 function mountAppBackdrop() {
-  const on = localStorage.getItem('sonora:backdrop') !== '0';
+  const on = localStorage.getItem('sonora:backdrop') !== '0' && looks.state.scene !== 'off';
   backdrop = mountBackdrop(document.body, { enabled: on });
+  backdrop.setLook?.(looks.state);
   if (!backdrop.supported) {
     // No WebGL: the CSS gradients underneath are the whole design, and they
     // were always there.

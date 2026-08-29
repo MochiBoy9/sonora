@@ -28,7 +28,7 @@
   gap: 10px;
   font-family: var(--mono);
   color: var(--accent);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--scale));
   font-weight: 500;
   letter-spacing: .24em;
   text-transform: uppercase;
@@ -41,11 +41,11 @@
   flex: none;
 }
 
-.page-title { font-size: 34px; letter-spacing: -.03em; }
+.page-title { font-size: calc(34px * var(--scale)); letter-spacing: -.03em; }
 .page-sub {
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
   margin-top: 10px;
@@ -66,7 +66,7 @@
   align-items: center;
   gap: 12px;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--scale));
   font-weight: 500;
   letter-spacing: .2em;
   text-transform: uppercase;
@@ -93,7 +93,7 @@
 
 /* On an album by a single artist, repeating their name on every row is noise. */
 .plain-list.no-sub .trow-sub { display: none; }
-.plain-list.no-sub .trow-title { font-size: 14px; }
+.plain-list.no-sub .trow-title { font-size: calc(14px * var(--scale)); }
 
 /* ------------------------------------------------------------------ home */
 
@@ -112,9 +112,9 @@
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg),
-    100% 100%, var(--cut-lg) 100%, 0 calc(100% - var(--cut-lg)));
+  --k: var(--cut-lg);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 /* Scanline sweep across the header, once every eight seconds. */
 .home-hero::after {
@@ -132,7 +132,7 @@
   100% { transform: translateX(calc(100vw)); opacity: 0; }
 }
 
-.home-hero .page-title { font-size: clamp(32px, 4.4vw, 52px); letter-spacing: -.038em; }
+.home-hero .page-title { font-size: calc(clamp(32px, 4.4vw, 52px) * var(--scale)); letter-spacing: -.038em; }
 .home-hero .page-sub { margin-top: 12px; color: var(--text-2); }
 .home-hero .hero-actions { margin-top: 22px; flex-wrap: wrap; }
 .home-hero-text { min-width: 0; }
@@ -186,9 +186,9 @@
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg),
-    100% 100%, var(--cut-lg) 100%, 0 calc(100% - var(--cut-lg)));
+  --k: var(--cut-lg);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 /* The album's own colour, kept where it belongs: behind its own artwork. */
 .hero::before {
@@ -229,7 +229,7 @@
 
 .hero-meta { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-bottom: 4px; }
 .hero-title {
-  font-size: clamp(28px, 3.6vw, 50px);
+  font-size: calc(clamp(28px, 3.6vw, 50px) * var(--scale));
   letter-spacing: -.04em;
   line-height: 1.02;
   overflow-wrap: anywhere;
@@ -241,7 +241,7 @@
   flex-wrap: wrap;
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
 }
@@ -297,7 +297,9 @@
   transform: scale(.9);
   transition: opacity var(--dur-2) var(--ease), transform var(--dur-2) var(--ease-back);
   z-index: 3;
-  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+  --k: 4px;
+  clip-path: var(--nick-nw);
+  border-radius: var(--radius);
 }
 .rail-nav[hidden] { display: none; }
 .rail-wrap:hover .rail-nav { opacity: 1; transform: none; }
@@ -326,14 +328,13 @@
   background: rgb(var(--accent-rgb) / .07);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
   margin-bottom: 6px;
-  clip-path: polygon(
-    var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut),
-    100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%,
-    var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut));
+  --k: var(--cut);
+  clip-path: var(--nick-all);
+  border-radius: var(--radius);
 }
 .empty-ico .ico { width: 26px; height: 26px; }
-.empty h3 { font-size: 17px; color: var(--text); letter-spacing: -.01em; }
-.empty p { max-width: 46ch; font-size: 13px; color: var(--text-3); }
+.empty h3 { font-size: calc(17px * var(--scale)); color: var(--text); letter-spacing: -.01em; }
+.empty p { max-width: 46ch; font-size: calc(13px * var(--scale)); color: var(--text-3); }
 .empty .btn { margin-top: 12px; }
 
 /* ------------------------------------------------------------------ settings */
@@ -343,6 +344,7 @@
 .settings-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
   padding: 15px 16px;
   background: rgb(var(--surface-rgb) / .34);
@@ -359,13 +361,29 @@
   background: rgb(var(--accent-rgb) / .08);
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   flex: none;
-  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+  --k: 4px;
+  clip-path: var(--nick-nw);
+  border-radius: var(--radius);
 }
 .settings-ico .ico { width: 17px; height: 17px; }
 .settings-text { flex: 1; min-width: 0; }
-.settings-name { color: var(--text); font-weight: 550; font-size: 13.5px; }
-.settings-note { color: var(--text-3); font-size: 12.5px; margin-top: 2px; }
-.settings-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.settings-name { color: var(--text); font-weight: 550; font-size: calc(13.5px * var(--scale)); }
+.settings-note { color: var(--text-3); font-size: calc(12.5px * var(--scale)); margin-top: 2px; }
+.settings-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+}
+/* Below this the text and the control stop fitting side by side, so the
+   control drops under the text instead of squeezing it. */
+@media (max-width: 520px) {
+  .settings-text { flex: 1 1 100%; }
+  .settings-actions { margin-left: 0; flex-basis: 100%; }
+}
 .about p { max-width: 70ch; margin-bottom: 10px; }
 
 /* ------------------------------------------------------------------ now playing */
@@ -419,13 +437,13 @@
 }
 
 .np-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.np-title { font-size: 18px; letter-spacing: -.02em; overflow-wrap: anywhere; }
-.np-artist { color: var(--text); font-size: 13px; font-weight: 550; transition: color var(--dur-1) linear; }
+.np-title { font-size: calc(18px * var(--scale)); letter-spacing: -.02em; overflow-wrap: anywhere; }
+.np-artist { color: var(--text); font-size: calc(13px * var(--scale)); font-weight: 550; transition: color var(--dur-1) linear; }
 .np-artist:hover { color: var(--accent); }
 .np-album {
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
   transition: color var(--dur-1) linear;
@@ -451,13 +469,13 @@
 .np-next-label {
   font-family: var(--mono);
   color: var(--text-3);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   letter-spacing: .2em;
   text-transform: uppercase;
 }
 .np-next-text { min-width: 0; display: flex; flex-direction: column; }
-.np-next-title { color: var(--text); font-size: 12.5px; font-weight: 530; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.np-next-artist { color: var(--text-3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-next-title { color: var(--text); font-size: calc(12.5px * var(--scale)); font-weight: 530; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-next-artist { color: var(--text-3); font-size: calc(11.5px * var(--scale)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ------------------------------------------------------------------ queue */
 
@@ -469,7 +487,7 @@
   padding: 14px 16px 10px;
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--scale));
   letter-spacing: .16em;
   text-transform: uppercase;
   flex: none;
@@ -503,9 +521,9 @@
 .qrow:hover .qrow-grip { opacity: 1; }
 
 .qrow-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.qrow-title { color: var(--text); font-size: 12.5px; font-weight: 530; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qrow-sub { color: var(--text-3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qrow-time { font-family: var(--mono); color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; }
+.qrow-title { color: var(--text); font-size: calc(12.5px * var(--scale)); font-weight: 530; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qrow-sub { color: var(--text-3); font-size: calc(11.5px * var(--scale)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qrow-time { font-family: var(--mono); color: var(--text-3); font-size: calc(11px * var(--scale)); font-variant-numeric: tabular-nums; flex: none; }
 .qrow-remove { opacity: 0; transition: opacity var(--dur-1) linear; }
 .qrow:hover .qrow-remove { opacity: 1; }
 .qrow:hover .qrow-time { display: none; }
@@ -523,19 +541,23 @@
 .circle-stage {
   position: relative;
   width: 100%;
+  min-width: 0;
   aspect-ratio: 1;
   max-height: min(58vh, 640px);
   margin: 0 auto 18px;
   display: grid;
   place-items: center;
+  /* The packer fits every circle inside the viewBox, so nothing worth seeing
+     is ever outside the frame — and clipping is what stops a stale layout,
+     mid-resize, from reaching across the window. */
+  overflow: hidden;
 }
 .circle-stage[hidden] { display: none; }
 
 .circle-canvas {
   width: 100%;
   height: 100%;
-  max-width: min(58vh, 640px);
-  overflow: visible;
+  max-width: min(100%, 58vh, 640px);
   touch-action: none;
 }
 
@@ -566,14 +588,14 @@
 .circle-label {
   fill: var(--text);
   font-family: var(--font);
-  font-size: 26px;
+  font-size: calc(26px * var(--scale));
   font-weight: 560;
   pointer-events: none;
 }
 .circle-value {
   fill: var(--accent);
   font-family: var(--mono);
-  font-size: 19px;
+  font-size: calc(19px * var(--scale));
   letter-spacing: .04em;
   pointer-events: none;
 }
@@ -591,12 +613,14 @@
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
   pointer-events: none;
-  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px));
+  --k: 7px;
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .circle-tip[hidden] { display: none; }
-.circle-tip strong { font-size: 13.5px; }
-.circle-tip-value { font-family: var(--mono); color: var(--accent); font-size: 12px; letter-spacing: .06em; }
-.circle-tip-share { color: var(--text-3); font-size: 11.5px; }
+.circle-tip strong { font-size: calc(13.5px * var(--scale)); }
+.circle-tip-value { font-family: var(--mono); color: var(--accent); font-size: calc(12px * var(--scale)); letter-spacing: .06em; }
+.circle-tip-share { color: var(--text-3); font-size: calc(11.5px * var(--scale)); }
 
 .circle-pins {
   display: flex;
@@ -618,7 +642,9 @@
   background: rgb(var(--surface-2-rgb) / .6);
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   overflow: hidden;
-  clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+  --k: 6px;
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .circle-pin::before {
   content: "";
@@ -628,8 +654,8 @@
   width: calc(var(--fill, 0) * 100%);
   background: var(--accent);
 }
-.circle-pin-name { font-size: 12.5px; font-weight: 540; }
-.circle-pin-value { color: var(--accent); font-size: 11px; letter-spacing: .06em; }
+.circle-pin-name { font-size: calc(12.5px * var(--scale)); font-weight: 540; }
+.circle-pin-value { color: var(--accent); font-size: calc(11px * var(--scale)); letter-spacing: .06em; }
 .circle-compare { margin-left: 4px; }
 .circle-empty { padding-top: 40px; }
 
@@ -643,7 +669,7 @@
   border-left: 2px solid var(--line-3);
   color: var(--text-3);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
 }
@@ -663,12 +689,12 @@
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  clip-path: polygon(
-    0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
-    100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
 }
 .band-card-title { display: block; margin-bottom: 12px; color: var(--accent); }
-.band-text { font-size: 13px; line-height: 1.6; color: var(--text-2); }
+.band-text { font-size: calc(13px * var(--scale)); line-height: 1.6; color: var(--text-2); }
 .band-text + .link-btn { margin-top: 10px; display: inline-block; }
 .band-facts { grid-template-columns: 92px minmax(0, 1fr); }
 .band-facts dt, .band-facts dd { padding: 6px 0; }
@@ -680,16 +706,16 @@
   gap: 10px;
   padding: 7px 4px;
   border-bottom: var(--hair) solid var(--line);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--scale));
 }
-.band-row-year { color: var(--text-3); font-size: 11px; width: 34px; flex: none; }
+.band-row-year { color: var(--text-3); font-size: calc(11px * var(--scale)); width: 34px; flex: none; }
 .band-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .band-row.is-owned .band-row-title { color: var(--accent); }
 .band-row-detail { width: 100%; padding-left: 44px; }
 .band-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .band-link:hover { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
 .band-source { grid-column: 1 / -1; margin-top: 2px; }
-.band-consent { margin: 12px 0; padding-left: 18px; color: var(--text-2); font-size: 13px; line-height: 1.7; list-style: square; }
+.band-consent { margin: 12px 0; padding-left: 18px; color: var(--text-2); font-size: calc(13px * var(--scale)); line-height: 1.7; list-style: square; }
 .band-consent li { margin-bottom: 4px; }
 
 @media (max-width: 760px) {
