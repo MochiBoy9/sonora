@@ -7,6 +7,11 @@ directly and the index lives in local storage on the device.
 
 No build step, no dependencies, no framework. Open it and it runs.
 
+It also reopens where you left it, folds an album back together when it is
+split across folders, draws what you have actually been listening to, and — only
+if you ask it to — will look an artist up online. Those four are described
+below and specified in full in [`docs/SPEC.md`](docs/SPEC.md).
+
 ---
 
 ## Running it
@@ -27,9 +32,15 @@ Three routes in, depending on what the browser supports:
 
 | Route | Where it works | Persists across sessions |
 | --- | --- | --- |
-| **Add music** → directory picker | Chrome, Edge, Opera, Arc | Yes — the folder reconnects itself on launch |
-| **Add music** → folder upload dialog | Firefox, Safari, everything else | Library and artwork persist; the folder must be re-picked once per session |
+| **Add music → Add a folder…** → directory picker | Chrome, Edge, Opera, Arc | Yes — the folder reconnects itself on launch |
+| **Add music → Add a folder…** → folder upload dialog | Firefox, Safari, everything else | Library and artwork persist; the folder must be re-picked once per session |
+| **Add music → Add files…** | Everywhere | Pick loose files from anywhere; they land under **Selected files** |
 | **Drag and drop** a folder or files onto the window | Everywhere | As above, depending on the API available |
+
+Both routes are offered on every browser. Which *picker* opens depends on what
+the browser has, but choosing "a folder" always gets you a folder — that
+distinction matters, because the artist and album of an untagged rip are read
+from the folder tree, and losing the path loses them.
 
 On browsers without the File System Access API the library still survives a
 reload — every title, album, cover and playlist comes back instantly — but the
@@ -49,6 +60,22 @@ this browser cannot play is *not* hidden — it keeps its title, artist and cove
 and its row is marked **no decoder** so the reason is on screen rather than in a
 console. Playback skips it and says which format it was.
 
+### One album, however it is filed
+
+Half a record ripped with an album-artist tag and half without lands as two
+albums in most players. Sonora folds them back into one.
+
+The trick is knowing what is a real name. An untagged file is never nameless —
+the tag reader falls back to the folder tree, because `Artist/Album/03 Title.mp3`
+is a near-universal convention and reading it is what makes untagged music
+usable at all. So half of *Graduation* sitting in `Unsorted/Rips` arrives
+claiming to be by an artist called *"Unsorted"*. The reader now records which
+fields it had to guess, and a guessed artist counts as no artist when two albums
+with the same title are compared. Records that both name themselves never merge,
+so every *Greatest Hits* ever pressed stays where it is.
+
+When an import merges something, the summary says so by name.
+
 ## Using it
 
 | | |
@@ -66,6 +93,65 @@ console. Playback skips it and says which format it was.
 Right-click any track, album or artist for play-next, add-to-queue, add-to-playlist
 and go-to-album. Drag rows in the queue to reorder. Drag the sidebar edge to resize it.
 
+## Picking up where you left off
+
+Sonora writes down what you were playing — the track, the second you were at,
+and the queue around it — and puts it back on the next launch. No dialog, no
+"restore session?", nothing to click. On a browser that can hold a folder
+permission it reconnects the folder too, and the music is cued within about two
+seconds of the library painting.
+
+Whether it *starts* is not Sonora's decision. Browsers refuse to play audio
+without a prior gesture on the page, so when that happens the readout in the
+top bar says **Ready to resume** and gives you one button. Pretending to have
+resumed and then sitting in silence would be worse.
+
+When the folder itself is out of reach — a folder opened through the upload
+dialog hands its files over once and cannot be reopened by script — the readout
+says **Folder not connected**, the queue still comes back, and the resume arms
+itself: reconnect that folder for any reason at all and the track cues at the
+second you left it, without being asked twice.
+
+Auto-connect and an explicit **Disconnect** both live in **Settings →
+Connection**. A disconnect is remembered; nothing reconnects behind your back.
+
+## The Circle Analysis Center
+
+Play counts lie. A track skipped at four seconds counts the same as one played
+to the end, so a play-count chart rewards indecision. **Analysis** in the
+sidebar measures the thing that is true instead — seconds of audio that actually
+reached the speakers — and draws it.
+
+One circle per artist, genre or year. The **area** of each is proportional to
+the time, which is the honest way to draw this; scaling the radius instead makes
+a two-hour artist look four times a one-hour artist, and is how most charts of
+this kind mislead. Hover for the exact figure and share, click to pin two side
+by side, drag to arrange, double-click to play everything in one. It updates
+while you listen, and a circle you have moved stays where you put it.
+
+**Reset view** undoes an arrangement. **Reset data**, a deliberately separate
+button behind a confirmation, throws away the measurements.
+
+## Looking a band up
+
+Off by default, and the only part of Sonora that touches the network.
+
+Any artist page can fetch context: a biography, when they were active, a
+discography with the records you already own linked back into your library, and
+the line-up — from MusicBrainz and Wikipedia, both public, both keyless. Any
+release can be looked at more closely on request.
+
+Before the first request, a dialog says exactly what leaves the device:
+
+> the artist name — to MusicBrainz, for biography, line-up and discography; the
+> matching page title — to Wikipedia, for the summary paragraph. Nothing else.
+> Not your library, not your listening history, not a file name.
+
+Requests are spaced a second apart because MusicBrainz asks for that, and every
+answer is cached on the device for a month — so a second look costs nothing and
+works on a plane. **Settings → Online** turns it back off and clears the cache,
+and shows how many answers are being kept.
+
 ---
 
 ## How it works
@@ -81,8 +167,12 @@ css/
   visualizer.css    spectrum canvases and the immersive stage
 js/
   app.js            routing, navigation, search, shortcuts, theming, ingestion
-  library.js        the collection: scanning, indexes, artwork, playlists
+  library.js        the collection: scanning, indexes, album merging, playlists
   player.js         playback, queue, Web Audio graph, spectrum analysis
+  session.js        reconnect and resume: what you were playing, put back
+  stats.js          the listening-time meter, rolled up by artist, genre, year
+  circles.js        the Circle Analysis Center, packed by hand into one SVG
+  band.js           the one module that talks to the internet, off by default
   tags.js           ID3v2/ID3v1, MP4, FLAC, Ogg, RIFF, AIFF, Matroska reader
   metadata.worker.js  the import pipeline, off the main thread
   db.js             IndexedDB persistence
@@ -98,6 +188,11 @@ js/
   queue.js          now playing + queue panel
   ui.js             shared widgets: menus, dialogs, toasts, track rows
   util.js           DOM and data helpers
+docs/
+  SPEC.md           the full specification: features, flows, data model, budgets
+tools/
+  make-testlib.py   a synthetic library with real containers and real tags
+  smoke.mjs         interactions.mjs   perf.mjs
 ```
 
 ## The look
@@ -264,8 +359,15 @@ Reproduce with `tools/perf.mjs` (below).
 The 3D world and the visualisers do not change what the lists cost. Re-measured
 after the rework, on a slower machine than the table above (a container with a
 software GL renderer, so the WebGL figures are a worst case): scroll frame time
-is still a median of **16.7 ms** with 28 live nodes, import holds at ~410–425
-files/second, and the JS heap is 8–10 MB.
+is still a median of **16.7 ms** with 19–30 live nodes, import holds at
+~370–410 files/second, and the JS heap is 6–10 MB.
+
+Album merging and the listening meter do not show up in these numbers. The merge
+is one grouping pass per reindex behind a `requestAnimationFrame`; on the 300-album
+library it folds nothing and costs nothing measurable, and 300 albums go in and
+300 come out — which is the more important result. The meter is credited from the
+shared ticker and flushed every twenty seconds. Reconnecting settles in **2.8 s**
+worst case, which is the file-availability poll running to its ceiling.
 
 Two honest notes. Drawing the world costs the main thread something, so the
 backdrop **stops while an import is running** — the worker's throughput is what
@@ -282,12 +384,14 @@ FLAC and MP3 files decode as actual silence, so playback is exercised end to end
 
 ```bash
 npm i playwright                                   # only needed for the browser tests
-python3 tools/make-testlib.py /tmp/testlib         # 45 tracks, 6 formats, embedded art
+python3 tools/make-testlib.py /tmp/testlib         # 50 tracks, 9 formats, embedded art,
+                                                   # incl. an album split across two folders
 python3 tools/make-testlib.py /tmp/biglib --bulk 3000
 python3 -m http.server 8123 &                      # the tests expect this port
 
-node tools/smoke.mjs        /tmp/testlib ./shots   # boot, intro, import, metadata, playback,
-                                                   # visualiser, stage, persistence
+node tools/smoke.mjs        /tmp/testlib ./shots   # boot, intro, import, metadata, album merge,
+                                                   # visualiser, stage, circles, band overview,
+                                                   # persistence, auto-reconnect
 node tools/interactions.mjs /tmp/testlib           # keyboard, dragging, sorting, queue editing
 node tools/perf.mjs         /tmp/biglib            # the table above
 ```
@@ -295,13 +399,24 @@ node tools/perf.mjs         /tmp/biglib            # the table above
 Set `SONORA_CHROMIUM=/path/to/chrome` to run against a Chromium that is already
 on the machine instead of the one Playwright downloads for itself.
 
+Band lookups are tested against intercepted routes — real `fetch`, real parse,
+real cache, no live service. That is also how the suite proves that nothing is
+requested before you consent, and that a second look at an artist is served from
+the cache.
+
 ## Notes
 
-- Everything stays on the device. There are no network requests after the page
-  loads — no fonts, no CDNs, no analytics.
-- The library index, cover thumbnails and playlists live in IndexedDB. **Settings
-  → Clear library** removes them; your audio files are never touched, and the app
-  never writes to your music folder.
+- Everything stays on the device. With **Settings → Online** off — which is how
+  it ships — Sonora makes no network requests after the page loads: no fonts, no
+  CDNs, no analytics, no telemetry, no account. Turning band lookups on sends an
+  artist name and a Wikipedia page title, and nothing else, and only when you
+  ask for one. Your library, your listening history and your file names never
+  leave the device by any code path.
+- The library index, cover thumbnails, playlists, the saved session, listening
+  totals and any cached lookups live in IndexedDB. **Settings → Clear library**
+  removes the library; **Listening data → Reset** and **Online → Clear cache**
+  remove the other two independently. Your audio files are never touched, and the
+  app never writes to your music folder.
 - Light, dark and system themes; the theme is applied before first paint so there
   is no flash.
 - The visualiser style, the backdrop and the artwork tint are all switchable in

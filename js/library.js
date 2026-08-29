@@ -13,7 +13,7 @@
  */
 
 import * as db from './db.js';
-import { Emitter, LRU, hash32, albumKeyOf, norm, isAudio, isAudioFile, sortName, cmpText, idle } from './util.js';
+import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, sortName, cmpText, idle } from './util.js';
 
 export const events = new Emitter();
 
@@ -99,6 +99,17 @@ function flushArt() {
 
 /** Adds the derived fields every view depends on. Called once per track. */
 function decorate(t) {
+  // `guessed` lists the fields the tag reader had to take from the folder tree.
+  // Resolve it into one flag now, while the raw values are still distinguishable:
+  // an ALBUMARTIST frame is always a real claim, and a bare artist is only a
+  // real claim if it did not come from a parent directory's name.
+  // Decided once and stored with the track: by the second call `albumArtist`
+  // has already been filled in from `artist` below, so the evidence is gone.
+  if (typeof t.namedArtist !== 'boolean') {
+    const guessed = String(t.guessed || '').split(' ');
+    t.namedArtist = !!t.albumArtist || !guessed.includes('artist');
+  }
+
   t.artist ||= 'Unknown Artist';
   t.album ||= 'Unknown Album';
   t.title ||= t.name || 'Untitled';
@@ -123,7 +134,6 @@ function scheduleReindex() {
 
 export function reindex() {
   const albumBy = new Map();
-  const artistBy = new Map();
 
   for (const t of state.tracks.values()) {
     let al = albumBy.get(t.albumKey);
@@ -132,14 +142,27 @@ export function reindex() {
         key: t.albumKey, title: t.album, artist: t.albumArtist,
         artistKey: t.artistKey, year: t.year || 0, tracks: [],
         duration: 0, addedAt: 0, sort: norm(t.album), accent: null,
+        named: false,
       });
     }
+    // `named` records whether any file in the album actually claimed this
+    // artist. A name lifted off a parent folder is a placeholder wearing a
+    // real name, and the merge pass has to be able to tell.
+    if (!al.named && t.namedArtist) al.named = true;
     al.tracks.push(t);
     al.duration += t.duration || 0;
     if (!al.accent && t.accent) al.accent = t.accent;
     if (t.year && (!al.year || t.year < al.year)) al.year = t.year;
     if (t.addedAt > al.addedAt) al.addedAt = t.addedAt;
+  }
 
+  // Albums fold together before artists are counted, because folding one in
+  // can hand its tracks a different artist — and an artist index built first
+  // would keep a page for a folder name that no longer names anything.
+  mergeAlbums(albumBy);
+
+  const artistBy = new Map();
+  for (const t of state.tracks.values()) {
     let ar = artistBy.get(t.artistKey);
     if (!ar) {
       artistBy.set(t.artistKey, ar = {
@@ -167,6 +190,96 @@ export function reindex() {
   state.artists = [...artistBy.values()].sort((a, b) => cmpText(a.sort, b.sort));
 
   events.emit('change');
+}
+
+/**
+ * Folds albums that are the same album back together.
+ *
+ * Grouping is by hash of (album artist + album title), which is right until the
+ * tags disagree — and across a library assembled by hand they disagree
+ * constantly. Half a record ripped with an ALBUMARTIST frame and half without
+ * lands as two albums called Graduation; so does one folder tagged "Kanye West"
+ * and another tagged "Kanye west".
+ *
+ * So after the index is built, albums whose normalised titles match are
+ * reconsidered: they merge when their artists also match once normalised, or
+ * when one side has no artist worth the name. That last phrase does a lot of
+ * work, because an untagged rip is never nameless — the tag reader falls back
+ * to the folder tree, so half of Graduation sitting in Unsorted/Rips arrives
+ * claiming to be by "Unsorted". Tracks record whether their artist was read or
+ * guessed, and a guessed one counts as no artist here. Two different records
+ * that happen to share a title — every "Greatest Hits" ever pressed — still do
+ * not merge, because both sides named themselves and the names differ.
+ *
+ * The surviving album keeps the key most of its tracks already carry, so
+ * artwork stored under that key stays attached.
+ */
+function mergeAlbums(albumBy) {
+  const byTitle = new Map();
+  for (const al of albumBy.values()) {
+    const title = al.sort;                       // already normalised
+    if (!title || title === norm('Unknown Album')) continue;
+    let list = byTitle.get(title);
+    if (!list) byTitle.set(title, list = []);
+    list.push(al);
+  }
+
+  // "No artist worth the name": absent, a placeholder, or a folder name that
+  // was pressed into service because the files carried no artist at all.
+  const vague = (al) => {
+    const n = norm(al.artist);
+    return !n || !al.named || n === 'unknown artist' || n === 'various artists' || n === 'va';
+  };
+
+  const merged = [];
+
+  for (const list of byTitle.values()) {
+    if (list.length < 2) continue;
+    // Biggest first: it wins the key, and its artwork with it.
+    list.sort((a, b) => b.tracks.length - a.tracks.length);
+
+    for (let i = 0; i < list.length; i++) {
+      const keep = list[i];
+      if (!albumBy.has(keep.key)) continue;      // already absorbed
+      for (let j = i + 1; j < list.length; j++) {
+        const other = list[j];
+        if (!albumBy.has(other.key) || other === keep) continue;
+        const same = norm(keep.artist) === norm(other.artist);
+        if (!same && !vague(keep) && !vague(other)) continue;
+
+        for (const t of other.tracks) {
+          t.albumKey = keep.key;                 // rows follow the survivor
+          keep.tracks.push(t);
+        }
+        keep.duration += other.duration;
+        keep.addedAt = Math.max(keep.addedAt, other.addedAt);
+        keep.year = keep.year || other.year;
+        keep.accent = keep.accent || other.accent;
+        if (vague(keep) && !vague(other)) {
+          keep.artist = other.artist;
+          keep.artistKey = other.artistKey;
+          keep.named = other.named;
+        }
+        keep.merged = (keep.merged || 1) + 1;    // for the import readout
+        merged.push(keep);
+        albumBy.delete(other.key);
+      }
+    }
+  }
+
+  // Last, because the survivor's own artist can be filled in by any of the
+  // albums it absorbs: a track whose "artist" was only the folder it sat in
+  // belongs to whoever actually made the record.
+  for (const al of merged) {
+    if (vague(al)) continue;
+    for (const t of al.tracks) {
+      if (t.namedArtist) continue;
+      t.artist = al.artist;
+      t.albumArtist = al.artist;
+      t.artistKey = al.artistKey;
+      t.search = norm(t.title + ' ' + al.artist + ' ' + t.album + ' ' + (t.genre || ''));
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ queries */
@@ -318,6 +431,50 @@ export async function addDirectory() {
   return root;
 }
 
+/** Can this browser hand us individual files with real handles? */
+export const canPickFiles = () => typeof window.showOpenFilePicker === 'function';
+
+/**
+ * Individual files rather than a folder. Everything picked lands under one
+ * root, wherever on disk it came from — the album grouping does the rest.
+ */
+export async function addFiles() {
+  if (!canPickFiles()) return null;
+  let handles;
+  try {
+    handles = await window.showOpenFilePicker({
+      id: 'sonora-files',
+      multiple: true,
+      types: [{
+        description: 'Audio',
+        accept: { 'audio/*': [...AUDIO_EXT].map((e) => '.' + e) },
+      }],
+      excludeAcceptAllOption: false,
+    });
+  } catch { return null; }                        // user cancelled
+  if (!handles || !handles.length) return null;
+
+  const root = ensureLooseRoot();
+  await ingest(root, handles
+    .filter((h) => isAudio(h.name))
+    .map((h) => ({ handle: h, path: h.name, name: h.name })));
+  return root;
+}
+
+/** The bucket loose files live in, created on demand. */
+function ensureLooseRoot() {
+  let root = state.roots.find((r) => r.id === LOOSE_ID);
+  if (!root) {
+    root = { id: LOOSE_ID, name: 'Selected files', kind: 'handle', count: 0 };
+    state.roots.push(root);
+    db.putRoot(serialiseRoot(root)).catch(() => {});
+    events.emit('roots');
+  }
+  return root;
+}
+
+const LOOSE_ID = 'd:loose';
+
 /** Universal path: a folder chosen through <input webkitdirectory>. */
 export async function addFileList(fileList, label) {
   // isAudioFile, not isAudio: a File knows its own type, so a container with an
@@ -363,7 +520,7 @@ export async function addDataTransfer(dt) {
         await db.putRoot(root).catch(() => {});
         roots.push(root);
       } else if (isAudio(h.name)) {
-        roots.push({ id: 'd:loose', name: 'Dropped files', kind: 'handle', loose: h });
+        roots.push({ id: LOOSE_ID, name: 'Selected files', kind: 'handle', loose: h });
       }
     }
     events.emit('roots');
@@ -372,12 +529,7 @@ export async function addDataTransfer(dt) {
 
     const loose = roots.filter((r) => r.loose);
     if (loose.length) {
-      let root = state.roots.find((r) => r.id === 'd:loose');
-      if (!root) {
-        root = { id: 'd:loose', name: 'Dropped files', kind: 'handle', count: 0 };
-        state.roots.push(root);
-        events.emit('roots');
-      }
+      const root = ensureLooseRoot();
       await ingest(root, loose.map((r) => ({ handle: r.loose, path: r.loose.name, name: r.loose.name })));
       return root;
     }
@@ -390,7 +542,10 @@ export async function addDataTransfer(dt) {
 
 /** Walks a handle root, diffs against what we already know, imports the rest. */
 export async function scanRoot(root) {
-  if (!root.handle) return;
+  // The loose-files bucket has no directory to walk: its handles are held
+  // individually, and re-scanning it would diff against an empty listing and
+  // delete every track in it.
+  if (root.id === LOOSE_ID || !root.handle) return;
   if (root.handle.queryPermission) {
     let perm = await root.handle.queryPermission({ mode: 'read' });
     if (perm === 'prompt') {
@@ -478,8 +633,14 @@ function startScan() {
 function finishScan() {
   if (!state.scanning) return;
   state.scanning = false;
-  events.emit('scan', false);
   reindex();
+
+  // What the import actually did, in the terms the person cares about: how
+  // many tracks arrived, and which albums got put back together.
+  const added = state.progress.total || 0;
+  const merged = [...state.albumBy.values()].filter((a) => a.merged > 1);
+  events.emit('scan', false, { added, merged });
+  state.progress = { done: 0, total: 0 };
 }
 
 /** Fallback for browsers without module workers. Chunked so the UI survives. */
@@ -496,6 +657,7 @@ async function parseOnMainThread(jobs) {
       track: parseInt(tags.track, 10) || 0, disc: parseInt(tags.disc, 10) || 1,
       year: parseInt(String(tags.year || '').slice(0, 4), 10) || 0,
       genre: tags.genre || '', duration: tags.duration || 0, addedAt: Date.now(),
+      guessed: tags.guessed || '',
     });
     t.albumKey = albumKeyOf(t.albumArtist || t.artist || '', t.album);
     state.tracks.set(t.id, t);

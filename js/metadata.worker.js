@@ -135,6 +135,8 @@ async function handle(job) {
     genre: tags.genre || '',
     duration: tags.duration && isFinite(tags.duration) ? Math.round(tags.duration * 10) / 10 : 0,
     addedAt: Date.now(),
+    // Which of the above came from the folder tree rather than the file.
+    guessed: tags.guessed || '',
   };
 
   // The album key groups tracks; art is stored once per key.

@@ -828,3 +828,68 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   .notice { flex-wrap: wrap; }
   .notice-sub { display: none; }
 }
+
+/* ------------------------------------------------------------------ gloss */
+
+/* The aero fringe: one specular highlight along the top edge of the panels
+   that are meant to read as glass, and a matching one inside the filled
+   controls. It is a single gradient with no blur, so it costs nothing, and it
+   is deliberately faint — the language is still drawn lines, this is only the
+   light catching them. */
+
+.home-hero::before,
+.hero-meta::after,
+.band-card::before,
+.dialog::after,
+.menu::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 42%;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgb(190 235 255 / .07), transparent);
+}
+.hero-meta::after { display: none; }
+
+.btn.primary::before,
+.fab::before,
+.pb-play::before,
+.stage-play::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 50%;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgb(255 255 255 / .26), transparent);
+}
+
+/* The connection readout in the top bar. */
+.link-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: rgb(var(--surface-2-rgb) / .55);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px));
+}
+.link-state[hidden] { display: none; }
+.link-dot {
+  width: 6px; height: 6px;
+  flex: none;
+  background: var(--text-3);
+}
+.link-state[data-phase="connecting"] { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+.link-state[data-phase="connecting"] .link-dot { background: var(--accent); animation: link-blink 900ms steps(2) infinite; }
+.link-state[data-phase="resumed"] { color: var(--accent); }
+.link-state[data-phase="resumed"] .link-dot { background: var(--accent); box-shadow: 0 0 10px 0 var(--accent-glow); }
+.link-state[data-phase="failed"] { color: var(--warn); box-shadow: inset 0 0 0 var(--hair) rgb(255 200 87 / .4); }
+.link-state[data-phase="failed"] .link-dot { background: var(--warn); }
+
+@keyframes link-blink { 50% { opacity: .2; } }

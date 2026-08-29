@@ -6,7 +6,9 @@ import * as player from './player.js';
 import { renderView } from './views.js';
 import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
-import { toast, closeMenu, promptDialog } from './ui.js';
+import { toast, closeMenu, promptDialog, menu } from './ui.js';
+import * as session from './session.js';
+import * as stats from './stats.js';
 import { animate, ease, reduceMotion } from './motion.js';
 import { startIntro } from './intro.js';
 import { mountBackdrop } from './backdrop.js';
@@ -20,6 +22,7 @@ const NAV = [
   { route: 'albums', label: 'Albums', icon: 'album' },
   { route: 'artists', label: 'Artists', icon: 'artist' },
   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
+  { route: 'circles', label: 'Analysis', icon: 'circles' },
 ];
 
 /** What the top-bar readout says for a given route. */
@@ -29,6 +32,7 @@ function routeLabel(route) {
   if (route.name === 'playlist') return 'Playlist';
   if (route.name === 'search') return 'Search';
   if (route.name === 'settings') return 'Settings';
+  if (route.name === 'circles') return 'Analysis';
   const nav = NAV.find((n) => n.route === route.name);
   return nav ? nav.label : 'Home';
 }
@@ -117,7 +121,10 @@ function buildSidebar() {
   const playlists = el('div', { class: 'side-playlists' });
 
   const footer = el('div', { class: 'side-foot' },
-    el('button', { class: 'btn add-btn', html: ico('plus') + '<span>Add music</span>', onclick: addMusic }),
+    el('button', {
+      class: 'btn add-btn', html: ico('plus') + '<span>Add music</span>',
+      onclick: (e) => addMusicMenu(e.currentTarget),
+    }),
     el('a', { class: 'nav-item slim', href: '#/settings', data: { route: 'settings' } },
       el('span', { class: 'nav-ico', html: ico('settings') }), el('span', { class: 'nav-label', text: 'Settings' })));
 
@@ -244,21 +251,48 @@ function buildTopbar() {
     el('span', { class: 'scan-spinner' }),
     el('span', { class: 'scan-text' }));
 
-  const addBtn = el('button', { class: 'btn ghost sm topbar-add', html: ico('plus') + '<span>Add music</span>', onclick: addMusic });
+  const addBtn = el('button', {
+    class: 'btn ghost sm topbar-add', html: ico('plus') + '<span>Add music</span>',
+    onclick: (e) => addMusicMenu(e.currentTarget),
+  });
+
+  // Announced rather than shown only: a reconnect that failed is the kind of
+  // thing a screen reader has to be told about, and politely is the right
+  // volume for it — it interrupts nothing.
+  const link = el('div', {
+    class: 'link-state', id: 'link-state', hidden: true,
+    role: 'status', 'aria-live': 'polite',
+  }, el('span', { class: 'link-dot' }), el('span', { class: 'link-text' }));
 
   const tag = el('div', { class: 'route-tag', id: 'route-tag' });
-  bar.append(el('div', { class: 'topbar-nav' }, back, fwd), tag, search, progress, addBtn);
+  bar.append(el('div', { class: 'topbar-nav' }, back, fwd), tag, search, link, progress, addBtn);
+
+  // The connection readout: visible while reconnecting, and afterwards only if
+  // something needs saying.
+  session.events.on('phase', (st) => {
+    const label = {
+      connecting: 'Reconnecting', resumed: 'Resumed', ready: st.message || 'Ready',
+      failed: st.message || 'Not connected', off: 'Disconnected', idle: '',
+    }[st.phase] || '';
+    link.dataset.phase = st.phase;
+    link.querySelector('.link-text').textContent = label;
+    link.hidden = !label || st.phase === 'idle';
+    if (st.phase === 'resumed' || st.phase === 'ready') {
+      setTimeout(() => { if (link.dataset.phase === st.phase) link.hidden = true; }, 4000);
+    }
+  });
 
   lib.events.on('progress', ({ done, total }) => {
     progress.hidden = false;
     progress.querySelector('.scan-text').textContent =
       total ? `Reading ${done.toLocaleString()} of ${total.toLocaleString()}` : 'Scanning…';
   });
-  lib.events.on('scan', (on) => {
+  lib.events.on('scan', (on, report) => {
     if (on) { progress.hidden = false; progress.querySelector('.scan-text').textContent = 'Scanning…'; }
     else {
       progress.querySelector('.scan-text').textContent = 'Done';
       setTimeout(() => { progress.hidden = true; }, 1400);
+      announceImport(report);
     }
   });
 }
@@ -272,6 +306,28 @@ function paintRouteTag(route) {
   tag.appendChild(el('b', { text: routeLabel(route).toUpperCase() }));
 }
 
+/**
+ * What the import did, said once. Album merging is invisible by design — the
+ * point is that tracks from four folders end up as one record — so the one
+ * moment it is worth mentioning is right after it happens.
+ */
+function announceImport(report) {
+  if (!report || !report.added) return;
+  const merged = report.merged || [];
+  if (merged.length) {
+    const names = merged.slice(0, 2).map((a) => `“${a.title}”`).join(', ');
+    const more = merged.length > 2 ? ` and ${merged.length - 2} more` : '';
+    toast(`Added ${report.added.toLocaleString()} tracks · merged ${names}${more}`, {
+      duration: 5200,
+      action: merged.length === 1
+        ? { label: 'Open', onSelect: () => (location.hash = '#/album/' + merged[0].key) }
+        : null,
+    });
+  } else {
+    toast(`Added ${report.added.toLocaleString()} ${report.added === 1 ? 'track' : 'tracks'}`);
+  }
+}
+
 function syncSearchInput(route) {
   const input = $('#search');
   if (!input) return;
@@ -282,6 +338,43 @@ function syncSearchInput(route) {
 /* ------------------------------------------------------------------ ingestion */
 
 let fileInput = null;
+let looseInput = null;
+
+/**
+ * "Add music" is two things — a folder, or a handful of files — and which one
+ * someone wants is not knowable in advance, so ask.
+ *
+ * Both routes exist in every browser, whichever pickers it has: a folder goes
+ * through showDirectoryPicker or an input with `webkitdirectory`, and files go
+ * through showOpenFilePicker or a plain multiple input. So the choice is always
+ * offered; only the machinery underneath differs.
+ */
+function addMusicMenu(anchor) {
+  menu([
+    { label: 'Add a folder…', icon: 'folder', onSelect: addMusic },
+    { label: 'Add files…', icon: 'file', hint: 'Merged by album', onSelect: addLooseFiles },
+  ], { anchor });
+}
+
+/** Individual files, from anywhere; albums are reassembled on the way in. */
+async function addLooseFiles() {
+  if (lib.canPickFiles()) {
+    const root = await lib.addFiles();
+    if (!root) return;
+    return;
+  }
+  if (!looseInput) {
+    looseInput = el('input', { type: 'file', multiple: true, accept: acceptAttr(), style: { display: 'none' } });
+    looseInput.addEventListener('change', async () => {
+      if (!looseInput.files.length) return;
+      const root = await lib.addFileList(looseInput.files, 'Selected files');
+      if (!root) toast('No audio files in that selection');
+      looseInput.value = '';
+    });
+    document.body.appendChild(looseInput);
+  }
+  looseInput.click();
+}
 
 async function addMusic() {
   if (lib.canPickDirectory()) {
@@ -478,6 +571,15 @@ async function boot() {
     if (e.detail.name === 'accent') applyAccent();
     if (e.detail.name === 'backdrop') backdrop?.setEnabled(e.detail.value);
   });
+  document.addEventListener('sonora:disconnect', () => {
+    session.disconnect();
+    toast('Disconnected — nothing will reconnect on launch until you turn it back on');
+  });
+  document.addEventListener('sonora:reconnect', () => {
+    session.reconnect(toast).then((outcome) => {
+      if (outcome === 'none') toast('Nothing to reconnect to yet');
+    });
+  });
 
   addEventListener('hashchange', navigate);
   document.addEventListener('sonora:refresh', () => navigate());
@@ -502,9 +604,17 @@ async function boot() {
 
   await player.init();
   await lib.init();
+  await stats.init();
 
   navigate();
   syncNotice();
+
+  // Everything below is about the previous session: remember this one as it
+  // happens, then put the last one back.
+  session.watch();
+  session.restore(toast).then((outcome) => {
+    if (outcome === 'resumed' || outcome === 'ready') applyAccent();
+  });
 
   // Re-render list pages when the library changes underneath them. Deferred to
   // the next frame so we never rebuild the view from inside the emit that

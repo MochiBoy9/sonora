@@ -22,6 +22,13 @@ const page = await ctx.newPage();
 page.on('pageerror', (e) => console.log('  UNCAUGHT', e.message));
 
 await page.addInitScript(() => { delete window.showDirectoryPicker; });
+// "Add music" opens a menu now: folder or individual files. The tests take the
+// folder route, which is what the picker below expects.
+async function addFolder() {
+  await page.locator('.side-foot .add-btn').click();
+  await page.locator('.menu-item', { hasText: 'Add a folder' }).click();
+}
+
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.waitForSelector('body.is-ready', { timeout: 20000 });
 await page.waitForSelector('#intro', { state: 'detached', timeout: 20000 });
@@ -31,7 +38,7 @@ await page.waitForSelector('#intro', { state: 'detached', timeout: 20000 });
 const t0 = Date.now();
 const [chooser] = await Promise.all([
   page.waitForEvent('filechooser'),
-  page.locator('.side-foot .add-btn').click(),
+  addFolder(),
 ]);
 await chooser.setFiles(LIB);
 // Wait for the scan to start, then for it to finish — checking only for "hidden"

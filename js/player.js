@@ -195,7 +195,7 @@ const view = {
 
 function revoke(url) { if (url) URL.revokeObjectURL(url); }
 
-async function load(track, autoplay) {
+async function load(track, autoplay, { count = true } = {}) {
   // A container this browser has no decoder for is a dead end, and saying so is
   // better than a silent skip the listener has to work out for themselves.
   if (!canDecode(track.name || track.path || '')) {
@@ -243,7 +243,7 @@ async function load(track, autoplay) {
     if (token === loadToken) { state.loading = false; events.emit('state'); }
   }
   updateMediaSession(track);
-  lib.notePlay(track);
+  if (count) lib.notePlay(track);
   warmNext();
 }
 
@@ -484,6 +484,47 @@ export function next(auto = false) {
 export function prev() {
   if (state.time > 3 || state.index <= 0) { seek(0); return; }
   jumpTo(state.index - 1);
+}
+
+/**
+ * Restores a queue without touching playback — used when a previous session is
+ * being put back together and the track is cued separately.
+ */
+export function setQueueSilently(ids, index = 0, origin = null) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  state.queue = ids.slice();
+  baseOrder = ids.slice();
+  state.index = clamp(index, 0, ids.length - 1);
+  state.origin = origin;
+  events.emit('queue');
+}
+
+/**
+ * Loads a track, seeks to a position and tries to start it.
+ *
+ * Returns whether playback actually began. It very often has not: browsers
+ * refuse `play()` until the origin has seen a gesture, and a resume on a fresh
+ * tab has seen none. The caller is expected to offer a button rather than
+ * pretend — which is why this reports the truth instead of throwing.
+ */
+export async function cue(track, position = 0) {
+  if (!track) return false;
+  await load(track, false, { count: false });
+  if (state.current !== track) return false;          // superseded mid-load
+
+  if (position > 0) {
+    if (!(isFinite(audio.duration) && audio.duration > 0)) {
+      await new Promise((resolve) => {
+        const done = () => { clearTimeout(timer); audio.removeEventListener('loadedmetadata', done); resolve(); };
+        const timer = setTimeout(done, 1500);
+        audio.addEventListener('loadedmetadata', done);
+      });
+    }
+    seek(position);
+  }
+
+  await play();
+  return state.playing;
 }
 
 /** Convenience used by every "play" button in the UI. */

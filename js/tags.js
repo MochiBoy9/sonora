@@ -789,9 +789,14 @@ export async function readTags(blob, path, name) {
     }
   } catch { /* corrupt tags shouldn't cost us the track */ }
 
-  // Fill the gaps from the path, never overwriting a real tag.
+  // Fill the gaps from the path, never overwriting a real tag. What had to be
+  // guessed is recorded: a folder called "Unsorted" is not an artist, and the
+  // library needs to know the difference when it decides which albums are the
+  // same album.
   const guess = fromPath(path, name);
-  for (const k in guess) if (!out[k]) out[k] = guess[k];
+  const guessed = [];
+  for (const k in guess) if (!out[k]) { out[k] = guess[k]; guessed.push(k); }
+  if (guessed.length) out.guessed = guessed.join(' ');
 
   if (!out.duration && out.lengthMs) {
     const ms = parseInt(out.lengthMs, 10);

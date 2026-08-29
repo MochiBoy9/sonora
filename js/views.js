@@ -16,6 +16,10 @@ import {
 } from './ui.js';
 import { enter, scramble, countTo, tilt3d } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
+import { mountCircles } from './circles.js';
+import * as stats from './stats.js';
+import * as band from './band.js';
+import * as session from './session.js';
 
 const ROW_H = 56;
 
@@ -564,7 +568,9 @@ function viewArtist(host, key) {
   albumsBlock.appendChild(grid);
   host.appendChild(albumsBlock);
 
-  enter([hero], { y: 14 });
+  host.appendChild(bandOverview(artist.name));
+
+  enter([hero], { y: 14, wipe: true });
   enter(list.children, { each: 16, y: 8, delay: 60 });
   enter(grid.children, { each: 22, y: 12, delay: 120 });
 
@@ -753,6 +759,192 @@ function viewSearch(host, query) {
   return () => {};
 }
 
+/* ------------------------------------------------------------------ ANALYSIS */
+
+function viewCircles(host) {
+  const api = mountCircles(host);
+
+  const onReset = () => dialog({
+    title: 'Reset listening data?',
+    body: el('p', { class: 'muted', text: 'Every second counted so far is discarded. Your library, playlists and files are untouched — only the analytics are cleared.' }),
+    actions: [
+      { label: 'Cancel' },
+      { label: 'Reset', danger: true, onSelect: async () => { await stats.reset(); api.refresh(); toast('Listening data cleared'); } },
+    ],
+  });
+  host.addEventListener('circles:reset', onReset);
+
+  enter(host.children, { each: 60, y: 12 });
+  return () => { host.removeEventListener('circles:reset', onReset); api.destroy(); };
+}
+
+/* ------------------------------------------------------------------ BAND */
+
+/**
+ * The Band Overview: four cards of context about whoever you are listening to,
+ * fetched only when the feature is on, only when asked, and cached for a month.
+ */
+function bandOverview(artistName) {
+  const wrap = el('section', { class: 'block band' });
+  const body = el('div', { class: 'band-body' });
+  const status = el('div', { class: 'band-status' });
+
+  const runBtn = el('button', {
+    class: 'btn ghost sm', html: ico('globe') + '<span>Analyse online</span>',
+    onclick: () => start(),
+  });
+  wrap.append(sectionHead('Band overview', null, null), status, body);
+  wrap.querySelector('.section-head').appendChild(runBtn);
+
+  const say = (text, kind = '') => {
+    status.textContent = '';
+    status.className = 'band-status' + (kind ? ' is-' + kind : '');
+    status.appendChild(el('span', { text }));
+  };
+
+  function consentDialog() {
+    return new Promise((resolve) => {
+      dialog({
+        title: 'Look this artist up online?',
+        width: 520,
+        body: el('div', {},
+          el('p', { class: 'muted', text: 'Sonora is offline by design. Turning this on sends one thing to two public services, and only when you ask for it:' }),
+          el('ul', { class: 'band-consent' },
+            el('li', { text: 'The artist name — to MusicBrainz, for biography, line-up and discography.' }),
+            el('li', { text: 'The matching page title — to Wikipedia, for the summary paragraph.' }),
+            el('li', { text: 'Nothing else. Not your library, not your listening history, not a file name.' })),
+          el('p', { class: 'muted small', text: 'Answers are cached on this device for 30 days, and you can clear them or switch this off again in Settings.' })),
+        actions: [
+          { label: 'Not now', onSelect: () => resolve(false) },
+          { label: 'Enable lookups', primary: true, onSelect: () => resolve(true) },
+        ],
+      });
+    });
+  }
+
+  async function start() {
+    if (!band.isEnabled()) {
+      const ok = await consentDialog();
+      if (!ok) return;
+      band.setEnabled(true);
+    }
+    if (!band.isOnline()) { say('No connection — this needs the internet.', 'warn'); return; }
+
+    runBtn.disabled = true;
+    say('Looking up ' + artistName + '…');
+    try {
+      const data = await band.analyseArtist(artistName);
+      status.textContent = '';
+      paint(data);
+    } catch (err) {
+      const why = {
+        offline: 'No connection — this needs the internet.',
+        'not-found': `Nothing found online for “${artistName}”.`,
+        consent: 'Online lookups are switched off.',
+      }[err.message] || 'Lookup failed — the service may be busy. Try again in a moment.';
+      say(why, 'warn');
+    } finally {
+      runBtn.disabled = false;
+    }
+  }
+
+  function paint(data) {
+    body.textContent = '';
+    runBtn.innerHTML = ico('refresh') + '<span>Refresh</span>';
+
+    const card = (title, ...kids) => {
+      const c = el('article', { class: 'band-card' },
+        el('h3', { class: 'band-card-title label', text: title }));
+      c.append(...kids.filter(Boolean));
+      return c;
+    };
+
+    /* --- biography ---------------------------------------------------- */
+    const bio = data.bio?.extract
+      ? el('p', { class: 'band-text', text: data.bio.extract })
+      : el('p', { class: 'band-text muted', text: 'No summary available for this artist.' });
+    const bioCard = card('Biography', bio,
+      data.bio?.url ? el('a', { class: 'link-btn', href: data.bio.url, target: '_blank', rel: 'noreferrer noopener', text: 'Read on Wikipedia' }) : null);
+
+    /* --- activity ----------------------------------------------------- */
+    const facts = el('dl', { class: 'info-grid band-facts' });
+    const fact = (k, v) => { if (!v) return; facts.append(el('dt', { text: k }), el('dd', { text: String(v) })); };
+    fact('Type', data.type);
+    fact('From', data.area);
+    fact('Began', data.began);
+    fact(data.ended ? 'Ended' : 'Status', data.ended || (data.active ? 'Active' : 'Unknown'));
+    fact('Tags', data.tags.join(', '));
+    const activityCard = card('Activity', facts);
+
+    /* --- discography -------------------------------------------------- */
+    const list = el('div', { class: 'band-list' });
+    const owned = new Map(lib.state.albums.map((a) => [a.title.toLowerCase(), a]));
+    for (const rel of data.releases) {
+      const mine = owned.get(rel.title.toLowerCase());
+      const row = el('div', { class: 'band-row' + (mine ? ' is-owned' : '') },
+        el('span', { class: 'band-row-year mono', text: rel.year || '—' }),
+        el('span', { class: 'band-row-title', text: rel.title }),
+        el('span', { class: 'chip', text: rel.type }),
+        mine
+          ? el('button', {
+              class: 'icon-btn sm', title: 'Play from your library', 'aria-label': `Play ${rel.title}`,
+              html: ico('play'), onclick: () => playAll(mine.tracks, 0, { type: 'album', key: mine.key, label: mine.title }),
+            })
+          : el('button', {
+              class: 'icon-btn sm', title: 'Analyse this record', 'aria-label': `Analyse ${rel.title}`,
+              html: ico('info'), onclick: (e) => deepen(e.currentTarget, rel),
+            }));
+      if (mine) row.addEventListener('dblclick', () => (location.hash = '#/album/' + mine.key));
+      list.appendChild(row);
+    }
+    const discCard = card('Discography', data.releases.length ? list
+      : el('p', { class: 'band-text muted', text: 'No releases listed.' }));
+
+    /* --- people and links --------------------------------------------- */
+    const people = el('div', { class: 'band-chips' });
+    for (const m of data.members) people.appendChild(el('span', { class: 'chip', text: m.name + (m.ended ? ' (past)' : '') }));
+    for (const l of data.links) {
+      people.appendChild(el('a', {
+        class: 'chip band-link', href: l.url, target: '_blank', rel: 'noreferrer noopener',
+        text: l.label,
+      }));
+    }
+    const peopleCard = card('Line-up and links',
+      people.children.length ? people : el('p', { class: 'band-text muted', text: 'Nothing listed.' }));
+
+    body.append(bioCard, activityCard, discCard, peopleCard);
+    body.appendChild(el('p', { class: 'band-source small faint',
+      text: 'Data from MusicBrainz and Wikipedia · cached on this device' }));
+    enter(body.children, { each: 60, y: 12 });
+  }
+
+  /** One record, looked at more closely, on demand. */
+  async function deepen(btn, rel) {
+    btn.disabled = true;
+    try {
+      const detail = await band.analyseRelease(artistName, rel.title);
+      const bits = [detail.type, ...(detail.secondary || []), detail.year && 'First released ' + detail.year]
+        .filter(Boolean).join(' · ');
+      const row = btn.closest('.band-row');
+      row.appendChild(el('span', { class: 'band-row-detail small faint', text: bits || 'No further detail' }));
+      btn.remove();
+    } catch {
+      toast('Could not analyse that record');
+      btn.disabled = false;
+    }
+  }
+
+  // Anything already cached appears without a request being made.
+  band.peek('artist:' + artistName.toLowerCase()).then((hit) => {
+    if (hit?.data) paint(hit.data);
+    else if (!band.isEnabled()) say('Off by default. Nothing is fetched until you ask.');
+    else if (!band.isOnline()) say('Offline — connect to look this artist up.');
+    else say('Not looked up yet.');
+  });
+
+  return wrap;
+}
+
 /* ------------------------------------------------------------------ SETTINGS */
 
 function viewSettings(host) {
@@ -802,6 +994,27 @@ function viewSettings(host) {
     el('button', { class: 'btn ghost', html: ico('refresh') + '<span>Rescan all</span>', onclick: () => lib.rescanAll() })));
   host.appendChild(folders);
 
+  /* --- connection --- */
+  const conn = el('section', { class: 'block' }, sectionHead('Connection'));
+  conn.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('plug') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Reconnect on launch' }),
+      el('div', { class: 'settings-note', text: 'Re-open the folders you linked and pick up the track you left, without being asked' })),
+    el('div', { class: 'settings-actions' }, toggleSwitch('autoconnect', true))));
+
+  const stateRow = el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('refresh') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Connection state' }),
+      el('div', { class: 'settings-note', id: 'conn-note', text: connectionNote() })),
+    el('div', { class: 'settings-actions' },
+      session.isDisconnected()
+        ? el('button', { class: 'btn ghost sm', text: 'Reconnect now', onclick: () => { document.dispatchEvent(new CustomEvent('sonora:reconnect')); setTimeout(() => document.dispatchEvent(new CustomEvent('sonora:refresh')), 400); } })
+        : el('button', { class: 'btn ghost sm', text: 'Disconnect', onclick: () => { document.dispatchEvent(new CustomEvent('sonora:disconnect')); document.dispatchEvent(new CustomEvent('sonora:refresh')); } })));
+  conn.appendChild(stateRow);
+  host.appendChild(conn);
+
   /* --- appearance --- */
   const appearance = el('section', { class: 'block' }, sectionHead('Appearance'));
   const themeRow = el('div', { class: 'settings-row' },
@@ -849,6 +1062,46 @@ function viewSettings(host) {
       }))));
   host.appendChild(viz);
 
+  /* --- online --- */
+  const online = el('section', { class: 'block' }, sectionHead('Online'));
+  online.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('globe') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Band overview' }),
+      el('div', { class: 'settings-note', text: 'Off by default. When on, an artist name (and nothing else) can be sent to MusicBrainz and Wikipedia — only when you press Analyse.' })),
+    el('div', { class: 'settings-actions' }, onlineSwitch())));
+  online.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('database') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Cached lookups' }),
+      el('div', { class: 'settings-note', id: 'band-cache', text: 'Counting…' })),
+    el('div', { class: 'settings-actions' },
+      el('button', {
+        class: 'btn ghost sm', text: 'Clear cache',
+        onclick: async () => { await band.clearCache(); toast('Online cache cleared'); paintCacheCount(); },
+      }))));
+  host.appendChild(online);
+  paintCacheCount();
+
+  /* --- listening --- */
+  const listening = el('section', { class: 'block' }, sectionHead('Listening data'));
+  listening.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('circles') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Circle Analysis Center' }),
+      el('div', { class: 'settings-note', text: `${fmtTotal(stats.total()) || '0 min'} counted across ${fmtCount(stats.trackedCount(), 'track')} — never leaves this device` })),
+    el('div', { class: 'settings-actions' },
+      el('button', { class: 'btn ghost sm', text: 'Open', onclick: () => (location.hash = '#/circles') }),
+      el('button', {
+        class: 'btn ghost sm', text: 'Reset',
+        onclick: () => dialog({
+          title: 'Reset listening data?',
+          body: el('p', { class: 'muted', text: 'Every second counted so far is discarded. Your library and files are untouched.' }),
+          actions: [{ label: 'Cancel' }, { label: 'Reset', danger: true, onSelect: async () => { await stats.reset(); toast('Listening data cleared'); document.dispatchEvent(new CustomEvent('sonora:refresh')); } }],
+        }),
+      }))));
+  host.appendChild(listening);
+
   /* --- storage --- */
   const storage = el('section', { class: 'block' }, sectionHead('Storage'));
   const note = el('div', { class: 'settings-note', text: 'Reading…' });
@@ -879,7 +1132,7 @@ function viewSettings(host) {
     el('p', { class: 'muted small', text: 'Shortcuts: Space play/pause · ←/→ seek · ↑/↓ volume · N next · P previous · S shuffle · R repeat · V visualiser · / search · Q queue' }));
   host.appendChild(about);
 
-  enter([head, folders, appearance, viz, storage, about], { each: 40, y: 12 });
+  enter([head, folders, conn, appearance, viz, online, listening, storage, about], { each: 34, y: 12 });
   const off = lib.events.on('roots', paintRoots);
   return () => off();
 }
@@ -899,6 +1152,43 @@ function themeSwitch() {
     }));
   }
   return wrap;
+}
+
+function connectionNote() {
+  if (session.isDisconnected()) return 'Disconnected — nothing reconnects until you turn it back on';
+  const st = session.state;
+  if (st.phase === 'resumed') return `Reconnected and resumed in ${st.ms} ms`;
+  if (st.phase === 'ready') return st.ms ? `Ready in ${st.ms} ms` : 'Ready';
+  if (st.phase === 'failed') return 'Last launch could not reach the files';
+  return 'Connected';
+}
+
+function paintCacheCount() {
+  const note = document.getElementById('band-cache');
+  if (!note) return;
+  db.bandCount().then((n) => {
+    note.textContent = n
+      ? `${fmtCount(n, 'lookup')} stored on this device, expiring after 30 days`
+      : 'Nothing cached yet';
+  }).catch(() => { note.textContent = 'Nothing cached yet'; });
+}
+
+/** Consent, expressed as a switch: turning it on is the consent. */
+function onlineSwitch() {
+  const btn = el('button', {
+    class: 'switch' + (band.isEnabled() ? ' is-on' : ''),
+    role: 'switch', 'aria-checked': String(band.isEnabled()),
+    'aria-label': 'Allow online band lookups',
+  });
+  btn.appendChild(el('span', { class: 'switch-knob' }));
+  btn.addEventListener('click', () => {
+    const next = !btn.classList.contains('is-on');
+    btn.classList.toggle('is-on', next);
+    btn.setAttribute('aria-checked', String(next));
+    band.setEnabled(next);
+    toast(next ? 'Online lookups enabled' : 'Online lookups disabled');
+  });
+  return btn;
 }
 
 /** Picks the visualiser style every canvas in the app reads from. */
@@ -953,6 +1243,7 @@ const ROUTES = {
   playlists: viewPlaylists,
   playlist: viewPlaylist,
   search: viewSearch,
+  circles: viewCircles,
   settings: viewSettings,
 };
 

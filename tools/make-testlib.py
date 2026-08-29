@@ -478,6 +478,26 @@ def main():
                 fh.write(data)
             written += 1
 
+    # An album split across two folders, tagged inconsistently: half of it
+    # carries an artist, half of it carries nothing but the album name. Two
+    # album entities go in; the library's merge pass has to produce one.
+    tagged = os.path.join(root, 'Cassia Bloom', 'Graduation')
+    loose = os.path.join(root, 'Unsorted', 'Rips')
+    os.makedirs(tagged, exist_ok=True)
+    os.makedirs(loose, exist_ok=True)
+    for n, title in enumerate(['Commencement', 'Paper Gown'], start=1):
+        with open(os.path.join(tagged, f'{n:02d} {safe(title)}.wav'), 'wb') as fh:
+            fh.write(wav_file({'INAM': title, 'IART': 'Cassia Bloom', 'IPRD': 'Graduation',
+                               'ICRD': '2019', 'IGNR': 'Soul', 'ITRK': str(n)},
+                              22, freq=190 + n * 25))
+        written += 1
+    for n, title in enumerate(['Late Bloom', 'Recessional'], start=3):
+        # No IART at all — the artist is simply absent from these files.
+        with open(os.path.join(loose, f'{n:02d} {safe(title)}.wav'), 'wb') as fh:
+            fh.write(wav_file({'INAM': title, 'IPRD': 'Graduation', 'ITRK': str(n)},
+                              22, freq=190 + n * 25))
+        written += 1
+
     # One container nothing can decode, so the interface has to say so.
     odd = os.path.join(root, 'Field Notes', 'Unsupported Formats')
     os.makedirs(odd, exist_ok=True)

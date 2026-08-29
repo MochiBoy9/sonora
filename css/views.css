@@ -509,3 +509,189 @@
 .qrow-remove { opacity: 0; transition: opacity var(--dur-1) linear; }
 .qrow:hover .qrow-remove { opacity: 1; }
 .qrow:hover .qrow-time { display: none; }
+
+/* ------------------------------------------------------------------ analysis */
+
+/* The Circle Analysis Center. The chart is one SVG in a fixed square viewBox,
+   scaled to the panel — so the packing maths never has to know about pixels,
+   and the whole thing is resolution-independent. */
+
+.circle-bar { align-items: center; gap: 14px; }
+.circle-bar .circle-hint { margin-left: auto; }
+.circle-bar[hidden] { display: none; }
+
+.circle-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  max-height: min(58vh, 640px);
+  margin: 0 auto 18px;
+  display: grid;
+  place-items: center;
+}
+.circle-stage[hidden] { display: none; }
+
+.circle-canvas {
+  width: 100%;
+  height: 100%;
+  max-width: min(58vh, 640px);
+  overflow: visible;
+  touch-action: none;
+}
+
+.circle-node { cursor: pointer; }
+.circle-node:focus { outline: none; }
+.circle-node:focus-visible .circle-ring { stroke: var(--accent); stroke-width: 2; opacity: 1; }
+.circle-node.is-dragging { cursor: grabbing; }
+
+/* The fill walks from blue to cyan with the share, so rank is legible without
+   reading a single label — and both ends stay on the brand. */
+.circle-disc {
+  fill: color-mix(in srgb, rgb(var(--accent-2-rgb)) calc((1 - var(--t, 0)) * 100%), rgb(var(--accent-rgb)));
+  fill-opacity: .16;
+  stroke: color-mix(in srgb, rgb(var(--accent-2-rgb)) calc((1 - var(--t, 0)) * 100%), rgb(var(--accent-rgb)));
+  stroke-width: 1;
+  stroke-opacity: .75;
+  transition: fill-opacity var(--dur-2) var(--ease);
+}
+@supports not (color: color-mix(in srgb, red, blue)) {
+  .circle-disc { fill: rgb(var(--accent-rgb)); stroke: rgb(var(--accent-rgb)); }
+}
+.circle-node:hover .circle-disc { fill-opacity: .34; }
+.circle-node.is-pinned .circle-disc { fill-opacity: .42; stroke-width: 2; }
+
+.circle-ring { fill: none; stroke: var(--accent); stroke-width: 1; opacity: 0; transition: opacity var(--dur-2) var(--ease); }
+.circle-node.is-pinned .circle-ring { opacity: .55; }
+
+.circle-label {
+  fill: var(--text);
+  font-family: var(--font);
+  font-size: 26px;
+  font-weight: 560;
+  pointer-events: none;
+}
+.circle-value {
+  fill: var(--accent);
+  font-family: var(--mono);
+  font-size: 19px;
+  letter-spacing: .04em;
+  pointer-events: none;
+}
+
+.circle-tip {
+  position: absolute;
+  z-index: 5;
+  transform: translate(14px, -100%);
+  display: grid;
+  gap: 3px;
+  padding: 10px 14px;
+  min-width: 180px;
+  background: var(--glass-2);
+  box-shadow: var(--sh-2), inset 0 0 0 var(--hair) var(--accent-line);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  pointer-events: none;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px));
+}
+.circle-tip[hidden] { display: none; }
+.circle-tip strong { font-size: 13.5px; }
+.circle-tip-value { font-family: var(--mono); color: var(--accent); font-size: 12px; letter-spacing: .06em; }
+.circle-tip-share { color: var(--text-3); font-size: 11.5px; }
+
+.circle-pins {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 0 4px;
+  border-top: var(--hair) solid var(--line);
+}
+.circle-pins[hidden] { display: none; }
+
+/* Each pin carries its own bar: a comparison you can read without the chart. */
+.circle-pin {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 12px;
+  background: rgb(var(--surface-2-rgb) / .6);
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  overflow: hidden;
+  clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+}
+.circle-pin::before {
+  content: "";
+  position: absolute;
+  left: 0; bottom: 0;
+  height: 2px;
+  width: calc(var(--fill, 0) * 100%);
+  background: var(--accent);
+}
+.circle-pin-name { font-size: 12.5px; font-weight: 540; }
+.circle-pin-value { color: var(--accent); font-size: 11px; letter-spacing: .06em; }
+.circle-compare { margin-left: 4px; }
+.circle-empty { padding-top: 40px; }
+
+/* ------------------------------------------------------------------ band */
+
+.band-status {
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: rgb(var(--surface-2-rgb) / .45);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  border-left: 2px solid var(--line-3);
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.band-status:empty { display: none; }
+.band-status.is-warn { border-left-color: var(--warn); color: var(--warn); }
+
+.band-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.band-card {
+  position: relative;
+  padding: 18px;
+  background: var(--glass);
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  clip-path: polygon(
+    0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
+    100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+}
+.band-card-title { display: block; margin-bottom: 12px; color: var(--accent); }
+.band-text { font-size: 13px; line-height: 1.6; color: var(--text-2); }
+.band-text + .link-btn { margin-top: 10px; display: inline-block; }
+.band-facts { grid-template-columns: 92px minmax(0, 1fr); }
+.band-facts dt, .band-facts dd { padding: 6px 0; }
+
+.band-list { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; }
+.band-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 4px;
+  border-bottom: var(--hair) solid var(--line);
+  font-size: 12.5px;
+}
+.band-row-year { color: var(--text-3); font-size: 11px; width: 34px; flex: none; }
+.band-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.band-row.is-owned .band-row-title { color: var(--accent); }
+.band-row-detail { width: 100%; padding-left: 44px; }
+.band-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.band-link:hover { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+.band-source { grid-column: 1 / -1; margin-top: 2px; }
+.band-consent { margin: 12px 0; padding-left: 18px; color: var(--text-2); font-size: 13px; line-height: 1.7; list-style: square; }
+.band-consent li { margin-bottom: 4px; }
+
+@media (max-width: 760px) {
+  .circle-bar .circle-hint { display: none; }
+}

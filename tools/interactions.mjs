@@ -25,13 +25,20 @@ page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 
 await page.addInitScript(() => { delete window.showDirectoryPicker; });
+// "Add music" opens a menu now: folder or individual files. The tests take the
+// folder route, which is what the picker below expects.
+async function addFolder() {
+  await page.locator('.side-foot .add-btn').click();
+  await page.locator('.menu-item', { hasText: 'Add a folder' }).click();
+}
+
 await page.goto('http://127.0.0.1:8123/index.html', { waitUntil: 'networkidle' });
 await page.waitForSelector('body.is-ready', { timeout: 15000 });
 await page.waitForSelector('#intro', { state: 'detached', timeout: 15000 });
 
 const [chooser] = await Promise.all([
   page.waitForEvent('filechooser'),
-  page.locator('.side-foot .add-btn').click(),
+  addFolder(),
 ]);
 await chooser.setFiles(LIB);
 await page.waitForFunction(() => document.querySelector('.scan')?.hidden === false, null, { timeout: 60000 });
@@ -189,17 +196,21 @@ const queueLen = async () => {
   const text = await page.locator('.queue-summary').textContent();
   return parseInt(text, 10) || 0;
 };
-const lastRow = () => page.locator('.qrow:not([hidden])').last();
+// The queue is virtualised, so the last row in the DOM is usually below the
+// fold — clicking it would make Playwright scroll first, and the scroll would
+// recycle the very node it was about to click. Rows that are actually on
+// screen are the honest target.
+const onScreen = (nth) => page.locator('.qrow:not([hidden])').nth(nth);
 
 const qBefore = await queueLen();
-await lastRow().hover();
-await lastRow().locator('.qrow-remove').click();
+await onScreen(3).hover();
+await onScreen(3).locator('.qrow-remove').click();
 await page.waitForTimeout(500);
 const qAfter = await queueLen();
 ok('remove from queue', qAfter === qBefore - 1, `${qBefore} -> ${qAfter}`);
 
-const jumpTitle = await lastRow().locator('.qrow-title').textContent();
-await lastRow().click();
+const jumpTitle = await onScreen(4).locator('.qrow-title').textContent();
+await onScreen(4).click();
 await page.waitForTimeout(1000);
 ok('clicking a queue row jumps to it', (await bar()).title === jumpTitle,
    `${jumpTitle} vs ${(await bar()).title}`);

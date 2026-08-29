@@ -7,7 +7,11 @@
  */
 
 const NAME = 'sonora';
-const VERSION = 1;
+/* v2 adds the `band` store for cached online lookups. The upgrade is additive
+   and guarded, so a v1 database opens, gains one store and keeps every track,
+   cover and playlist it already had — there is no migration to run and nothing
+   to lose if the feature is never switched on. */
+const VERSION = 2;
 
 let dbp = null;
 
@@ -26,6 +30,7 @@ function open() {
       if (!db.objectStoreNames.contains('roots'))     db.createObjectStore('roots', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('playlists')) db.createObjectStore('playlists', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('kv'))        db.createObjectStore('kv');
+      if (!db.objectStoreNames.contains('band'))      db.createObjectStore('band', { keyPath: 'key' });
       void e;
     };
     req.onsuccess = () => {
@@ -88,6 +93,15 @@ export const deleteRoot = (id) => tx('roots', 'readwrite', (s) => s.delete(id));
 export const getPlaylists  = () => tx('playlists', 'readonly', (s) => wrap(s.getAll()));
 export const putPlaylist   = (p) => tx('playlists', 'readwrite', (s) => s.put(p));
 export const deletePlaylist = (id) => tx('playlists', 'readwrite', (s) => s.delete(id));
+
+/* ------------------------------------------------------------------ band */
+
+/* Cached answers from the online Band Overview. Keyed by the query that
+   produced them, stamped so they can expire. */
+export const getBand   = (key) => tx('band', 'readonly',  (s) => wrap(s.get(key)));
+export const putBand   = (rec) => tx('band', 'readwrite', (s) => s.put(rec));
+export const clearBands = () => tx('band', 'readwrite', (s) => s.clear());
+export const bandCount = () => tx('band', 'readonly', (s) => wrap(s.count()));
 
 /* ------------------------------------------------------------------ kv */
 
