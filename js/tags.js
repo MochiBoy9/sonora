@@ -7,7 +7,9 @@
  * costs us ~40 KB of reads.
  *
  * Supported: ID3v2.2/2.3/2.4 + ID3v1 (mp3), MP4/iTunes atoms (m4a/mp4/aac),
- * FLAC (Vorbis comments + PICTURE), Ogg Vorbis/Opus, RIFF INFO (wav).
+ * FLAC (Vorbis comments + PICTURE), Ogg Vorbis/Opus, RIFF INFO (wav),
+ * AIFF chunks (+ embedded ID3), and Matroska/WebM EBML tags and attachments.
+ * Files whose suffix says nothing are identified by their magic number.
  * Duration comes from the container where it is cheap to compute
  * (STREAMINFO, mvhd, Xing/VBRI, RIFF fmt) and is filled in by the audio
  * element later when it is not.
@@ -132,8 +134,9 @@ const ID3_TEXT = {
   TLEN: 'lengthMs',
 };
 
-async function readID3v2(reader, out) {
-  const head = await reader.at(0, 10);
+/** Reads an ID3v2 tag at `base` — the head of an mp3, or a chunk inside AIFF. */
+async function readID3v2(reader, out, base = 0) {
+  const head = await reader.at(base, 10);
   if (head.length < 10 || ascii(head, 0, 3) !== 'ID3') return 0;
 
   const major = head[3];
@@ -141,7 +144,7 @@ async function readID3v2(reader, out) {
   const size  = syncsafe(head, 6);
   if (size <= 0 || size > MAX_TAG) return 10 + Math.max(0, size);
 
-  let body = await reader.at(10, size);
+  let body = await reader.at(base + 10, size);
   if (flags & 0x80) body = deUnsync(body);            // whole-tag unsynchronisation
 
   let p = 0;
@@ -182,7 +185,7 @@ async function readID3v2(reader, out) {
     }
     p += len;
   }
-  return 10 + size + ((flags & 0x10) ? 10 : 0);       // + footer, if present
+  return base + 10 + size + ((flags & 0x10) ? 10 : 0);   // + footer, if present
 }
 
 function readAPIC(f, legacy) {
@@ -536,6 +539,186 @@ async function readWAV(reader, out) {
   return true;
 }
 
+/* ------------------------------------------------------------------ AIFF */
+
+const AIFF_FIELD = { NAME: 'title', AUTH: 'artist', ANNO: 'comment' };
+
+/**
+ * AIFF is RIFF with the bytes the other way round. COMM carries the frame
+ * count and an 80-bit float sample rate; anything richer than NAME/AUTH is
+ * usually an ID3 chunk bolted on the side, which the mp3 reader already knows.
+ */
+async function readAIFF(reader, out) {
+  const head = await reader.at(0, 12);
+  if (head.length < 12 || ascii(head, 0, 4) !== 'FORM') return false;
+  const form = ascii(head, 8, 4);
+  if (form !== 'AIFF' && form !== 'AIFC') return false;
+
+  let p = 12;
+  for (let guard = 0; guard < 64 && p + 8 <= reader.size; guard++) {
+    const h = await reader.at(p, 8);
+    if (h.length < 8) break;
+    const id = ascii(h, 0, 4);
+    const size = u32(h, 4);
+    if (size < 0) break;
+
+    if (id === 'COMM') {
+      const b = await reader.at(p + 8, Math.min(size, 18));
+      if (b.length >= 18) {
+        const frames = u32(b, 2);
+        const rate = extended80(b, 8);
+        if (frames > 0 && rate > 0) out.duration = frames / rate;
+      }
+    } else if (id === 'ID3 ' || id === 'id3 ') {
+      await readID3v2(reader, out, p + 8);
+    } else if (AIFF_FIELD[id] && size > 0 && size < (1 << 16)) {
+      const b = await reader.at(p + 8, size);
+      const field = AIFF_FIELD[id];
+      if (!out[field]) out[field] = trimNul(latin1.decode(b));
+    }
+    if (size <= 0) break;
+    p += 8 + size + (size & 1);
+  }
+  return true;
+}
+
+/** IEEE 754 80-bit extended, which is what AIFF stores a sample rate as. */
+function extended80(b, i) {
+  const sign = b[i] & 0x80 ? -1 : 1;
+  const exp = ((b[i] & 0x7f) << 8) | b[i + 1];
+  let mantissa = 0;
+  for (let j = 0; j < 8; j++) mantissa = mantissa * 256 + b[i + 2 + j];
+  if (exp === 0 && mantissa === 0) return 0;
+  return sign * mantissa * Math.pow(2, exp - 16383 - 63);
+}
+
+/* ------------------------------------------------------------------ Matroska */
+
+const MKV = {
+  SEGMENT: 0x18538067, INFO: 0x1549a966, TIMESCALE: 0x2ad7b1, DURATION: 0x4489,
+  TITLE: 0x7ba9, TAGS: 0x1254c367, TAG: 0x7373, SIMPLE: 0x67c8,
+  TAG_NAME: 0x45a3, TAG_STRING: 0x4487, TAG_BINARY: 0x4485,
+  ATTACHMENTS: 0x1941a469, FILE: 0x61a7, FILE_MIME: 0x4660, FILE_DATA: 0x465c,
+  SEEKHEAD: 0x114d9b74, CLUSTER: 0x1f43b675, TRACKS: 0x1654ae6b,
+};
+
+const MKV_TAG_FIELD = {
+  TITLE: 'title', ARTIST: 'artist', ALBUM: 'album', 'ALBUM ARTIST': 'albumArtist',
+  ALBUMARTIST: 'albumArtist', PART_NUMBER: 'track', DISC: 'disc', DATE: 'year',
+  DATE_RELEASED: 'year', DATE_RELEASE: 'year', GENRE: 'genre', COMPOSER: 'composer',
+};
+
+/** EBML variable-length integer. Element ids keep their marker bit, sizes don't. */
+function vint(b, p, keepMarker) {
+  const first = b[p];
+  if (first === undefined || first === 0) return null;
+  let len = 1, mask = 0x80;
+  while (len <= 8 && !(first & mask)) { mask >>= 1; len++; }
+  if (len > 8 || p + len > b.length) return null;
+  let value = keepMarker ? first : (first & (mask - 1));
+  let unknown = keepMarker ? false : (first & (mask - 1)) === (mask - 1);
+  for (let i = 1; i < len; i++) {
+    value = value * 256 + b[p + i];
+    if (!keepMarker && b[p + i] !== 0xff) unknown = false;
+  }
+  return { value, len, unknown };
+}
+
+const ebmlUint = (b, from, to) => { let v = 0; for (let i = from; i < to; i++) v = v * 256 + b[i]; return v; };
+const ebmlFloat = (b, from, to) => {
+  const dv = new DataView(b.buffer, b.byteOffset + from, to - from);
+  return to - from === 4 ? dv.getFloat32(0) : to - from === 8 ? dv.getFloat64(0) : 0;
+};
+const ebmlText = (b, from, to) => trimNul(utf8.decode(b.subarray(from, to)));
+
+/**
+ * Walks the EBML tree far enough to find Info, Tags and the cover attachment.
+ * Clusters — the actual audio, and all of the file's weight — are stepped over
+ * without being read.
+ */
+function walkEBML(b, out, from, to, ctx, depth = 0) {
+  if (depth > 6) return;
+  let p = from;
+  while (p < to) {
+    const id = vint(b, p, true);
+    if (!id) return;
+    const size = vint(b, p + id.len, false);
+    if (!size) return;
+    const body = p + id.len + size.len;
+    const end = size.unknown ? to : Math.min(to, body + size.value);
+    if (end <= body && !size.unknown) { p = body; continue; }
+
+    switch (id.value) {
+      case MKV.SEGMENT: case MKV.INFO: case MKV.TAGS: case MKV.TAG:
+      case MKV.ATTACHMENTS: case MKV.FILE:
+        walkEBML(b, out, body, end, ctx, depth + 1);
+        break;
+      case MKV.SIMPLE: {
+        const tag = { name: '', value: '' };
+        walkEBML(b, out, body, end, tag, depth + 1);
+        const field = MKV_TAG_FIELD[tag.name.toUpperCase()];
+        if (field && tag.value && !out[field]) out[field] = tag.value;
+        break;
+      }
+      case MKV.TAG_NAME: if (ctx) ctx.name = ebmlText(b, body, end); break;
+      case MKV.TAG_STRING: if (ctx) ctx.value = ebmlText(b, body, end); break;
+      case MKV.TIMESCALE: if (ctx) ctx.scale = ebmlUint(b, body, end) || 1000000; break;
+      case MKV.DURATION: if (ctx) ctx.duration = ebmlFloat(b, body, end); break;
+      // The segment title is the file's name for itself; a TITLE tag is the
+      // track's, and wins. Held aside until the tag list has had its say.
+      case MKV.TITLE: if (ctx && !ctx.segmentTitle) ctx.segmentTitle = ebmlText(b, body, end); break;
+      case MKV.FILE_MIME: if (ctx) ctx.mime = ebmlText(b, body, end); break;
+      case MKV.FILE_DATA:
+        if (!out.picture && end - body > 0 && end - body < MAX_IMAGE) {
+          const data = b.subarray(body, end);
+          const mime = ctx && ctx.mime && ctx.mime.startsWith('image/') ? ctx.mime : mimeOf(data);
+          if (mime.startsWith('image/')) out.picture = new Blob([data.slice()], { type: mime });
+        }
+        break;
+      case MKV.CLUSTER: case MKV.SEEKHEAD: case MKV.TRACKS: break;   // nothing for us in here
+      default: break;
+    }
+    if (size.unknown) return;
+    p = end;
+  }
+}
+
+/** Matroska and WebM — same container, and the one people forget carries tags. */
+async function readMatroska(reader, out) {
+  const head = await reader.at(0, 4);
+  if (head.length < 4 || u32(head, 0) !== 0x1a45dfa3) return false;
+  // Tags and attachments live before the clusters in every muxer worth the
+  // name; 2 MB covers a front cover without dragging in the audio.
+  const b = await reader.at(0, Math.min(reader.size, 2 << 20));
+  const ctx = { scale: 1000000, duration: 0, segmentTitle: '' };
+  walkEBML(b, out, 0, b.length, ctx);
+  if (ctx.duration > 0 && !out.duration) out.duration = (ctx.duration * ctx.scale) / 1e9;
+  if (ctx.segmentTitle && !out.title) out.title = ctx.segmentTitle;
+  return true;
+}
+
+/* ------------------------------------------------------------------ sniffing */
+
+/**
+ * What a file *is*, when its name refuses to say. Extensions are a hint, not a
+ * fact — a container renamed to `.audio` still starts with its magic number.
+ */
+async function sniff(reader) {
+  const b = await reader.at(0, 16);
+  if (b.length < 8) return '';
+  const tag4 = ascii(b, 0, 4);
+  if (tag4 === 'fLaC') return 'flac';
+  if (tag4 === 'OggS') return 'ogg';
+  if (tag4 === 'RIFF' && ascii(b, 8, 4) === 'WAVE') return 'wav';
+  if (tag4 === 'FORM' && ascii(b, 8, 4).startsWith('AIF')) return 'aiff';
+  if (tag4 === 'caff') return 'caf';
+  if (u32(b, 0) === 0x1a45dfa3) return 'mkv';
+  if (ascii(b, 4, 4) === 'ftyp') return 'mp4';
+  if (tag4.startsWith('ID3')) return 'mp3';
+  if (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) return 'mp3';
+  return '';
+}
+
 /* ------------------------------------------------------------------ fallback */
 
 const ID3_GENRES = ['Blues','Classic Rock','Country','Dance','Disco','Funk','Grunge','Hip-Hop','Jazz','Metal','New Age','Oldies','Other','Pop','R&B','Rap','Reggae','Rock','Techno','Industrial','Alternative','Ska','Death Metal','Pranks','Soundtrack','Euro-Techno','Ambient','Trip-Hop','Vocal','Jazz+Funk','Fusion','Trance','Classical','Instrumental','Acid','House','Game','Sound Clip','Gospel','Noise','Alt. Rock','Bass','Soul','Punk','Space','Meditative','Instrumental Pop','Instrumental Rock','Ethnic','Gothic','Darkwave','Techno-Industrial','Electronic','Pop-Folk','Eurodance','Dream','Southern Rock','Comedy','Cult','Gangsta Rap','Top 40','Christian Rap','Pop/Funk','Jungle','Native American','Cabaret','New Wave','Psychedelic','Rave','Showtunes','Trailer','Lo-Fi','Tribal','Acid Punk','Acid Jazz','Polka','Retro','Musical','Rock & Roll','Hard Rock'];
@@ -564,21 +747,40 @@ export function fromPath(path, name) {
 
 /* ------------------------------------------------------------------ entry */
 
+/** Which parser owns which suffix. Anything missing here gets sniffed. */
+const FAMILY = {
+  flac: 'flac',
+  ogg: 'ogg', oga: 'ogg', opus: 'ogg', spx: 'ogg',
+  wav: 'wav', wave: 'wav',
+  aiff: 'aiff', aif: 'aiff', aifc: 'aiff',
+  webm: 'mkv', weba: 'mkv', mka: 'mkv', mkv: 'mkv',
+  m4a: 'mp4', m4b: 'mp4', m4r: 'mp4', m4p: 'mp4', mp4: 'mp4', aac: 'mp4', '3gp': 'mp4', '3g2': 'mp4',
+  mp3: 'mp3', mp2: 'mp3', mpga: 'mp3', mpeg: 'mp3',
+};
+
 /** Reads whatever the container offers. Never throws — bad files just degrade. */
 export async function readTags(blob, path, name) {
   const out = {};
   const reader = new Reader(blob);
   const n = name || '';
-  const kind = n.slice(n.lastIndexOf('.') + 1).toLowerCase();
+  const suffix = n.slice(n.lastIndexOf('.') + 1).toLowerCase();
+  let kind = FAMILY[suffix] || '';
 
   try {
+    // An unfamiliar suffix is not a dead end: ask the bytes instead.
+    if (!kind) kind = await sniff(reader);
+
     if (kind === 'flac') {
       await readFLAC(reader, out);
-    } else if (kind === 'ogg' || kind === 'oga' || kind === 'opus') {
+    } else if (kind === 'ogg') {
       await readOgg(reader, out);
-    } else if (kind === 'wav' || kind === 'wave') {
+    } else if (kind === 'wav') {
       await readWAV(reader, out);
-    } else if (kind === 'm4a' || kind === 'mp4' || kind === 'm4b' || kind === 'aac') {
+    } else if (kind === 'aiff') {
+      await readAIFF(reader, out);
+    } else if (kind === 'mkv') {
+      await readMatroska(reader, out);
+    } else if (kind === 'mp4') {
       if (!(await readMP4(reader, out))) await readID3v2(reader, out);
     } else {
       const after = await readID3v2(reader, out);

@@ -12,7 +12,7 @@
   margin-bottom: 8px;
   transition: color var(--dur-3) var(--ease);
 }
-.page-title { font-size: 30px; letter-spacing: -.028em; }
+.page-title { font-size: 32px; letter-spacing: -.03em; }
 .page-sub { color: var(--text-3); font-size: 13.5px; margin-top: 6px; }
 
 .toolbar { display: flex; align-items: center; gap: 10px; padding-bottom: 18px; flex-wrap: wrap; }
@@ -33,6 +33,58 @@
 .plain-list.no-sub .trow-sub { display: none; }
 .plain-list.no-sub .trow-title { font-size: 14px; }
 
+/* ------------------------------------------------------------------ home hero */
+
+.home-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  overflow: hidden;
+  margin: 10px 0 20px;
+  padding: 30px 30px 30px 28px;
+  border-radius: var(--r-xl);
+  background:
+    linear-gradient(120deg, rgb(var(--accent-rgb) / .16), transparent 58%),
+    var(--glass);
+  box-shadow: inset 0 0 0 1px var(--line), var(--sh-2);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+.home-hero .page-title { font-size: clamp(30px, 4vw, 46px); letter-spacing: -.035em; }
+.home-hero .page-sub { margin-top: 8px; color: var(--text-2); }
+.home-hero .hero-actions { margin-top: 18px; flex-wrap: wrap; }
+.home-hero-text { min-width: 0; }
+
+/* the generated vector on the right of the home header */
+.bloom {
+  flex: none;
+  width: 190px;
+  height: 190px;
+  margin: -10px -6px -10px 0;
+  color: var(--accent);
+  filter: drop-shadow(0 14px 34px rgb(var(--accent-rgb) / .35));
+}
+.bloom svg { width: 100%; height: 100%; overflow: visible; }
+.bloom-ring { stroke: rgb(var(--accent-rgb) / .3); stroke-width: 1; }
+.bloom-ring-2 { stroke: rgb(var(--accent-rgb) / .16); stroke-dasharray: 2 10; }
+.bloom-spokes path {
+  stroke: rgb(var(--accent-rgb) / .55);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  transform-origin: 110px 110px;
+  animation: bloom-turn 44s linear infinite;
+}
+.bloom-core rect { fill: var(--accent); transform-origin: 110px 110px; }
+.bloom-core { animation: bloom-breathe 3.4s var(--ease-soft) infinite alternate; transform-origin: 110px 110px; }
+
+@keyframes bloom-turn { to { transform: rotate(360deg); } }
+@keyframes bloom-breathe { from { transform: scale(.9); } to { transform: scale(1.06); } }
+
+@media (max-width: 900px) { .bloom { display: none; } }
+@media (max-width: 560px) { .home-hero { padding: 22px 20px; } }
+
 /* ------------------------------------------------------------------ hero */
 
 .hero {
@@ -45,7 +97,9 @@
   border-radius: var(--r-xl);
   overflow: hidden;
   isolation: isolate;
-  background: var(--surface);
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
 }
 .hero::before {
   content: "";
@@ -68,12 +122,14 @@
 }
 
 .hero-art {
-  width: 196px;
-  height: 196px;
+  width: 200px;
+  height: 200px;
   flex: none;
   border-radius: var(--r-md);
-  box-shadow: var(--sh-3);
+  box-shadow: var(--sh-3), 0 0 60px -18px rgb(var(--hero-rgb, var(--accent-rgb)) / .7);
+  transition: transform var(--dur-3) var(--ease);
 }
+.hero:hover .hero-art { transform: translateY(-3px) scale(1.012); }
 .hero-art.round { border-radius: var(--r-full); }
 .hero-artist .hero-art { width: 168px; height: 168px; }
 
@@ -186,11 +242,13 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 12px 14px;
+  padding: 13px 15px;
   border-radius: var(--r-md);
   background: var(--surface-hi);
   box-shadow: inset 0 0 0 1px var(--line);
+  transition: background var(--dur-2) var(--ease);
 }
+.settings-row:hover { background: rgb(var(--surface-3-rgb) / .5); }
 .settings-ico {
   display: grid;
   place-items: center;
@@ -220,7 +278,8 @@
 .np-empty { padding-top: 80px; }
 
 /* The spectrum sits inside the artwork rather than claiming a row of its own,
-   so the panel looks the same whether or not anything is playing. */
+   so the panel looks the same whether or not anything is playing. The canvas
+   itself is styled in visualizer.css, next to the other two. */
 .np-stage { position: relative; will-change: transform; }
 
 .np-art {
@@ -230,18 +289,19 @@
   box-shadow: var(--sh-3);
 }
 
-.np-viz {
+/* A ring of the album's own colour, breathing with the level the analyser
+   reports — set as a custom property by queue.js once per frame. */
+.np-stage::after {
+  content: "";
   position: absolute;
-  left: 6px; bottom: 6px;
-  /* An absolutely positioned <canvas> is a replaced element: with width:auto it
-     takes its intrinsic (attribute) size and ignores `right`, so be explicit. */
-  width: calc(100% - 12px);
-  height: 32%;
+  inset: -10px;
+  border-radius: calc(var(--r-lg) + 10px);
   pointer-events: none;
-  /* A soft scrim so the bars read against pale artwork too. */
-  background: linear-gradient(to top, rgb(0 0 0 / .38), transparent 78%);
-  border-radius: 0 0 calc(var(--r-lg) - 4px) calc(var(--r-lg) - 4px);
+  box-shadow: 0 0 60px -6px rgb(var(--accent-rgb) / calc(.18 + var(--viz-level, 0) * .7));
+  opacity: 0;
+  transition: opacity var(--dur-3) var(--ease);
 }
+.np.is-playing .np-stage::after { opacity: 1; }
 
 .np-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .np-title { font-size: 18px; letter-spacing: -.022em; overflow-wrap: anywhere; }

@@ -15,6 +15,7 @@ import {
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
 import { enter } from './motion.js';
+import { MODES, isMode } from './visualizer.js';
 
 const ROW_H = 56;
 
@@ -183,6 +184,40 @@ function shelf(title, items, makeCard, { seeAll } = {}) {
   return wrap;
 }
 
+/* ------------------------------------------------------------------ flourish */
+
+/**
+ * The vector on the home header: 56 spokes and two rings, laid out by hand
+ * rather than drawn by hand. Generated geometry means it scales to any size,
+ * takes the accent colour with it, and costs one element and no requests.
+ */
+function soundBloom() {
+  const R = 110, spokes = 56;
+  let d = '';
+  for (let i = 0; i < spokes; i++) {
+    const angle = (i / spokes) * Math.PI * 2;
+    const wobble = Math.sin(i * 0.72) * 0.5 + Math.sin(i * 0.23 + 1.7) * 0.5;
+    const inner = 52 + wobble * 5;
+    const len = 12 + Math.abs(Math.sin(i * 0.9 + 0.6)) * 30;
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    d += `M${(R + cos * inner).toFixed(2)} ${(R + sin * inner).toFixed(2)}` +
+         `L${(R + cos * (inner + len)).toFixed(2)} ${(R + sin * (inner + len)).toFixed(2)}`;
+  }
+  const node = el('div', { class: 'bloom', 'aria-hidden': 'true' });
+  node.innerHTML =
+    `<svg viewBox="0 0 220 220" fill="none">
+       <circle class="bloom-ring" cx="110" cy="110" r="46"/>
+       <circle class="bloom-ring bloom-ring-2" cx="110" cy="110" r="96"/>
+       <g class="bloom-spokes"><path d="${d}"/></g>
+       <g class="bloom-core">
+         <rect x="98" y="98" width="5" height="24" rx="2.5"/>
+         <rect x="107" y="90" width="5" height="40" rx="2.5"/>
+         <rect x="116" y="100" width="5" height="20" rx="2.5"/>
+       </g>
+     </svg>`;
+  return node;
+}
+
 /* ------------------------------------------------------------------ HOME */
 
 function viewHome(host) {
@@ -201,11 +236,30 @@ function viewHome(host) {
     return () => {};
   }
 
-  const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: greeting }),
-    el('h1', { class: 'page-title', text: 'Your library' }),
-    el('p', { class: 'page-sub', text:
-      `${fmtCount(total, 'track')} · ${fmtCount(lib.state.albums.length, 'album')} · ${fmtCount(lib.state.artists.length, 'artist')}` }));
+  const all = lib.allTracks();
+  const recentTrack = lib.recentTracks()[0];
+
+  const head = el('header', { class: 'home-hero' },
+    el('div', { class: 'home-hero-text' },
+      el('p', { class: 'eyebrow', text: greeting }),
+      el('h1', { class: 'page-title grad-text', text: 'Your library' }),
+      el('p', { class: 'page-sub', text:
+        `${fmtCount(total, 'track')} · ${fmtCount(lib.state.albums.length, 'album')} · ${fmtCount(lib.state.artists.length, 'artist')} · ${fmtTotal(all.reduce((n, t) => n + (t.duration || 0), 0))}` }),
+      el('div', { class: 'hero-actions' },
+        el('button', {
+          class: 'btn primary', html: ico('shuffle') + '<span>Shuffle everything</span>',
+          onclick: () => shuffleAll(all, { type: 'all', label: 'Your library' }),
+        }),
+        recentTrack ? el('button', {
+          class: 'btn ghost', html: ico('play') + '<span>Resume</span>',
+          title: recentTrack.title,
+          onclick: () => playAll(lib.recentTracks(), 0, { type: 'recent', label: 'Recently played' }),
+        }) : null,
+        el('button', {
+          class: 'btn ghost', html: ico('expand') + '<span>Visualiser</span>',
+          onclick: () => document.dispatchEvent(new CustomEvent('sonora:stage')),
+        }))),
+    soundBloom());
   frag.appendChild(head);
 
   const recent = lib.recentAlbums(10);
@@ -329,9 +383,11 @@ function viewAlbum(host, key) {
     onMenu: (i, anchor, event) => menu(trackMenu([album.tracks[i]], { origin }), { anchor, event }),
   });
 
+  // Asked once, not once per track: `some` inside the loop made this quadratic.
+  const multiDisc = album.tracks.some((t) => t.disc > 1);
   let discNo = 0;
   album.tracks.forEach((t, i) => {
-    if (album.tracks.some((x) => x.disc > 1) && t.disc !== discNo) {
+    if (multiDisc && t.disc !== discNo) {
       discNo = t.disc;
       list.appendChild(el('div', { class: 'disc-head', text: `Disc ${discNo}` }));
     }
@@ -697,7 +753,35 @@ function viewSettings(host) {
       el('div', { class: 'settings-note', text: 'Tint the interface with the current album’s colour' })),
     el('div', { class: 'settings-actions' }, toggleSwitch('accent', true)));
   appearance.appendChild(accentRow);
+
+  const backdropRow = el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('sparkle') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Motion backdrop' }),
+      el('div', { class: 'settings-note', text: 'The 3D depth field behind the interface, drawn on the GPU' })),
+    el('div', { class: 'settings-actions' }, toggleSwitch('backdrop', true)));
+  appearance.appendChild(backdropRow);
   host.appendChild(appearance);
+
+  /* --- visualiser --- */
+  const viz = el('section', { class: 'block' }, sectionHead('Visualiser'));
+  viz.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('wave') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Style' }),
+      el('div', { class: 'settings-note', text: 'How the spectrum is drawn, everywhere it appears' })),
+    el('div', { class: 'settings-actions' }, vizSwitch())));
+  viz.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('expand') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Immersive view' }),
+      el('div', { class: 'settings-note', text: 'Full-screen artwork and spectrum — press V at any time' })),
+    el('div', { class: 'settings-actions' },
+      el('button', {
+        class: 'btn ghost sm', html: ico('play') + '<span>Open</span>',
+        onclick: () => document.dispatchEvent(new CustomEvent('sonora:stage')),
+      }))));
+  host.appendChild(viz);
 
   /* --- storage --- */
   const storage = el('section', { class: 'block' }, sectionHead('Storage'));
@@ -725,10 +809,11 @@ function viewSettings(host) {
   const about = el('section', { class: 'block about' },
     sectionHead('About'),
     el('p', { class: 'muted', text: 'Sonora plays audio files from this computer. Files are read directly by the browser — nothing is uploaded, and the library index lives in local storage on this device.' }),
-    el('p', { class: 'muted small', text: 'Shortcuts: Space play/pause · ←/→ seek · ↑/↓ volume · N next · P previous · S shuffle · R repeat · / search · Q queue' }));
+    el('p', { class: 'muted small', text: 'Every audio container is indexed and tagged — MP3, M4A/AAC, FLAC, Ogg/Opus, WAV, AIFF, WebM/Matroska and the rest. Anything this browser has no decoder for is still catalogued, and says so on its row.' }),
+    el('p', { class: 'muted small', text: 'Shortcuts: Space play/pause · ←/→ seek · ↑/↓ volume · N next · P previous · S shuffle · R repeat · V visualiser · / search · Q queue' }));
   host.appendChild(about);
 
-  enter([head, folders, appearance, storage, about], { each: 40, y: 12 });
+  enter([head, folders, appearance, viz, storage, about], { each: 40, y: 12 });
   const off = lib.events.on('roots', paintRoots);
   return () => off();
 }
@@ -744,6 +829,26 @@ function themeSwitch() {
         for (const b of wrap.children) b.classList.remove('is-on');
         e.currentTarget.classList.add('is-on');
         document.dispatchEvent(new CustomEvent('sonora:theme', { detail: value }));
+      },
+    }));
+  }
+  return wrap;
+}
+
+/** Picks the visualiser style every canvas in the app reads from. */
+function vizSwitch() {
+  const wrap = el('div', { class: 'segmented' });
+  let current = 'bars';
+  try { const v = localStorage.getItem('sonora:viz'); if (isMode(v)) current = v; } catch { /* private mode */ }
+  for (const m of MODES) {
+    wrap.appendChild(el('button', {
+      class: 'seg' + (current === m.id ? ' is-on' : ''),
+      text: m.label,
+      onclick: (e) => {
+        for (const b of wrap.children) b.classList.remove('is-on');
+        e.currentTarget.classList.add('is-on');
+        try { localStorage.setItem('sonora:viz', m.id); } catch { /* private mode */ }
+        document.dispatchEvent(new CustomEvent('sonora:viz-mode', { detail: m.id }));
       },
     }));
   }

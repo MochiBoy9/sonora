@@ -9,10 +9,13 @@ import { el, ico, fmtTime, clamp } from './util.js';
 import * as player from './player.js';
 import * as lib from './library.js';
 import { paintArt, menu, trackMenu, toast } from './ui.js';
+import { createVisualizer } from './visualizer.js';
+import { storedMode } from './stage.js';
 import { tick, draggable, animate, spring, ease } from './motion.js';
 
 export function mountPlayerBar(host) {
   host.innerHTML = `
+    <canvas class="pb-viz" aria-hidden="true"></canvas>
     <div class="pb-now">
       <div class="art art-pb"><img class="art-img" alt="" decoding="async"></div>
       <div class="pb-text">
@@ -45,6 +48,7 @@ export function mountPlayerBar(host) {
     </div>
 
     <div class="pb-right">
+      <button class="icon-btn pb-stage" title="Visualiser (V)" aria-label="Open visualiser">${ico('expand')}</button>
       <button class="icon-btn pb-queue" title="Queue (Q)" aria-label="Queue">${ico('queue')}</button>
       <div class="pb-volume">
         <button class="icon-btn pb-mute" title="Mute (M)" aria-label="Mute">${ico('volume')}${ico('volume-off')}</button>
@@ -88,11 +92,31 @@ export function mountPlayerBar(host) {
     toast(player.state.repeat === 'off' ? 'Repeat off' : player.state.repeat === 'all' ? 'Repeat all' : 'Repeat one');
   });
   q('.pb-queue').addEventListener('click', () => document.dispatchEvent(new CustomEvent('sonora:toggle-queue')));
+  q('.pb-stage').addEventListener('click', () => document.dispatchEvent(new CustomEvent('sonora:stage')));
   q('.pb-mute').addEventListener('click', () => player.toggleMute());
   q('.pb-more').addEventListener('click', (e) => {
     const t = player.state.current;
     if (t) menu(trackMenu([t]), { anchor: e.currentTarget });
   });
+
+  /* ------------------------------------------------------------ ribbon */
+
+  // A hairline spectrum along the top edge of the bar. It shares the same
+  // per-frame reading of the analyser as every other visualiser, so it is very
+  // nearly free, and it fades out entirely when nothing is playing.
+  const ribbon = createVisualizer(q('.pb-viz'), {
+    mode: 'bars',
+    bars: 72,
+    intensity: 0.9,
+    idleShimmer: false,
+    visible: () => player.state.playing,
+  });
+  document.addEventListener('sonora:viz-mode', (e) => {
+    // The ribbon only has room for bars; wave is the one other mode that reads
+    // at 24 pixels tall.
+    ribbon.setMode(e.detail === 'wave' ? 'wave' : 'bars');
+  });
+  if (storedMode() === 'wave') ribbon.setMode('wave');
 
   /* ------------------------------------------------------------ seeking */
 
@@ -160,7 +184,7 @@ export function mountPlayerBar(host) {
   }
 
   let bufferedAt = 0;
-  tick((dt, now) => {
+  const frame = (dt, now) => {
     if (!player.state.current) return;
     if (!scrubbing) {
       const d = player.state.duration || 0;
@@ -172,7 +196,20 @@ export function mountPlayerBar(host) {
       const d = player.state.duration || 0;
       buffer.style.transform = `scaleX(${d ? clamp(player.buffered() / d, 0, 1) : 0})`;
     }
-  });
+  };
+
+  // A paused player has a playhead that is not moving, so there is nothing for
+  // a frame callback to do: unregister it and let the shared rAF loop stop.
+  let stopFrame = null;
+  function syncTicker() {
+    const wanted = player.state.playing || player.state.loading;
+    if (wanted && !stopFrame) stopFrame = tick(frame);
+    else if (!wanted && stopFrame) {
+      stopFrame();
+      stopFrame = null;
+      frame(0, performance.now());                    // one last, accurate paint
+    }
+  }
 
   /* ------------------------------------------------------------ binding */
 
@@ -218,8 +255,8 @@ export function mountPlayerBar(host) {
     if (d) durationEl.textContent = fmtTime(d);
   }
 
-  player.events.on('track', paintTrack);
-  player.events.on('state', () => { paintState(); paintTrack(); });
+  player.events.on('track', () => { paintTrack(); ribbon.kick(); });
+  player.events.on('state', () => { paintState(); paintTrack(); syncTicker(); });
   player.events.on('queue', paintState);
   player.events.on('volume', paintVolume);
   lib.events.on('art', () => { if (player.state.current) paintArt(art, player.state.current.albumKey); });
@@ -227,4 +264,5 @@ export function mountPlayerBar(host) {
   paintTrack();
   paintState();
   paintVolume();
+  syncTicker();
 }

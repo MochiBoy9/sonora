@@ -1,0 +1,165 @@
+/* intro.css — the welcome sequence.
+ *
+ * Loaded second, right after the tokens, so the intro is styled by the time
+ * the first frame is painted. Everything animated here is transform, opacity
+ * or a stroke offset, all of which stay off the layout thread.
+ */
+
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  /* Translucent, so the 3D backdrop is already playing behind the welcome —
+     the app arrives into a room that was there before it. */
+  background:
+    radial-gradient(120% 90% at 50% 8%, rgb(var(--accent-rgb) / .20), transparent 62%),
+    radial-gradient(90% 70% at 50% 110%, rgb(var(--accent-rgb) / .10), transparent 60%),
+    rgb(var(--bg-rgb) / .80);
+  will-change: opacity, transform, filter;
+  /* If the modules never load, the intro is not allowed to hold the app
+     hostage: it leaves on its own after eight seconds. */
+  animation: intro-failsafe 600ms linear 8s forwards;
+}
+
+@keyframes intro-failsafe { to { opacity: 0; visibility: hidden; pointer-events: none; } }
+
+.intro-stage {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  text-align: center;
+  will-change: transform, opacity;
+}
+
+/* ------------------------------------------------------------------ mark */
+
+.intro-logo {
+  width: 132px;
+  height: 132px;
+  margin-bottom: 22px;
+  overflow: visible;
+  filter: drop-shadow(0 18px 40px rgb(var(--accent-rgb) / .38));
+}
+
+.intro-ring {
+  fill: none;
+  stroke: rgb(var(--accent-rgb) / .85);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  transform-origin: center;
+  transform: rotate(-90deg);
+}
+.intro-ring-2 {
+  stroke: rgb(var(--accent-rgb) / .38);
+  stroke-width: 1;
+  stroke-dasharray: 3 9;
+  animation: intro-spin 14s linear infinite;
+}
+
+@keyframes intro-spin {
+  from { transform: rotate(-90deg); }
+  to   { transform: rotate(270deg); }
+}
+
+.intro-bars rect {
+  fill: var(--accent);
+  transform-box: fill-box;
+  transform-origin: bottom;
+}
+.intro-bars rect:nth-child(2) { fill: rgb(var(--accent-rgb) / .82); }
+.intro-bars rect:nth-child(4) { fill: rgb(var(--accent-rgb) / .68); }
+
+/* Once the sequence has drawn itself, the bars keep breathing until the app
+   takes over — a still logo in front of a loading app looks like a stall. */
+.intro:not(.is-still) .intro-bars rect {
+  animation: intro-pulse 1.6s var(--ease-soft) infinite alternate;
+  animation-delay: calc(1.1s + var(--i, 0) * .12s);
+}
+.intro-bars rect:nth-child(1) { --i: 0; }
+.intro-bars rect:nth-child(2) { --i: 1; }
+.intro-bars rect:nth-child(3) { --i: 2; }
+.intro-bars rect:nth-child(4) { --i: 3; }
+
+@keyframes intro-pulse {
+  from { transform: scaleY(.72); }
+  to   { transform: scaleY(1.06); }
+}
+
+/* ------------------------------------------------------------------ words */
+
+.intro-eyebrow {
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 680;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  opacity: .9;
+}
+
+.intro-word {
+  display: flex;
+  gap: .02em;
+  font-size: clamp(42px, 8vw, 68px);
+  font-weight: 700;
+  letter-spacing: -.045em;
+  line-height: 1.05;
+  margin: 4px 0 10px;
+}
+.intro-word span {
+  display: inline-block;
+  will-change: transform, opacity, filter;
+  background: linear-gradient(172deg, var(--text) 30%, rgb(var(--accent-rgb)) 145%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.intro-tag {
+  color: var(--text-2);
+  font-size: 14.5px;
+  max-width: 34ch;
+}
+
+.intro-meter {
+  width: 168px;
+  height: 2px;
+  margin-top: 26px;
+  border-radius: var(--r-full);
+  background: var(--line);
+  overflow: hidden;
+}
+.intro-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / .35), var(--accent));
+  transform-origin: left center;
+  transform: scaleX(0);
+  will-change: transform;
+}
+
+.intro-hint {
+  margin-top: 14px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  opacity: 0;
+}
+
+/* Reduced motion: the same composition, arrived at rather than performed. */
+.intro.is-still .intro-ring,
+.intro.is-still .intro-bars rect,
+.intro.is-still .intro-word span,
+.intro.is-still .intro-tag { opacity: 1; }
+.intro.is-still .intro-meter i { transform: scaleX(1); }
+
+.intro.is-leaving { pointer-events: none; }
+
+@media (max-width: 560px) {
+  .intro-logo { width: 104px; height: 104px; margin-bottom: 16px; }
+  .intro-tag { font-size: 13.5px; }
+}

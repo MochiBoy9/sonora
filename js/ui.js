@@ -1,6 +1,6 @@
 /* ui.js — shared widgets: artwork, track rows, menus, dialogs, toasts. */
 
-import { el, ico, fmtTime, clamp } from './util.js';
+import { el, ico, fmtTime, clamp, canDecode } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { animate, ease, enter, spring } from './motion.js';
@@ -94,6 +94,8 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
     const playing = player.state.current && player.state.current.id === track.id;
     row.classList.toggle('is-playing', !!playing);
     row.classList.toggle('is-missing', !lib.isAvailable(track.id));
+    // Either a format nothing decodes, or one this browser proved it couldn't.
+    row.classList.toggle('is-unsupported', !!track.undecodable || !canDecode(track.name || ''));
 
     const idx = row.querySelector('.trow-index .n');
     if (idx) idx.textContent = index + 1;

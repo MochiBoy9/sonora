@@ -1,0 +1,8 @@
+# Sonora ships with no dependencies; playwright is installed only to run the
+# browser tests in tools/, and none of that belongs in the repository.
+node_modules/
+package.json
+package-lock.json
+
+# test artefacts
+shots/

@@ -13,14 +13,18 @@ import { chromium } from 'playwright';
 const LIB = process.argv[2];
 const BASE = 'http://127.0.0.1:8123/index.html';
 
-const browser = await chromium.launch({ args: ['--mute-audio'] });
+const browser = await chromium.launch({
+  executablePath: process.env.SONORA_CHROMIUM || undefined,
+  args: ['--mute-audio'],
+});
 const ctx = await browser.newContext({ viewport: { width: 1460, height: 900 } });
 const page = await ctx.newPage();
 page.on('pageerror', (e) => console.log('  UNCAUGHT', e.message));
 
 await page.addInitScript(() => { delete window.showDirectoryPicker; });
 await page.goto(BASE, { waitUntil: 'networkidle' });
-await page.waitForSelector('body.is-ready');
+await page.waitForSelector('body.is-ready', { timeout: 20000 });
+await page.waitForSelector('#intro', { state: 'detached', timeout: 20000 });
 
 /* ---------------------------------------------------------------- import */
 
@@ -147,7 +151,8 @@ await page.evaluate(() => { location.hash = '#/home'; });
 await page.waitForTimeout(200);
 const t1 = Date.now();
 await page.reload({ waitUntil: 'domcontentloaded' });
-await page.waitForSelector('body.is-ready');
+// Deliberately not waiting on body.is-ready: the library is painted behind the
+// intro, and this is meant to measure the library, not the welcome sequence.
 await page.waitForFunction(() => (document.querySelector('.page-sub')?.textContent || '').includes('track'),
                            null, { timeout: 30000 });
 console.log(`cold start  ${Date.now() - t1}ms to a painted library from IndexedDB`);

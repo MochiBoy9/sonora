@@ -13,7 +13,7 @@
  */
 
 import * as db from './db.js';
-import { Emitter, LRU, hash32, albumKeyOf, norm, isAudio, sortName, cmpText, idle } from './util.js';
+import { Emitter, LRU, hash32, albumKeyOf, norm, isAudio, isAudioFile, sortName, cmpText, idle } from './util.js';
 
 export const events = new Emitter();
 
@@ -320,7 +320,9 @@ export async function addDirectory() {
 
 /** Universal path: a folder chosen through <input webkitdirectory>. */
 export async function addFileList(fileList, label) {
-  const files = Array.from(fileList).filter((f) => isAudio(f.name));
+  // isAudioFile, not isAudio: a File knows its own type, so a container with an
+  // unfamiliar suffix still counts if the OS calls it audio.
+  const files = Array.from(fileList).filter(isAudioFile);
   if (!files.length) return null;
 
   const first = files[0].webkitRelativePath || '';
@@ -381,7 +383,7 @@ export async function addDataTransfer(dt) {
     }
   }
 
-  const files = Array.from(dt.files || []).filter((f) => isAudio(f.name));
+  const files = Array.from(dt.files || []).filter(isAudioFile);
   if (files.length) return addFileList(files, 'Dropped files');
   return null;
 }

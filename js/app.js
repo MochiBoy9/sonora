@@ -1,6 +1,6 @@
 /* app.js — shell: routing, navigation, search, shortcuts, theming, ingestion. */
 
-import { $, el, ico, debounce, clamp } from './util.js';
+import { $, el, ico, debounce, clamp, acceptAttr, formatName } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { renderView } from './views.js';
@@ -8,6 +8,9 @@ import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
 import { toast, closeMenu, promptDialog } from './ui.js';
 import { animate, ease, reduceMotion } from './motion.js';
+import { startIntro } from './intro.js';
+import { mountBackdrop } from './backdrop.js';
+import { toggleStage, isOpen as stageOpen } from './stage.js';
 
 const NAV = [
   { route: 'home', label: 'Home', icon: 'home' },
@@ -260,7 +263,7 @@ async function addMusic() {
     return;
   }
   if (!fileInput) {
-    fileInput = el('input', { type: 'file', multiple: true, accept: 'audio/*', style: { display: 'none' } });
+    fileInput = el('input', { type: 'file', multiple: true, accept: acceptAttr(), style: { display: 'none' } });
     fileInput.setAttribute('webkitdirectory', '');
     fileInput.setAttribute('directory', '');
     fileInput.addEventListener('change', async () => {
@@ -388,6 +391,7 @@ function bindKeys() {
       case 'r': case 'R': player.cycleRepeat(); toast('Repeat: ' + player.state.repeat); break;
       case 'm': case 'M': player.toggleMute(); break;
       case 'q': case 'Q': toggleQueuePane(); break;
+      case 'v': case 'V': toggleStage(backdrop); break;
       default: break;
     }
   });
@@ -414,6 +418,11 @@ async function boot() {
   applyTheme(localStorage.getItem('sonora:theme') || 'system');
   document.documentElement.style.setProperty('--accent-rgb', DEFAULT_ACCENT);
 
+  // The intro is already on screen (it ships in the HTML); this starts its
+  // timeline and hands back a promise for the earliest moment it may leave.
+  const intro = startIntro();
+  mountAppBackdrop();
+
   buildSidebar();
   buildTopbar();
   buildDropZone();
@@ -427,7 +436,11 @@ async function boot() {
   document.addEventListener('sonora:add', addMusic);
   document.addEventListener('sonora:toggle-queue', () => toggleQueuePane());
   document.addEventListener('sonora:theme', (e) => applyTheme(e.detail));
-  document.addEventListener('sonora:setting', (e) => { if (e.detail.name === 'accent') applyAccent(); });
+  document.addEventListener('sonora:stage', () => toggleStage(backdrop));
+  document.addEventListener('sonora:setting', (e) => {
+    if (e.detail.name === 'accent') applyAccent();
+    if (e.detail.name === 'backdrop') backdrop?.setEnabled(e.detail.value);
+  });
 
   addEventListener('hashchange', navigate);
   document.addEventListener('sonora:refresh', () => navigate());
@@ -443,7 +456,11 @@ async function boot() {
   player.events.on('unavailable', (t) => toast(`Can't reach “${t.title}” — reconnect its folder`, {
     action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
   }));
-  player.events.on('error', (t) => toast(`Couldn't play “${t.title}”`));
+  player.events.on('error', (t) => toast(t.undecodable
+    ? `This browser can't decode ${formatName(t.name || '')} — “${t.title}” was skipped`
+    : `Couldn't play “${t.title}”`, { duration: 4200 }));
+  player.events.on('unsupported', (t) => toast(
+    `No browser decodes ${formatName(t.name || '')} — “${t.title}” was skipped`, { duration: 4200 }));
   lib.events.on('art', applyAccent);
 
   await player.init();
@@ -468,9 +485,36 @@ async function boot() {
     });
   });
 
+  // The library is painted and the routes are live; now wait for the intro to
+  // finish saying hello (it may already have been skipped) and hand over.
+  await intro.ready;
   document.body.classList.add('is-ready');
-  animate($('#app'), { opacity: [0, 1] }, { duration: 420, easing: ease.out });
+  await intro.dismiss();
+  animate($('#app'), { opacity: [0, 1], transform: ['scale(.985)', 'none'] },
+          { duration: 620, easing: ease.out });
 }
+
+/* ------------------------------------------------------------------ backdrop */
+
+let backdrop = null;
+
+function mountAppBackdrop() {
+  const on = localStorage.getItem('sonora:backdrop') !== '0';
+  backdrop = mountBackdrop(document.body, { enabled: on });
+  if (!backdrop.supported) {
+    // No WebGL: the CSS gradients underneath are the whole design, and they
+    // were always there.
+    document.documentElement.classList.add('no-backdrop');
+    return;
+  }
+  backdrop.setEnabled(on);
+  // Nothing to draw over while the stage is closing, and nothing to draw at
+  // all in a background tab.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) backdrop.setIntensity(stageOpen() ? 1.9 : 1);
+  });
+}
+
 
 if (document.readyState === 'loading') addEventListener('DOMContentLoaded', boot);
 else boot();

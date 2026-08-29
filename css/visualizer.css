@@ -1,0 +1,217 @@
+/* visualizer.css — the spectrum, wherever it appears.
+ *
+ * Three places: inside the now-playing artwork, as a hairline ribbon along the
+ * top of the player bar, and full-bleed on the immersive stage.
+ */
+
+/* ------------------------------------------------------------------ pane */
+
+.np-viz {
+  position: absolute;
+  left: 8px; bottom: 8px;
+  /* An absolutely positioned <canvas> is a replaced element: with width:auto it
+     takes its intrinsic (attribute) size and ignores `right`, so be explicit. */
+  width: calc(100% - 16px);
+  height: 38%;
+  pointer-events: none;
+  border-radius: 0 0 calc(var(--r-lg) - 5px) calc(var(--r-lg) - 5px);
+  /* A soft scrim so the bars read against pale artwork too. */
+  background: linear-gradient(to top, rgb(0 0 0 / .42), transparent 80%);
+  opacity: .92;
+  transition: opacity var(--dur-3) var(--ease);
+}
+.np:not(.is-playing) .np-viz { opacity: .55; }
+
+/* ------------------------------------------------------------------ ribbon */
+
+/* The thin spectrum that rides the top edge of the transport bar. It is
+   decoration, so it never takes a pointer event and never affects layout. */
+.pb-viz {
+  position: absolute;
+  left: 0; right: 0;
+  top: -22px;
+  width: 100%;
+  height: 24px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-3) var(--ease);
+  mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+}
+.playerbar.is-playing .pb-viz { opacity: .55; }
+
+/* ------------------------------------------------------------------ stage */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  z-index: 800;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgb(var(--accent-rgb) / .16), transparent 60%),
+    rgb(var(--bg-rgb) / .93);
+  backdrop-filter: blur(32px) saturate(140%);
+  -webkit-backdrop-filter: blur(32px) saturate(140%);
+  will-change: opacity, transform;
+}
+
+/* While the stage is up the 3D backdrop is moved inside it, so it plays behind
+   the artwork rather than behind a sheet of frosted glass. */
+.stage > .backdrop { z-index: 0; }
+
+.stage-viz {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.stage-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  /* Enough to keep the type readable over anything the visualiser draws, and
+     no more: the bars live down here too. */
+  background:
+    radial-gradient(58% 46% at 50% 44%, rgb(var(--bg-rgb) / .58), transparent 74%),
+    linear-gradient(to bottom, rgb(var(--bg-rgb) / .45), transparent 24%, transparent 74%, rgb(var(--bg-rgb) / .34));
+}
+
+.stage-top,
+.stage-body,
+.stage-foot { position: relative; z-index: 2; }
+
+.stage-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 22px;
+  transition: opacity var(--dur-3) var(--ease), transform var(--dur-3) var(--ease);
+}
+
+.stage-modes {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--r-full);
+  background: var(--glass-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+.stage-mode {
+  padding: 6px 14px;
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: color var(--dur-1) linear, background var(--dur-2) var(--ease);
+}
+.stage-mode:hover { color: var(--text-2); }
+.stage-mode.is-on {
+  background: rgb(var(--accent-rgb) / .18);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+.stage-close {
+  background: var(--glass-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+
+.stage-body {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 30px;
+  padding: 0 24px;
+  min-height: 0;
+}
+
+.stage-art-wrap {
+  perspective: 1100px;
+  width: min(42vh, 360px);
+  aspect-ratio: 1;
+  will-change: transform, opacity;
+}
+
+.stage-art {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-xl);
+  box-shadow:
+    0 40px 90px -30px rgb(0 0 0 / .85),
+    0 0 0 1px rgb(255 255 255 / .07),
+    0 0 70px -12px rgb(var(--accent-rgb) / .45);
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.stage-meta { text-align: center; max-width: 60ch; }
+.stage-title {
+  font-size: clamp(24px, 3.4vw, 40px);
+  letter-spacing: -.03em;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+.stage-artist { margin-top: 8px; color: var(--text); font-size: 15px; font-weight: 580; }
+.stage-album { margin-top: 3px; color: var(--text-3); font-size: 13px; }
+
+.stage-foot {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 10px 6vw 40px;
+  transition: opacity var(--dur-3) var(--ease), transform var(--dur-3) var(--ease);
+}
+
+.stage-scrub {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(720px, 100%);
+}
+.stage-time {
+  min-width: 42px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.stage-scrub .stage-time:last-child { text-align: right; }
+
+.stage-transport { display: flex; align-items: center; gap: 10px; }
+.stage-play {
+  width: 58px; height: 58px;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--sh-glow);
+}
+.stage-play .ico { width: 24px; height: 24px; }
+.stage-play [href$="pause"], .stage.is-playing .stage-play [href$="play"] { display: none; }
+.stage.is-playing .stage-play [href$="pause"] { display: block; }
+
+/* Pointer still, music playing: the controls step aside. */
+.stage.is-idle .stage-top,
+.stage.is-idle .stage-foot { opacity: 0; transform: translateY(8px); }
+.stage.is-idle { cursor: none; }
+
+body.stage-open .app { filter: brightness(.72); }
+
+@media (max-width: 760px) {
+  .stage-body { gap: 20px; }
+  .stage-art-wrap { width: min(34vh, 260px); }
+  .stage-foot { padding: 8px 20px 28px; }
+  .stage-modes { display: none; }
+}
+
+@media (max-height: 560px) {
+  .stage-art-wrap { display: none; }
+}

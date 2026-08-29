@@ -148,10 +148,34 @@ export class Emitter {
 
 /* ---------------------------------------------------------------- files */
 
+/**
+ * Every audio container worth indexing, not just the ones this browser can
+ * decode. A file we cannot play is still worth showing — with its tags, its
+ * artwork and an honest label — rather than pretending it isn't there.
+ */
 export const AUDIO_EXT = new Set([
-  'mp3', 'm4a', 'm4b', 'mp4', 'aac', 'flac', 'ogg', 'oga', 'opus',
-  'wav', 'wave', 'webm', 'weba', 'aiff', 'aif',
+  // mpeg
+  'mp3', 'mp2', 'mpga', 'mpeg',
+  // mp4 family
+  'm4a', 'm4b', 'm4r', 'm4p', 'mp4', 'aac', 'adts',
+  // free formats
+  'flac', 'ogg', 'oga', 'opus', 'spx', 'webm', 'weba', 'mka',
+  // uncompressed
+  'wav', 'wave', 'aiff', 'aif', 'aifc', 'caf', 'au', 'snd', 'pcm',
+  // everything else people actually have on disk
+  'wma', 'amr', '3gp', '3g2', 'ape', 'wv', 'mpc', 'tta', 'dsf', 'dff', 'ra', 'ac3', 'dts',
 ]);
+
+/**
+ * Containers no shipping browser decodes. This is a static list rather than a
+ * `canPlayType` probe on purpose: that method answers for the MIME strings a
+ * media stack happens to register, not for what it can actually decode, and it
+ * says "no" to plenty it plays perfectly well — Chromium denies `audio/aiff`
+ * and then plays AIFF. A wrong "no" hides a playable file, which is worse than
+ * finding out from the decoder, so the only guesses made here are the safe ones
+ * and everything else is learned by trying (see player.js).
+ */
+const UNDECODABLE = new Set(['ape', 'wv', 'mpc', 'tta', 'dsf', 'dff', 'ra', 'wma', 'dts']);
 
 export const ext = (name) => {
   const i = name.lastIndexOf('.');
@@ -159,6 +183,24 @@ export const ext = (name) => {
 };
 
 export const isAudio = (name) => AUDIO_EXT.has(ext(name));
+
+/**
+ * Same question, asked of a real File: the extension decides first, but a file
+ * the OS calls `audio/*` counts even when its suffix is unfamiliar. That is how
+ * "any audio type" ends up meaning any audio type.
+ */
+export const isAudioFile = (file) =>
+  isAudio(file.name || '') || (typeof file.type === 'string' && file.type.startsWith('audio/'));
+
+/** The formats string the file picker offers, so nothing is greyed out. */
+export const acceptAttr = () =>
+  'audio/*,' + [...AUDIO_EXT].map((e) => '.' + e).join(',');
+
+/** Is it worth handing this file to the decoder at all? */
+export const canDecode = (name) => !UNDECODABLE.has(ext(name));
+
+/** "FLAC", "M4A" — the format's name, for saying what went wrong. */
+export const formatName = (name) => (ext(name) || 'audio').toUpperCase();
 
 export function fmtBytes(n) {
   if (!n) return '0 B';

@@ -20,11 +20,11 @@
 .btn .ico { width: 17px; height: 17px; }
 
 .btn.primary {
-  background: var(--accent);
+  background: linear-gradient(160deg, rgb(var(--accent-rgb)), rgb(var(--accent-rgb) / .78));
   color: var(--on-accent);
-  box-shadow: 0 8px 22px -10px var(--accent-glow);
+  box-shadow: 0 10px 26px -12px var(--accent-glow), inset 0 1px 0 rgb(255 255 255 / .22);
 }
-.btn.primary:hover { filter: brightness(1.09); box-shadow: 0 10px 26px -8px var(--accent-glow); }
+.btn.primary:hover { filter: brightness(1.09); box-shadow: 0 12px 30px -10px var(--accent-glow), inset 0 1px 0 rgb(255 255 255 / .28); }
 
 .btn.ghost { background: var(--surface-hi); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
 .btn.ghost:hover { background: var(--surface-3); }
@@ -66,9 +66,9 @@
   display: grid;
   place-items: center;
   border-radius: var(--r-full);
-  background: var(--accent);
+  background: linear-gradient(160deg, rgb(var(--accent-rgb)), rgb(var(--accent-rgb) / .74));
   color: var(--on-accent);
-  box-shadow: 0 10px 26px -8px var(--accent-glow);
+  box-shadow: 0 12px 28px -10px var(--accent-glow), inset 0 1px 0 rgb(255 255 255 / .25);
   will-change: transform;
   transition: filter var(--dur-1) linear, box-shadow var(--dur-2) var(--ease);
 }
@@ -184,6 +184,10 @@
 .trow.is-playing .trow-index .n { display: none; }
 .trow.is-missing { opacity: .42; }
 .trow.is-missing .trow-title::after { content: " · offline"; color: var(--text-3); font-size: 11px; }
+/* Indexed, tagged, and honest about the fact that this browser has no decoder
+   for it — better than a row that simply refuses to play. */
+.trow.is-unsupported { opacity: .58; }
+.trow.is-unsupported .trow-title::after { content: " · no decoder"; color: var(--text-3); font-size: 11px; }
 
 .thead {
   height: 34px;
@@ -198,11 +202,11 @@
   position: sticky;
   top: 0;
   z-index: 4;
-  background: rgb(from var(--bg) r g b / .86);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: rgb(var(--bg-rgb) / .82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
-.thead:hover { background: rgb(from var(--bg) r g b / .86); }
+.thead:hover { background: rgb(var(--bg-rgb) / .82); }
 .thead .sortable {
   color: inherit;
   font: inherit;
@@ -256,16 +260,25 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   padding: 10px;
   border-radius: var(--r-md);
   cursor: pointer;
+  /* A shallow perspective on the card itself, so the artwork inside can lift
+     off the page rather than simply getting bigger. */
+  perspective: 900px;
   transition: background var(--dur-2) var(--ease), transform var(--dur-2) var(--ease);
   will-change: transform;
 }
-.card:hover { background: var(--surface-hi); transform: translateY(-3px); }
+.card:hover { background: var(--surface-hi); transform: translateY(-4px); }
 .card:active { transform: translateY(-1px) scale(.99); }
 
-.card-art { position: relative; margin-bottom: 8px; }
-.card-art .art { box-shadow: var(--sh-2); transition: box-shadow var(--dur-3) var(--ease); }
-.card:hover .card-art .art { box-shadow: var(--sh-3); }
-.card:hover .art-img.is-loaded { transform: scale(1.045); }
+.card-art { position: relative; margin-bottom: 8px; transform-style: preserve-3d; }
+.card-art .art {
+  box-shadow: var(--sh-2);
+  transition: box-shadow var(--dur-3) var(--ease), transform var(--dur-3) var(--ease);
+}
+.card:hover .card-art .art {
+  box-shadow: var(--sh-3), 0 0 34px -14px rgb(var(--accent-rgb) / .5);
+  transform: translate3d(0, 0, 26px) rotateX(4deg);
+}
+.card:hover .art-img.is-loaded { transform: scale(1.05); }
 
 .card-fab {
   position: absolute;
@@ -434,14 +447,14 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 
 .menu {
   position: fixed;
-  z-index: 200;
+  z-index: 810;
   min-width: 216px;
   padding: 6px;
   border-radius: var(--r-md);
-  background: var(--surface-2);
+  background: var(--glass-2);
   box-shadow: var(--sh-3), inset 0 0 0 1px var(--line-2);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
   will-change: transform, opacity;
 }
 
@@ -471,7 +484,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .scrim {
   position: fixed;
   inset: 0;
-  z-index: 300;
+  z-index: 820;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -484,8 +497,10 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   width: 100%;
   padding: 22px;
   border-radius: var(--r-lg);
-  background: var(--surface-2);
+  background: var(--glass-2);
   box-shadow: var(--sh-3), inset 0 0 0 1px var(--line-2);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
   will-change: transform, opacity;
 }
 .dialog-title { font-size: 17px; margin-bottom: 12px; }
@@ -540,7 +555,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   left: 50%;
   bottom: calc(var(--player-h) + 18px);
   transform: translateX(-50%);
-  z-index: 400;
+  z-index: 830;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -554,7 +569,9 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   gap: 12px;
   padding: 10px 16px;
   border-radius: var(--r-full);
-  background: var(--surface-3);
+  background: var(--glass-2);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
   color: var(--text);
   font-size: 13px;
   box-shadow: var(--sh-3), inset 0 0 0 1px var(--line-2);
@@ -568,7 +585,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .dropzone {
   position: fixed;
   inset: 0;
-  z-index: 500;
+  z-index: 840;
   display: grid;
   place-items: center;
   background: rgb(0 0 0 / .58);

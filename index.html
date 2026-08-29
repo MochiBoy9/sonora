@@ -11,9 +11,11 @@
 
 <link rel="preload" href="css/base.css" as="style">
 <link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/intro.css">
 <link rel="stylesheet" href="css/layout.css">
 <link rel="stylesheet" href="css/components.css">
 <link rel="stylesheet" href="css/views.css">
+<link rel="stylesheet" href="css/visualizer.css">
 
 <script>
   // Applied before first paint so the app never flashes the wrong theme.
@@ -66,6 +68,9 @@
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20.4 4.4v4.2h-4.2"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.1"/><path d="M12 2.6v2.2M12 19.2v2.2M4.3 4.3l1.6 1.6M18.1 18.1l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.3 19.7l1.6-1.6M18.1 5.9l1.6-1.6"/></symbol>
     <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.6a8.4 8.4 0 0 0 0 16.8c1 0 1.6-.7 1.6-1.5 0-.4-.15-.7-.4-1a1.4 1.4 0 0 1 1-2.4h1.9a4.3 4.3 0 0 0 4.3-4.3c0-4.2-3.7-7.6-8.4-7.6"/><circle cx="8.2" cy="10.4" r="1.15" fill="currentColor" stroke="none"/><circle cx="12" cy="7.6" r="1.15" fill="currentColor" stroke="none"/><circle cx="15.8" cy="10" r="1.15" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9.2V4.8a.8.8 0 0 1 .8-.8h4.4M14.8 4h4.4a.8.8 0 0 1 .8.8v4.4M20 14.8v4.4a.8.8 0 0 1-.8.8h-4.4M9.2 20H4.8a.8.8 0 0 1-.8-.8v-4.4"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h2.2l2-6 3 15 3-12 2.2 6.6 1.6-3.6H21"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3.4 13.9 9l5.6 1.9-5.6 1.9L12 18.4 10.1 12.8 4.5 10.9 10.1 9z"/><path d="M18.4 3.6v3M19.9 5.1h-3"/></symbol>
     <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="6.4" rx="7.2" ry="2.8"/><path d="M4.8 6.4v11.2c0 1.55 3.22 2.8 7.2 2.8s7.2-1.25 7.2-2.8V6.4"/><path d="M19.2 12c0 1.55-3.22 2.8-7.2 2.8S4.8 13.55 4.8 12"/></symbol>
   </defs>
 </svg>
@@ -83,9 +88,27 @@
   <footer class="playerbar" id="playerbar"></footer>
 </div>
 
-<div class="boot" id="boot">
-  <div class="boot-mark">
-    <svg viewBox="0 0 24 24" class="ico"><use href="#i-logo"/></svg>
+<!-- The intro has to exist in the HTML, not be built by a module: it is what
+     covers the gap between first paint and the app being ready to look at.
+     js/intro.js animates it and takes it away; the CSS failsafe removes it on
+     its own if the scripts never arrive. -->
+<div class="intro" id="intro" role="status" aria-label="Sonora is starting">
+  <div class="intro-stage">
+    <svg class="intro-logo" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+      <circle class="intro-ring" cx="60" cy="60" r="47"/>
+      <circle class="intro-ring intro-ring-2" cx="60" cy="60" r="38"/>
+      <g class="intro-bars">
+        <rect x="39" y="58" width="6" height="20" rx="3"/>
+        <rect x="51" y="38" width="6" height="40" rx="3"/>
+        <rect x="63" y="26" width="6" height="52" rx="3"/>
+        <rect x="75" y="50" width="6" height="28" rx="3"/>
+      </g>
+    </svg>
+    <p class="intro-eyebrow">Welcome</p>
+    <h1 class="intro-word" aria-label="Sonora"><span>S</span><span>o</span><span>n</span><span>o</span><span>r</span><span>a</span></h1>
+    <p class="intro-tag">Your music, played from your own disk.</p>
+    <div class="intro-meter"><i></i></div>
+    <p class="intro-hint">Press any key to skip</p>
   </div>
 </div>
 

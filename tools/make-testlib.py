@@ -9,6 +9,11 @@ each format it claims to support:
   WAV   — RIFF LIST/INFO tags, an actual sine tone (decodes)
   M4A   — ftyp/moov with an iTunes ilst including covr (tags only)
   OGG   — Vorbis identification + comment headers (tags only)
+  AIFF  — FORM/COMM/NAME/AUTH plus an embedded ID3 chunk and a real tone
+          (tags and duration always; whether it plays is up to the browser's
+          demuxer, which is the point of testing it)
+  WMA   — an ASF header and nothing else: a container no browser decodes, so the
+          "indexed, tagged, honestly unplayable" path gets exercised too
 
 Usage: python3 tools/make-testlib.py <output-dir>
 """
@@ -216,6 +221,51 @@ def wav_file(tags, seconds, rate=22050, freq=220.0):
     return b'RIFF' + struct.pack('<I', 4 + len(chunks)) + b'WAVE' + chunks
 
 
+# --------------------------------------------------------------------- AIFF
+
+def extended80(value):
+    """IEEE 754 80-bit extended — the only way AIFF will state a sample rate."""
+    if value == 0:
+        return b'\x00' * 10
+    exponent = 0
+    mantissa = float(value)
+    while mantissa >= 1.0:
+        mantissa /= 2.0
+        exponent += 1
+    while mantissa < 0.5:
+        mantissa *= 2.0
+        exponent -= 1
+    # The mantissa carries an explicit integer bit, so the stored exponent is
+    # biased by 16383 and the value is mantissa * 2^(exponent - 16383 - 63).
+    mantissa = int(mantissa * (1 << 63))
+    return struct.pack('>H', exponent + 16383) + struct.pack('>Q', mantissa)
+
+
+def aiff_file(tags, art, seconds, rate=22050, freq=200.0):
+    n = int(seconds * rate)
+    pcm = bytearray()
+    for i in range(n):
+        env = 0.2 * (0.6 + 0.4 * math.sin(2 * math.pi * 0.3 * i / rate))
+        pcm += struct.pack('>h', int(32767 * env * math.sin(2 * math.pi * freq * i / rate)))
+
+    def chunk(kind, payload):
+        pad = b'\x00' if len(payload) % 2 else b''
+        return kind + struct.pack('>I', len(payload)) + payload + pad
+
+    comm = struct.pack('>hIh', 1, n, 16) + extended80(rate)
+    body = chunk(b'COMM', comm)
+    body += chunk(b'NAME', tags['title'].encode('latin-1', 'replace'))
+    body += chunk(b'AUTH', tags['artist'].encode('latin-1', 'replace'))
+    # Everything richer than name and author rides along as an ID3 chunk.
+    body += chunk(b'ID3 ', id3v23({
+        'TIT2': tags['title'], 'TPE1': tags['artist'], 'TALB': tags['album'],
+        'TPE2': tags['artist'], 'TYER': tags['year'], 'TCON': tags['genre'],
+        'TRCK': tags['track'],
+    }, art))
+    body += chunk(b'SSND', struct.pack('>II', 0, 0) + bytes(pcm))
+    return b'FORM' + struct.pack('>I', 4 + len(body)) + b'AIFF' + body
+
+
 # --------------------------------------------------------------------- MP4
 
 def atom(kind, payload):
@@ -315,6 +365,8 @@ ALBUMS = [
      ['Signal Drift', 'Nightbus', 'Refraction', 'Undertow', 'Terminal Blue']),
     ('Cobalt Harbour',   'Analogue Weekend',   2024, 'Electronic',  'ogg',
      ['Analogue Weekend', 'Sunday Static', 'Neon Rain']),
+    ('Wren & Alder',     'Tidal Almanac',      2017, 'Chamber Folk', 'aiff',
+     ['Tidal Almanac', 'Estuary', 'Marram Grass']),
 ]
 
 
@@ -347,6 +399,20 @@ def bulk(root, count):
                 fh.write(data)
             written += 1
     print(f'{written} files across {albums} albums in {root}')
+
+
+# --------------------------------------------------------------- unplayable
+
+ASF_HEADER = bytes([0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11,
+                    0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C])
+
+
+def wma_file(seconds):
+    """An ASF object header and filler. Chromium has no decoder for this, which
+    is the point: the library should still index it, name it from its path and
+    mark the row rather than pretending the file is not there."""
+    body = b'\x00' * int(seconds * 2000)
+    return ASF_HEADER + struct.pack('<QI', len(body) + 30, 1) + b'\x00\x00' + body
 
 
 def main():
@@ -387,6 +453,13 @@ def main():
                 }, seconds, freq=180 + n * 40 + index * 15)
                 path = os.path.join(folder, base + '.wav')
 
+            elif fmt == 'aiff':
+                data = aiff_file({
+                    'title': title, 'artist': artist, 'album': album,
+                    'year': str(year), 'genre': genre, 'track': str(n),
+                }, art, seconds, freq=150 + n * 30 + index * 12)
+                path = os.path.join(folder, base + '.aiff')
+
             elif fmt == 'm4a':
                 data = m4a_file({
                     'title': title, 'artist': artist, 'album': album, 'albumartist': artist,
@@ -404,6 +477,13 @@ def main():
             with open(path, 'wb') as fh:
                 fh.write(data)
             written += 1
+
+    # One container nothing can decode, so the interface has to say so.
+    odd = os.path.join(root, 'Field Notes', 'Unsupported Formats')
+    os.makedirs(odd, exist_ok=True)
+    with open(os.path.join(odd, '01 Cassette Transfer.wma'), 'wb') as fh:
+        fh.write(wma_file(30))
+    written += 1
 
     total = sum(os.path.getsize(os.path.join(dp, f))
                 for dp, _, fs in os.walk(root) for f in fs)

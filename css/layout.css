@@ -1,6 +1,13 @@
-/* layout.css — the app frame: sidebar, main column, right pane, player bar. */
+/* layout.css — the app frame: sidebar, main column, right pane, player bar.
+ *
+ * Every chrome surface is translucent and blurred, because the WebGL backdrop
+ * is painting behind all of it. The frame is a grid, and the only thing that
+ * animates in it is the pane column, so opening the queue never reflows a list.
+ */
 
 .app {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-areas:
     "sidebar main pane"
@@ -24,7 +31,9 @@ body.is-ready .app { opacity: 1; }
   flex-direction: column;
   min-height: 0;
   padding: 14px 10px 10px;
-  background: var(--surface);
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
   border-right: 1px solid var(--line);
   gap: 4px;
 }
@@ -40,14 +49,17 @@ body.is-ready .app { opacity: 1; }
 }
 
 .brand-mark {
-  width: 30px; height: 30px;
+  position: relative;
+  width: 32px; height: 32px;
   display: grid; place-items: center;
-  border-radius: 9px;
-  background: var(--accent);
+  border-radius: 10px;
+  background: linear-gradient(150deg, rgb(var(--accent-rgb)), rgb(var(--accent-rgb) / .68));
   color: var(--on-accent);
-  box-shadow: 0 6px 18px -6px var(--accent-glow);
-  transition: background var(--dur-3) var(--ease), box-shadow var(--dur-3) var(--ease);
+  box-shadow: 0 8px 22px -8px var(--accent-glow), inset 0 1px 0 rgb(255 255 255 / .28);
+  transition: background var(--dur-3) var(--ease), box-shadow var(--dur-3) var(--ease),
+              transform var(--dur-2) var(--ease-back);
 }
+.brand:hover .brand-mark { transform: translateY(-1px) scale(1.04); }
 .brand-mark .ico { width: 18px; height: 18px; }
 
 .nav { position: relative; display: flex; flex-direction: column; gap: 2px; }
@@ -57,10 +69,21 @@ body.is-ready .app { opacity: 1; }
   left: 0; right: 0; top: 0;
   height: 40px;
   border-radius: var(--r-sm);
-  background: var(--surface-hi);
-  box-shadow: inset 0 0 0 1px var(--line);
+  background: linear-gradient(100deg, rgb(var(--accent-rgb) / .20), rgb(var(--accent-rgb) / .07));
+  box-shadow: inset 0 0 0 1px var(--accent-line);
   opacity: 0;
   pointer-events: none;
+}
+/* The bar on the leading edge is what tells you which row is live at a glance,
+   the pill only says roughly where. */
+.nav-pill::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 22%; bottom: 22%;
+  width: 3px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  box-shadow: 0 0 14px 0 var(--accent-glow);
 }
 
 .nav-item {
@@ -150,9 +173,11 @@ body.is-ready .app { opacity: 1; }
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* Mostly transparent: the backdrop is doing the work now, and this only
+     keeps text legible over the brighter parts of it. */
   background:
-    radial-gradient(1200px 520px at 18% -10%, rgb(var(--accent-rgb) / .10), transparent 62%),
-    linear-gradient(var(--bg-grad), var(--bg) 420px);
+    radial-gradient(1100px 480px at 18% -12%, rgb(var(--accent-rgb) / .07), transparent 60%),
+    linear-gradient(rgb(var(--bg-2-rgb) / .38), rgb(var(--bg-rgb) / .60) 520px);
   transition: background var(--dur-3) var(--ease);
 }
 
@@ -165,15 +190,11 @@ body.is-ready .app { opacity: 1; }
   height: var(--topbar-h);
   padding: 0 var(--gutter);
   flex: none;
-  background: rgb(from var(--bg) r g b / .62);
-  backdrop-filter: blur(22px) saturate(180%);
-  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  background: var(--glass-bar);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
   border-bottom: 1px solid transparent;
   transition: border-color var(--dur-2) linear, background var(--dur-2) linear;
-}
-
-@supports not (background: rgb(from #000 r g b / .5)) {
-  .topbar { background: color-mix(in srgb, var(--bg) 62%, transparent); }
 }
 
 .main.is-scrolled .topbar { border-bottom-color: var(--line); }
@@ -200,7 +221,9 @@ body.is-ready .app { opacity: 1; }
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--surface);
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
   border-left: 1px solid var(--line);
   opacity: 0;
   visibility: hidden;
@@ -246,15 +269,18 @@ body.is-ready .app { opacity: 1; }
 /* ------------------------------------------------------------------ player */
 
 .playerbar {
+  position: relative;
   grid-area: player;
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(320px, 2fr) minmax(180px, 1fr);
   align-items: center;
   gap: 16px;
   padding: 0 20px;
-  background: var(--surface);
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
   border-top: 1px solid var(--line);
-  box-shadow: 0 -12px 40px -30px rgb(0 0 0 / .9);
+  box-shadow: 0 -18px 50px -34px rgb(0 0 0 / .95);
   z-index: 30;
 }
 
@@ -285,7 +311,7 @@ body.is-ready .app { opacity: 1; }
 .pb-buttons { display: flex; align-items: center; gap: 6px; }
 
 .pb-play {
-  width: 38px; height: 38px;
+  width: 40px; height: 40px;
   display: grid; place-items: center;
   border-radius: var(--r-full);
   background: var(--text);
@@ -294,7 +320,7 @@ body.is-ready .app { opacity: 1; }
   transition: transform var(--dur-1) var(--ease-back), box-shadow var(--dur-2) var(--ease), background var(--dur-2) linear;
   will-change: transform;
 }
-.pb-play:hover { box-shadow: 0 6px 20px -6px rgb(0 0 0 / .6); }
+.pb-play:hover { transform: scale(1.06); box-shadow: 0 8px 24px -6px rgb(0 0 0 / .6); }
 .pb-play .ico { width: 18px; height: 18px; }
 .pb-play [href$="pause"], .playerbar.is-playing .pb-play [href$="play"] { display: none; }
 .playerbar.is-playing .pb-play [href$="pause"] { display: block; }

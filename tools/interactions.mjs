@@ -14,7 +14,10 @@ const ok = (label, pass, extra = '') => {
   if (!pass) problems.push(label + (extra ? ': ' + extra : ''));
 };
 
-const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
+const browser = await chromium.launch({
+  executablePath: process.env.SONORA_CHROMIUM || undefined,
+  args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'],
+});
 const ctx = await browser.newContext({ viewport: { width: 1460, height: 900 } });
 const page = await ctx.newPage();
 const errors = [];
@@ -23,7 +26,8 @@ page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 
 await page.addInitScript(() => { delete window.showDirectoryPicker; });
 await page.goto('http://127.0.0.1:8123/index.html', { waitUntil: 'networkidle' });
-await page.waitForSelector('body.is-ready');
+await page.waitForSelector('body.is-ready', { timeout: 15000 });
+await page.waitForSelector('#intro', { state: 'detached', timeout: 15000 });
 
 const [chooser] = await Promise.all([
   page.waitForEvent('filechooser'),
@@ -74,9 +78,11 @@ ok('album sort groups albums', new Set(byAlbum).size <= 2, byAlbum.join(' | '));
 
 await page.locator('.thead .sortable[data-sort="duration"]').click();
 await page.waitForTimeout(350);
-const times = (await rowsInOrder('.trow-time')).slice(0, 5);
+// A container whose length nobody could work out shows "--:--" and sorts to the
+// front; it is not part of what this check is about.
+const times = (await rowsInOrder('.trow-time')).slice(0, 6).filter((t) => t && t.includes(':') && !t.startsWith('-'));
 const secs = times.map((t) => { const [m, s] = t.split(':').map(Number); return m * 60 + s; });
-ok('duration sort ascends', secs.every((v, i) => i === 0 || v >= secs[i - 1]), times.join(' '));
+ok('duration sort ascends', secs.length >= 4 && secs.every((v, i) => i === 0 || v >= secs[i - 1]), times.join(' '));
 
 /* ---------------------------------------------------------------- keyboard */
 

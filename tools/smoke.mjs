@@ -19,7 +19,10 @@ const ok = (label, pass, extra = '') => {
   if (!pass) problems.push(label + (extra ? ': ' + extra : ''));
 };
 
+// SONORA_CHROMIUM lets the tests run against a Chromium that is already on the
+// machine, instead of the one Playwright downloads for itself.
 const browser = await chromium.launch({
+  executablePath: process.env.SONORA_CHROMIUM || undefined,
   args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'],
 });
 const ctx = await browser.newContext({
@@ -51,8 +54,20 @@ const shot = async (name) => {
 
 log('\n> boot');
 await page.goto(BASE, { waitUntil: 'networkidle' });
-await page.waitForSelector('body.is-ready', { timeout: 10000 });
+
+// The intro plays before the app is handed over; it should be on screen now.
+ok('intro plays', await page.locator('.intro .intro-word').isVisible());
+await page.screenshot({ path: `${SHOTS}/00-intro.png` });
+log('  shot  00-intro.png');
+
+await page.waitForSelector('body.is-ready', { timeout: 15000 });
+await page.waitForSelector('#intro', { state: 'detached', timeout: 15000 });
+ok('intro hands over to the app', await page.evaluate(() => document.body.classList.contains('intro-done')));
 ok('app boots', true);
+ok('3D backdrop running', await page.evaluate(() => {
+  const c = document.querySelector('canvas.backdrop');
+  return !!c && c.width > 0 && !!c.getContext('webgl');
+}));
 ok('empty state shown', await page.locator('.empty h3').first().isVisible());
 await shot('01-empty');
 
@@ -92,6 +107,8 @@ const albums = await page.$$eval('.v-grid-row .card:not([hidden])', (els) =>
 log('  albums on screen: ' + albums.length);
 for (const a of albums.slice(0, 12)) log(`    ${a.art ? '[art]' : '[   ]'} ${a.title} — ${a.sub}`);
 ok('album titles parsed', albums.some((a) => a.title === 'Paper Lanterns'));
+ok('AIFF album parsed', albums.some((a) => a.title === 'Tidal Almanac'),
+   albums.map((a) => a.title).join(', '));
 ok('album year+artist parsed', albums.some((a) => /Nova Kestrel · 2021/.test(a.sub || '')));
 ok('embedded artwork decoded', albums.filter((a) => a.art).length >= 6,
    `${albums.filter((a) => a.art).length} of ${albums.length} with art`);
@@ -111,6 +128,24 @@ const durations = await page.$$eval('.v-layer .trow:not([hidden]) .trow-time',
                                     (els) => els.map((e) => e.textContent));
 ok('durations computed', durations.filter((d) => d && d !== '--:--').length >= rowCount - 2,
    durations.slice(0, 6).join(' '));
+
+// The WMA in the library is indexed and named, and honest about being
+// undecodable rather than quietly missing.
+// Sorted by album descending, so the row is actually rendered: the list is
+// virtualised and only what fits on screen exists.
+await page.locator('.thead .sortable[data-sort="album"]').click();
+await page.waitForTimeout(250);
+await page.locator('.thead .sortable[data-sort="album"]').click();
+await page.waitForTimeout(400);
+const unplayable = await page.evaluate(() => {
+  const rows = [...document.querySelectorAll('.v-layer .trow:not([hidden])')];
+  const hit = rows.find((r) => r.classList.contains('is-unsupported'));
+  return hit ? hit.querySelector('.trow-title')?.textContent : null;
+});
+ok('undecodable format is indexed and marked', unplayable === 'Cassette Transfer',
+   String(unplayable));
+await page.locator('.thead .sortable[data-sort="title"]').click();
+await page.waitForTimeout(300);
 await shot('04-songs');
 
 /* ---------------------------------------------------------------- playback */
@@ -181,11 +216,55 @@ ok('panel opens', await page.locator('#pane').isVisible());
 ok('now playing art', await page.locator('.np-art .art-img.is-loaded').isVisible());
 await shot('07-nowplaying');
 
+// The visualiser is a canvas: the only honest check is that it has pixels on it.
+const vizPainted = await page.evaluate(async () => {
+  const c = document.querySelector('.np-viz');
+  if (!c || !c.width) return 0;
+  await new Promise((r) => setTimeout(r, 700));
+  const ctx = c.getContext('2d');
+  const d = ctx.getImageData(0, 0, c.width, c.height).data;
+  let lit = 0;
+  for (let i = 3; i < d.length; i += 4) if (d[i] > 8) lit++;
+  return lit;
+});
+ok('spectrum is drawing', vizPainted > 200, `${vizPainted} lit pixels`);
+
 await page.locator('.pane-tab[data-tab="queue"]').click();
 await page.waitForTimeout(450);
 const queued = await page.locator('.qrow:not([hidden])').count();
 ok('queue populated', queued > 0, `${queued} rows`);
 await shot('08-queue');
+
+/* ---------------------------------------------------------------- stage */
+
+log('\n> immersive stage');
+await page.keyboard.press('v');
+await page.waitForSelector('.stage', { timeout: 3000 });
+await page.waitForTimeout(900);
+ok('stage opens on V', await page.locator('.stage-title').isVisible());
+ok('backdrop moved onto the stage', await page.evaluate(() =>
+  !!document.querySelector('.stage > canvas.backdrop')));
+const stagePainted = await page.evaluate(() => {
+  const c = document.querySelector('.stage-viz');
+  if (!c || !c.width) return 0;
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  let lit = 0;
+  for (let i = 3; i < d.length; i += 4) if (d[i] > 8) lit++;
+  return lit;
+});
+ok('stage visualiser is drawing', stagePainted > 500, `${stagePainted} lit pixels`);
+await shot('17-stage-bars');
+
+await page.locator('.stage-mode', { hasText: 'Radial' }).click();
+await page.waitForTimeout(800);
+ok('mode switches', await page.evaluate(() => localStorage.getItem('sonora:viz') === 'radial'));
+await shot('18-stage-radial');
+
+await page.keyboard.press('Escape');
+await page.waitForTimeout(1200);
+ok('stage closes on Escape', await page.locator('.stage').count() === 0);
+ok('backdrop returns to the page', await page.evaluate(() =>
+  document.body.firstElementChild?.classList.contains('backdrop')));
 
 /* ---------------------------------------------------------------- search */
 
@@ -270,7 +349,8 @@ await page.setViewportSize({ width: 1460, height: 900 });
 
 log('\n> reload');
 await page.reload({ waitUntil: 'networkidle' });
-await page.waitForSelector('body.is-ready', { timeout: 10000 });
+await page.waitForSelector('body.is-ready', { timeout: 15000 });
+await page.waitForSelector('#intro', { state: 'detached', timeout: 15000 });
 await page.locator('.nav-item[data-route="home"]').click();
 await page.waitForTimeout(1400);
 const afterReload = await page.locator('.page-sub').first().textContent();

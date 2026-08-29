@@ -9,7 +9,9 @@ import * as player from './player.js';
 import * as lib from './library.js';
 import { paintArt, artBox, menu, trackMenu, toast, emptyState } from './ui.js';
 import { VirtualList } from './virtual.js';
-import { tick, animate, enter, ease, reduceMotion } from './motion.js';
+import { createVisualizer } from './visualizer.js';
+import { storedMode } from './stage.js';
+import { tick, animate, enter, ease } from './motion.js';
 
 const ROW_H = 56;
 
@@ -145,7 +147,9 @@ function buildNowPlaying(host, visible) {
   }
 
   function paintState() {
-    host.classList.toggle('is-playing', player.state.playing);
+    // The class goes on .np, not on the panel: the artwork glow and the
+    // visualiser's resting opacity both hang off it.
+    host.querySelector('.np').classList.toggle('is-playing', player.state.playing);
   }
 
   return { paint, paintState, paintArtOnly };
@@ -154,86 +158,34 @@ function buildNowPlaying(host, visible) {
 /* ------------------------------------------------------------------ visualizer */
 
 /**
- * Frequency bars behind the artwork. Runs off the shared ticker, skips frames
- * when nothing is playing, and sizes itself to the device pixel ratio once.
+ * The spectrum inside the now-playing artwork. The drawing is the shared
+ * renderer; what happens here is the glow around the sleeve, which tracks the
+ * overall level as a custom property so the CSS can own the look of it.
  */
 function mountVisualizer(canvas, visible) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  const BARS = 48;
-  const smooth = new Float32Array(BARS);
-  let w = 0, h = 0;
-
-  // Resolving a custom property costs a style recalc, so re-read it occasionally
-  // rather than once per frame.
-  let accent = '124 108 255';
-  let accentAt = 0;
-
-  const resize = () => {
-    const dpr = Math.min(2, devicePixelRatio || 1);
-    const rect = canvas.getBoundingClientRect();
-    if (!rect.width) return;
-    const nw = Math.round(rect.width * dpr);
-    const nh = Math.round(rect.height * dpr);
-    if (nw === w && nh === h) return;
-    w = canvas.width = nw;
-    h = canvas.height = nh;
-  };
-  // The panel animates open from a zero-width grid column, and the observer can
-  // settle on a mid-transition size — so re-check periodically as well.
-  new ResizeObserver(resize).observe(canvas);
-  resize();
-  let sizeAt = 0;
-
-  let idleFrames = 0;
-  tick((_, now) => {
-    if (reduceMotion.matches || !visible()) return;
-    const data = player.spectrum();
-    if (!data) {
-      if (idleFrames > 40) return;                    // decay to nothing, then rest
-      idleFrames++;
-    } else idleFrames = 0;
-    if (!w || !h) return;
-
-    if (now - accentAt > 500) {
-      accentAt = now;
-      accent = getComputedStyle(document.documentElement)
-        .getPropertyValue('--accent-rgb').trim() || '124 108 255';
-    }
-    if (now - sizeAt > 500) { sizeAt = now; resize(); }
-
-    ctx.clearRect(0, 0, w, h);
-    const step = Math.floor(data ? data.length * 0.7 / BARS : 1);
-    const gap = w / BARS;
-    const bw = gap * 0.52;
-
-    for (let i = 0; i < BARS; i++) {
-      let v = 0;
-      if (data) {
-        let sum = 0;
-        for (let j = 0; j < step; j++) sum += data[i * step + j] || 0;
-        v = (sum / step) / 255;
-        v = Math.pow(v, 1.45);                        // tame the low end
-      }
-      smooth[i] += (v - smooth[i]) * (v > smooth[i] ? 0.42 : 0.12);
-      const bh = Math.max(1, smooth[i] * h * 0.92);
-      const x = i * gap + (gap - bw) / 2;
-      ctx.fillStyle = `rgba(${accent} / ${0.22 + smooth[i] * 0.66})`;
-      roundRect(ctx, x, h - bh, bw, bh, bw / 2);
-      ctx.fill();
-    }
+  const viz = createVisualizer(canvas, {
+    mode: storedMode(),
+    bars: 44,
+    visible,
+    intensity: 1,
   });
-}
 
-function roundRect(ctx, x, y, w, h, r) {
-  r = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
+  document.addEventListener('sonora:viz-mode', (e) => viz.setMode(e.detail));
+  player.events.on('track', () => viz.kick());
+
+  const np = canvas.closest('.np') || canvas.parentNode;
+  let shown = -1;
+  tick(() => {
+    if (!visible()) return;
+    const level = player.analysis().level;
+    // Writing a custom property is a style invalidation; only bother when the
+    // value has moved enough to be visible.
+    if (Math.abs(level - shown) < 0.02) return;
+    shown = level;
+    np.style.setProperty('--viz-level', level.toFixed(3));
+  });
+
+  return viz;
 }
 
 /* ------------------------------------------------------------------ queue list */
