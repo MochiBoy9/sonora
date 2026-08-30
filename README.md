@@ -35,6 +35,29 @@ powershell -ExecutionPolicy Bypass -File tools/serve.ps1
 Then open <http://localhost:8000> (or `:8123` for the PowerShell one) and click
 **Add music**.
 
+One header matters if you swap in your own server: `sw.js` must **not** be sent
+with `Cache-Control: no-store`, or the browser refuses to register the service
+worker and reports it as an error fetching a script that is perfectly fine.
+`no-cache` is right — it still revalidates every load. `tools/serve.ps1` does
+this already.
+
+## Opening without a network
+
+A few seconds after launch, Sonora caches itself — the page, the stylesheets,
+the modules, the workers and the worklets, 46 files and about 850 KB. After
+that the application opens with no server and no connection at all, which is
+what the first line of the specification has always claimed and what was, until
+now, only true of the library.
+
+The worker caches **Sonora's own files and nothing else**, and never fetches
+anything at runtime. A cross-origin request — the optional lyrics and band
+lookups — is not intercepted at all: it goes out exactly as it would with no
+worker installed. There is no code path that can add to the cache after
+install.
+
+`Settings → Storage` shows how much is actually cached, and can clear it. When
+a new version is available you are offered a reload rather than given one.
+
 ## Adding your music
 
 Three routes in, depending on what the browser supports:
@@ -111,6 +134,87 @@ documented without existing.
 Right-click any track, album or artist for play-next, add-to-queue, favourite,
 add-to-playlist and go-to-album. Drag rows in the queue to reorder. Drag the
 sidebar edge to resize it.
+
+Click a track row to pick it; `Ctrl`/`⌘`-click to add one, `Shift`-click for a
+range, `Ctrl`/`⌘`-`A` for all of them, `Esc` to let go. Everything that took one
+track takes the set instead, so a thirty-track playlist is one drag rather than
+thirty right-clicks.
+
+## Tracks running into each other
+
+`Settings → Playback`.
+
+Two decoders run in parallel, and the idle one already holds the next track,
+decoded and paused at zero. At the handover there is nothing left to load —
+only a `play()` and a gain — which is why the seam between two tracks costs
+milliseconds instead of however long the next file takes to open.
+
+Gapless and crossfade are one control at two of its positions. At zero the next
+deck starts the instant the last one ends, which is what a live album or a
+beat-mixed record needs; above zero the two overlap on an equal-power curve, so
+the sum holds its loudness through the middle instead of dipping. There is no
+separate code path, which is why turning crossfade down to zero gives gapless
+rather than something subtly different.
+
+**Even out the volume** applies ReplayGain where a file carries the tag, and
+where it does not, the loudness Sonora measured for itself on the first listen.
+*Album* keeps the balance a record was mastered with and moves the record as a
+whole; *Track* evens out every song against every other, which is what a shuffle
+across four decades needs and what a concept album does not.
+
+**Shuffle style** — *Learned* leans gently towards what you actually play and
+hard away from anything heard in the last hour. Gently is the point: a strong
+weighting stops being a shuffle and becomes a greatest-hits loop, which is worse
+than random because at least random finds things.
+
+The clock in the transport is a sleep timer. The last thirty seconds are a fade
+rather than a stop, and the volume goes back where it was afterwards.
+
+## Seeing the shape of a song
+
+The scrubber knows what the track looks like. At rest it is the same hairline it
+has always been; reach for it and it opens into a waveform you can aim at — the
+quiet intro, the drop, the outro, all visible, so the playhead goes where you
+meant rather than where you guessed.
+
+The immersive view (`V`) goes further and puts the *whole song* under the
+scrubber as a spectrogram: frequency up the strip, time across it, matched to
+the playhead. It is the one picture that lets you navigate a song you have never
+heard before.
+
+Both come out of one analysis, computed the first time a track is played and
+kept afterwards. Nothing is decoded at import — that would be an afternoon's
+work for data most files never need.
+
+## Files, and what is in them twice
+
+`Files` in the sidebar. Two questions that are really the same question asked
+twice: what is actually in these folders, and how much of it is here again.
+
+The folder view is the tree on disk, with a play button at every level. The
+duplicate view makes two different claims and keeps them apart — *identical
+files* is a fact, checked against a hash of the bytes rather than guessed from
+size and duration, and *same recording* is a judgement about the FLAC and the
+MP3 of one song.
+
+There is no delete button, deliberately. Sonora reads your disk and does not
+write to it; finding the copies is the hard part and the part worth doing, and
+deciding which to keep belongs to whoever owns the files.
+
+## Fixing a tag
+
+`Edit details…` on any track or selection. Corrections are saved in Sonora's
+index and **never written to your files** — the dialog says so, because you are
+entitled to know whether what you just typed reached your disk.
+
+An edit is an overlay: the file's own value stays underneath, the correction
+wins when the record is read, and *revert* puts the original back exactly. A
+rescan re-applies your corrections rather than losing them.
+
+Over several tracks, a field where they agree shows the shared value and a field
+where they differ shows "— several —" and is left alone unless you type in it,
+so the album name can be fixed on forty tracks without flattening forty titles
+into one.
 
 ## The Rack
 
@@ -382,11 +486,37 @@ the ground, a near-white one almost none so it does not blow out into a halo.
 The number that decides it is the artwork's own luminance, which the import
 already extracted for the accent.
 
-**Albums can be a wall or a crate.** *Grid* is the wall. *Crate* stands the
-records up in perspective and lets you flip through them with the arrow keys
-or a wheel, one square to the viewer at a time. Eleven records exist in the
-DOM at once, recycled, so a crate of fifty thousand costs the same as a crate
-of eleven.
+**Albums are a wall, a crate, a shelf or a floor.** *Grid* is the wall. *Crate*
+stands the records up in perspective and lets you flip through them with the
+arrow keys or a wheel, one square to the viewer at a time — eleven records exist
+in the DOM at once, recycled, so a crate of fifty thousand costs the same as a
+crate of eleven.
+
+*Shelf* turns them edge-on, which is how almost everybody actually stores
+records: a wall of covers is a shop, a shelf of spines is a collection. The
+width of each spine is the album's own thickness, so a double album is visibly
+fatter than a single — the same number the sleeve already uses to decide how far
+its edge sits behind its face.
+
+*Floor* puts the library on the ground plane of the world drawn behind it, which
+until now the interface had only ever floated in front of. Titles do not recede;
+they fade out past the third row, so distant rows become covers only — which is
+what a room full of records actually looks like. It is a fourth mode and never
+the only one: clicks still land, but keyboard order stops matching what the eye
+sees, and that is a real cost rather than a detail.
+
+**The printed cover catches the light.** The sleeve was always lit like an
+object while the artwork on it stayed a decal — turn the record and the light
+swept across the picture as though it were behind glass. The importer now
+derives a surface from the cover's own luminance, out of a decode it was already
+doing, so type and hard edges pick up a gradient as the light moves and flat
+fields stay flat. Covers too soft to suit it — a photograph of a face is nearly
+all gradient — are left alone.
+
+**On a phone, the device holds the light.** Every lit surface here is driven by
+two numbers saying where the light is coming from, and on a desk those come from
+the pointer. Switch on *Tilt with the device* in Settings and they come from the
+accelerometer instead, relative to however you happen to be holding it.
 
 **Navigation is a move through one space.** Click a cover and it flies into
 place as the record on the album page while the rest of the page cross-fades
