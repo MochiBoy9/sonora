@@ -119,9 +119,21 @@ function navigate() {
   };
 
   const vt = document.startViewTransition(() => swapView());
-  // A skipped or aborted transition rejects. That is a normal outcome — the
-  // route still changed — so it is caught rather than left to surface as an
-  // unhandled rejection in everybody's console.
+
+  /* A ViewTransition hands back *three* promises, and a skipped or aborted
+     transition rejects more than one of them. `finished` is the obvious one;
+     `ready` rejects the moment the transition is abandoned — before any
+     animation exists — and `updateCallbackDone` rejects if the DOM swap itself
+     throws. Any one left unattached surfaces as an unhandled rejection, which
+     is what "Transition was aborted because of invalid state" was doing in the
+     console five times a minute while the route changed perfectly happily.
+
+     Being skipped is a normal outcome here: navigating again mid-transition,
+     a tab going to the background, an engine deciding it cannot snapshot. The
+     route still changed either way, so all three are swallowed and only
+     `finished` does the cleaning up. */
+  vt.ready.catch(() => {});
+  vt.updateCallbackDone.catch(() => {});
   vt.finished.then(done, done);
 }
 
