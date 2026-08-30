@@ -18,6 +18,7 @@ import { enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunn
 import { MODES, isMode } from './visualizer.js';
 import { mountCircles } from './circles.js';
 import { mountSound } from './sound.js';
+import * as offline from './offline.js';
 import * as stats from './stats.js';
 import * as band from './band.js';
 import * as session from './session.js';
@@ -2013,6 +2014,47 @@ function viewSettings(host) {
       ? `${fmtBytes(u.used)} used${u.quota ? ` of ${fmtBytes(u.quota)} available` : ''}`
       : `${fmtCount(lib.trackCount(), 'track')} indexed`;
   });
+
+  /* Whether the application itself opens without a network.
+   *
+   * Worth showing rather than leaving implicit: "works offline" is the sort of
+   * claim people reasonably want to verify before they get on a plane, and
+   * until this row existed there was no way to tell whether the shell had
+   * actually been cached or only promised. */
+  const offNote = el('div', { class: 'settings-note', text: 'Checking…' });
+  const offRow = el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('plug') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Opens without a network' }), offNote),
+    el('div', { class: 'settings-actions' },
+      el('button', {
+        class: 'btn ghost sm', text: 'Clear app cache',
+        onclick: async () => {
+          const ok = await offline.clearOffline();
+          toast(ok ? 'App cache cleared — reload to fetch a fresh copy' : 'Nothing to clear');
+          paintOffline();
+        },
+      })));
+  storage.appendChild(offRow);
+
+  async function paintOffline() {
+    const s = offline.status();
+    if (!s.supported) {
+      offNote.textContent = 'Not available here — this needs to be served over http, not opened as a file.';
+      return;
+    }
+    const c = await offline.cachedBytes();
+    if (c && c.files) {
+      offNote.textContent = `${fmtCount(c.files, 'file')} cached · ${fmtBytes(c.bytes)}` +
+        (s.controlled ? ' · serving from cache' : ' · takes effect on next launch');
+    } else {
+      offNote.textContent = s.registered
+        ? 'Caching the app now…'
+        : 'Not cached yet — this happens a few seconds after launch.';
+    }
+  }
+  paintOffline();
+
   host.appendChild(storage);
 
   /* What the collection is made of. Bars in the mono stack rather than a pie

@@ -16,6 +16,7 @@ import { startIntro } from './intro.js';
 import { mountBackdrop } from './backdrop.js';
 import { toggleStage, isOpen as stageOpen } from './stage.js';
 import { startRelief } from './relief.js';
+import { startOffline } from './offline.js';
 
 /* Destinations are numbered, like channels on a desk — the number is part of
    how you learn where things are, not decoration. */
@@ -787,6 +788,14 @@ async function boot() {
   session.restore(toast).then((outcome) => {
     if (outcome === 'resumed' || outcome === 'ready') applyAccent();
   });
+
+  /* Offline, last of all.
+   *
+   * Deliberately after everything else has started: registering a service
+   * worker sets it fetching the whole shell, and doing that during boot means
+   * competing with the very files it is trying to cache. The one thing this
+   * must not do is make the first launch slower. */
+  setTimeout(() => { startOffline(); }, 2500);
 
   /* The printed cover gets somewhere to catch the light. One delegated
      controller for the whole page — see relief.js for why it is not one per
