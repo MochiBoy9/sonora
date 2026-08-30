@@ -82,8 +82,17 @@ export function parse(text) {
     }
   }
 
-  // Stamps may arrive out of order when a file was assembled by hand.
-  if (synced) lines.sort((a, b) => (a.t == null ? 1 : b.t == null ? -1 : a.t - b.t));
+  if (synced) {
+    // In a timed file the gaps are the timestamps, so a blank line carries no
+    // information — and having none, it has nowhere to sort to and ends up at
+    // the bottom as a stray space. Dropped before the sort rather than after,
+    // so it never gets there.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].t == null && !lines[i].text) lines.splice(i, 1);
+    }
+    // Stamps may arrive out of order when a file was assembled by hand.
+    lines.sort((a, b) => (a.t == null ? 1 : b.t == null ? -1 : a.t - b.t));
+  }
 
   // A file of nothing but blank lines is not lyrics.
   if (!lines.some((l) => l.text)) return null;

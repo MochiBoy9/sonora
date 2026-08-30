@@ -183,13 +183,19 @@ export function census() {
   const rates = new Map();
   const depths = new Map();
   let bytes = 0, known = { rate: 0, depth: 0 }, lossless = 0;
-  const LOSSLESS = new Set(['flac', 'wav', 'wave', 'aiff', 'aif', 'alac', 'ape', 'wv', 'tta']);
+  const LOSSLESS = new Set(['flac', 'wav', 'wave', 'aiff', 'aif', 'ape', 'wv', 'tta']);
 
   for (const t of state.tracks.values()) {
     const e = (t.name || '').slice((t.name || '').lastIndexOf('.') + 1).toLowerCase() || '?';
     formats.set(e, (formats.get(e) || 0) + 1);
     bytes += t.size || 0;
-    if (LOSSLESS.has(e)) lossless++;
+    /* The extension is not enough on its own. ALAC lives in `.m4a` and so does
+       AAC, so a library ripped to Apple Lossless would report as 0% lossless
+       on the suffix alone — a wrong number, shown confidently.
+       The measured bitrate settles it: MP3 tops out at 320 kbps and AAC is not
+       used above about 500, so anything past that threshold is lossless
+       whatever it is wrapped in. */
+    if (LOSSLESS.has(e) || t.bitrate > 500) lossless++;
     if (t.sampleRate > 0) { rates.set(t.sampleRate, (rates.get(t.sampleRate) || 0) + 1); known.rate++; }
     if (t.bitDepth > 0) { depths.set(t.bitDepth, (depths.get(t.bitDepth) || 0) + 1); known.depth++; }
   }

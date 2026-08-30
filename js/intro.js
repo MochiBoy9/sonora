@@ -220,7 +220,12 @@ function mountScene(canvas) {
  */
 export function startIntro() {
   const node = document.getElementById('intro');
-  if (!node) return { ready: Promise.resolve(), dismiss: () => Promise.resolve(), skipped: true };
+  // The stub has to answer every call the live handle answers. `boot` reports
+  // its progress into `report()`, and a handle without one turns "the intro
+  // markup is missing" into "the application does not start".
+  if (!node) {
+    return { ready: Promise.resolve(), dismiss: () => Promise.resolve(), skipped: true, report() {} };
+  }
 
   let firstRun = true;
   try { firstRun = !localStorage.getItem(SEEN_KEY); } catch { /* private mode */ }

@@ -639,7 +639,19 @@ function mountCrate(host) {
   }, { passive: false });
 
   paint();
-  box.focus({ preventScroll: true });
+
+  /* Take focus only if nothing else has it.
+   *
+   * The crate needs focus for the arrow keys to reach it, and arriving at
+   * Albums with nothing else selected should leave you able to flip
+   * immediately. But the mode is remembered, so this runs on *every* visit to
+   * the route — and grabbing focus unconditionally means that typing in the
+   * search box and landing here sends the next arrow key to the records
+   * instead of to the caret. `<body>` as the active element is the browser's
+   * way of saying nobody has claimed it. */
+  if (document.activeElement === document.body || !document.activeElement) {
+    box.focus({ preventScroll: true });
+  }
   const off = lib.events.on('change', paint);
   const offArt = lib.events.on('art', paint);
   return () => { off(); offArt(); box.remove(); cards.clear(); };
