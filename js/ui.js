@@ -473,11 +473,24 @@ export function addToPlaylistDialog(tracks) {
 }
 
 export function infoDialog(track) {
+  const rate = track.sampleRate
+    ? (track.sampleRate % 1000 === 0 ? track.sampleRate / 1000 : (track.sampleRate / 1000).toFixed(1)) + ' kHz'
+    : '';
+  const chans = track.channels === 1 ? 'Mono' : track.channels === 2 ? 'Stereo'
+    : track.channels ? track.channels + ' ch' : '';
+  const stream = [rate, track.bitDepth ? track.bitDepth + '-bit' : '', chans,
+    track.bitrate ? '~' + track.bitrate + ' kbps' : ''].filter(Boolean).join(' · ');
+
   const rows = [
     ['Title', track.title], ['Artist', track.artist], ['Album', track.album],
     ['Album artist', track.albumArtist], ['Track', track.track || '—'],
     ['Year', track.year || '—'], ['Genre', track.genre || '—'],
     ['Duration', track.duration ? fmtTime(track.duration) : '—'],
+    ['Stream', stream || '—'],
+    // Absent until it has been listened to, and the copy says why rather than
+    // showing an em dash that reads like a missing tag.
+    ['Dynamic range', track.dr ? `DR${Math.round(track.dr)} · ${track.dr.toFixed(1)} dB crest`
+                               : 'Not measured yet — play it through'],
     ['File', track.name], ['Path', track.path],
   ];
   const body = el('dl', { class: 'info-grid' });

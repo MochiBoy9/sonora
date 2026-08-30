@@ -12,6 +12,7 @@ import * as lib from './library.js';
 import * as db from './db.js';
 import * as rack from './audio.js';
 import { Emitter, clamp, canDecode } from './util.js';
+import { tick } from './motion.js';
 
 export const events = new Emitter();
 
@@ -61,6 +62,114 @@ const level = { bass: 0, mid: 0, treble: 0, level: 0, pulse: 0, beat: false };
 const bassLog = new Float32Array(48);
 let bassAt = 0, lastBeat = 0, frameAt = 0, silentFor = 0;
 
+/* ------------------------------------------------------------------ meter */
+
+/**
+ * Crest factor, measured off the file while you listen to it.
+ *
+ * The honest way to get this would be to decode every track at import — and it
+ * is not available: `OfflineAudioContext` exists on Window and not in a
+ * worker, so decoding would land on the main thread and turn a 400-file-a-
+ * second import into something you could time with a calendar.
+ *
+ * So it is measured the way the listening meter is measured: from what
+ * actually played. Peak against RMS over a whole listen is the crest factor,
+ * which is the number people mean when they say a master is squashed — a
+ * well-cut record sits around 12–16 dB, a loudness-war victim under 8. It
+ * costs one pass over 2048 floats a frame, on a task that only exists while
+ * something is playing.
+ *
+ * The cost of doing it this way is honest and worth stating: a track you have
+ * never played has no figure, and one you skipped through has no figure worth
+ * having — which is why nothing is written below MIN_LISTEN seconds.
+ */
+let meter = null, meterData = null;
+const MIN_LISTEN = 25;
+/* A forward jump bigger than this is a seek rather than time passing. Four
+   seconds is chosen against the app's own controls — the arrow keys move five
+   and thirty — while still counting the multi-second gaps a tab under load or
+   in the background produces between frames, which are elapsed time and must
+   not be thrown away. Miscounting a five-second seek as four seconds of
+   listening costs nothing: the seconds only decide *whether* to write a
+   figure, never what the figure is. */
+const SEEK_GAP = 4;
+/* And enough of the waveform actually looked at to mean something. Frames stop
+   in a background tab while the audio clock does not, so a track can elapse
+   without being sampled; this is the half of the test the clock cannot give. */
+const MIN_SAMPLES = 100000;
+
+const dr = { track: null, peak: 0, sumSq: 0, samples: 0, seconds: 0, at: -1 };
+
+function resetMeter(track) {
+  dr.track = track || null;
+  dr.peak = 0; dr.sumSq = 0; dr.samples = 0; dr.seconds = 0; dr.at = -1;
+}
+
+function meterFrame() {
+  if (!meter || !state.playing) return;
+  meter.getFloatTimeDomainData(meterData);
+  let peak = dr.peak, sum = 0;
+  for (let i = 0; i < meterData.length; i++) {
+    const v = meterData[i];
+    const a = v < 0 ? -v : v;
+    if (a > peak) peak = a;
+    sum += v * v;
+  }
+  dr.peak = peak;
+  dr.sumSq += sum;
+  dr.samples += meterData.length;
+
+  /* How much of the track went past, taken from the audio clock rather than
+     from frame deltas.
+
+     They are not the same number. Frames stop in a background tab and stutter
+     under load, so counting them would under-report a listen that really
+     happened and throw away a perfectly good measurement. The decoder's own
+     clock is the one thing here that keeps running regardless.
+
+     A gap larger than a second is a seek rather than elapsed time, and a
+     backward one is a seek for certain; both are skipped rather than counted.
+     The sampling goes sparse when frames do, which costs precision in the RMS
+     and nothing in its correctness — a thinner random sample of a waveform is
+     still an unbiased sample of it. */
+  const now = audio.currentTime;
+  if (dr.at >= 0 && now > dr.at && now - dr.at < SEEK_GAP) dr.seconds += now - dr.at;
+  dr.at = now;
+}
+
+/**
+ * Writes the figure to the track, if the listen was long enough to mean one.
+ *
+ * "Long enough" is the lesser of half a minute and most of the track, not a
+ * flat threshold: a fixed 25 seconds would mean no interlude, skit or
+ * two-minute punk single ever gets measured, which is exactly backwards —
+ * a short track played to the end is a *better* sample than half a long one.
+ */
+function commitMeter() {
+  const t = dr.track;
+  const enough = Math.min(MIN_LISTEN, (t && t.duration > 0 ? t.duration : MIN_LISTEN) * 0.8);
+  if (!t || dr.seconds < enough || dr.samples < MIN_SAMPLES || dr.peak < 0.0008) {
+    return resetMeter(null);
+  }
+  const rms = Math.sqrt(dr.sumSq / dr.samples);
+  const value = rms > 0 ? 20 * Math.log10(dr.peak / rms) : 0;
+  // A figure outside this range is a measurement fault rather than a master:
+  // silence, a decode that never started, or a file that is one long sine.
+  if (isFinite(value) && value > 1 && value < 40) {
+    t.dr = Math.round(value * 10) / 10;
+    t.drAt = Date.now();
+    db.putTracks([t]).catch(() => {});
+  }
+  resetMeter(null);
+}
+
+let stopMeter = null;
+function syncMeter() {
+  const wanted = !!(meter && state.playing);
+  if (wanted && !stopMeter) stopMeter = tick(meterFrame);
+  else if (!wanted && stopMeter) { stopMeter(); stopMeter = null; }
+}
+
 function ensureGraph() {
   if (ctx) return true;
   const AC = window.AudioContext || window.webkitAudioContext;
@@ -85,6 +194,18 @@ function ensureGraph() {
     const fx = rack.attach(ctx, audio);
     source.connect(gain).connect(fx.input);
     fx.output.connect(analyser).connect(ctx.destination);
+
+    /* The meter is tapped *before* the rack, and that is the whole point of it
+       being a second node rather than a second reading of the first. The
+       spectrum on screen should show what is leaving the speakers; a
+       measurement of the master has to show what is leaving the file, or every
+       figure it produces describes the equaliser instead. It is a leaf: nothing
+       is connected downstream of it, so it costs an analysis and no audio. */
+    meter = ctx.createAnalyser();
+    meter.fftSize = 2048;
+    meterData = new Float32Array(meter.fftSize);
+    gain.connect(meter);
+
     applyVolume();
     return true;
   } catch (err) {
@@ -216,10 +337,15 @@ async function load(track, autoplay, { count = true } = {}) {
   }
 
   const token = ++loadToken;
+  // Whatever was being measured ends here, and the new track starts its own
+  // tally. Committed before `state.current` moves, or the figure lands on the
+  // wrong record.
+  commitMeter();
   state.loading = true;
   state.current = track;
   state.time = 0;
   state.duration = track.duration || 0;
+  resetMeter(track);
   events.emit('track', track);
   events.emit('state');
 
@@ -568,8 +694,8 @@ audio.addEventListener('timeupdate', () => {
 });
 
 audio.addEventListener('ended', () => next(true));
-audio.addEventListener('play', () => { state.playing = true; events.emit('state'); });
-audio.addEventListener('pause', () => { state.playing = false; events.emit('state'); });
+audio.addEventListener('play', () => { state.playing = true; syncMeter(); events.emit('state'); });
+audio.addEventListener('pause', () => { state.playing = false; syncMeter(); events.emit('state'); });
 audio.addEventListener('waiting', () => { state.loading = true; events.emit('state'); });
 audio.addEventListener('playing', () => { state.loading = false; events.emit('state'); });
 audio.addEventListener('error', () => {
@@ -646,4 +772,8 @@ export async function init() {
   events.emit('state');
 }
 
-window.addEventListener('pagehide', () => { revoke(currentURL); revoke(preloadURL); });
+window.addEventListener('pagehide', () => {
+  // A listen that ends because the tab did is still a listen.
+  commitMeter();
+  revoke(currentURL); revoke(preloadURL);
+});

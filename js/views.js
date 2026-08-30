@@ -643,6 +643,14 @@ function backCover(album) {
   row('Depth', depths.length ? depths.sort((a, b) => a - b).map((d) => d + '-bit').join(' · ') : '');
   row('Channels', chans.length ? chans.map((c) => (c === 1 ? 'Mono' : c === 2 ? 'Stereo' : c + ' ch')).join(' · ') : '');
   row('Bitrate', avg ? '~' + avg + ' kbps' : '');
+  // Only the tracks that have actually been listened to have a figure, so the
+  // count comes with it: "DR11 · 4 of 9" is a partial reading, and saying so is
+  // the difference between a measurement and a claim.
+  const drs = album.tracks.map((t) => t.dr).filter((n) => n > 0);
+  row('Dynamic range', drs.length
+    ? 'DR' + Math.round(drs.reduce((a, b) => a + b, 0) / drs.length) +
+      (drs.length < album.tracks.length ? ` · ${drs.length} of ${album.tracks.length}` : '')
+    : '');
   row('On disk', bytes ? fmtBytes(bytes) : '');
   row('Runtime', album.duration ? fmtTotal(album.duration) : '');
   if (spec.children.length) back.appendChild(spec);

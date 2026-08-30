@@ -324,6 +324,10 @@ export function sortTracks(list, key, dir = 1) {
     duration: (a, b) => (a.duration || 0) - (b.duration || 0),
     added:  (a, b) => (a.addedAt || 0) - (b.addedAt || 0),
     year:   (a, b) => (a.year || 0) - (b.year || 0),
+    // Unmeasured tracks sort as zero, which puts them at the quiet end
+    // ascending and out of the way descending — either is better than
+    // pretending they are the most squashed masters in the library.
+    dr:     (a, b) => (a.dr || 0) - (b.dr || 0),
   }[key] || ((a, b) => cmpText(a.title, b.title));
   return list.slice().sort((a, b) => by(a, b) * dir);
 }
