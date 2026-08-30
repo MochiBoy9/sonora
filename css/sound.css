@@ -282,3 +282,125 @@
   .look-row .segmented { grid-column: 1 / -1; }
   .look-row .preset { grid-column: 2; }
 }
+
+/* ------------------------------------------------------------------ rack unit
+
+   Plate 07. The Sound page was already a channel strip; this makes it a piece
+   of rack-mount hardware, which is a different and more specific claim.
+
+   What actually identifies 19-inch gear is not the knobs — every settings page
+   has controls. It is the *mounting*: the ears either side, the screws through
+   them at a fixed pitch, the model plate, and one lamp that tells you the box
+   is passing signal. So those are what is drawn, and they are drawn to the
+   real proportions rather than as decoration.
+
+   All of it is gated on `--gloss`, so the Plain look gets the panel back
+   without the metal — the same contract every other material effect here
+   honours. */
+
+.rack-panel {
+  position: relative;
+  /* Room for the ears, which hang outside the panel proper. */
+  margin-inline: 18px;
+}
+
+/* Two classes deep on purpose, and this is the second time this file's lesson
+   has had to be learnt: aero.css loads last and owns the *ground* of every
+   panel in the app — `.rack-panel` is in its list, using the `background`
+   shorthand, which resets `background-image` along with everything else. A
+   single-class rule here is silently thrown away.
+
+   So the ground stays aero's and only the texture is claimed, at a specificity
+   that survives. Every panel on this page is inside `.rack`, so the selector
+   is also true rather than merely effective. */
+.rack .rack-panel {
+  background-image:
+    /* Brushed face: fine vertical striations, strongest at the top where a
+       real panel catches the room light. */
+    repeating-linear-gradient(90deg,
+      rgb(255 255 255 / calc(.014 * var(--gloss, 1))) 0 1px,
+      transparent 1px 3px),
+    linear-gradient(to bottom,
+      rgb(255 255 255 / calc(.055 * var(--gloss, 1))) 0%,
+      transparent 18%,
+      rgb(0 0 0 / calc(.11 * var(--gloss, 1))) 100%);
+}
+
+/* The ears. Two strips outside the panel, each carrying two screws at the
+   1.75-inch pitch a rack unit is actually built to. */
+.rack-panel::before,
+.rack-panel::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  width: 18px;
+  pointer-events: none;
+  background:
+    /* screws */
+    radial-gradient(circle at 50% 22px,
+      rgb(0 0 0 / calc(.55 * var(--gloss, 1))) 0 2.5px,
+      rgb(255 255 255 / calc(.20 * var(--gloss, 1))) 2.5px 3.4px,
+      transparent 3.6px),
+    radial-gradient(circle at 50% calc(100% - 22px),
+      rgb(0 0 0 / calc(.55 * var(--gloss, 1))) 0 2.5px,
+      rgb(255 255 255 / calc(.20 * var(--gloss, 1))) 2.5px 3.4px,
+      transparent 3.6px),
+    /* the flange itself */
+    linear-gradient(to right,
+      rgb(255 255 255 / calc(.06 * var(--gloss, 1))),
+      rgb(0 0 0 / calc(.18 * var(--gloss, 1))));
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+}
+.rack-panel::before { left: -18px; }
+.rack-panel::after  { right: -18px; }
+
+/* The model plate: what the unit calls itself, etched into the head. */
+.rack-plate {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 9px;
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: rgb(var(--bg-rgb) / calc(.5 * var(--gloss, 1)));
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  white-space: nowrap;
+}
+.rack-plate b { color: var(--text-2); font-weight: 600; letter-spacing: .18em; }
+
+/* One lamp, and it means something: lit while the rack is in circuit, dark
+   while it is bypassed, and it flickers with what is passing through. A lamp
+   that is always on is a sticker. */
+.rack-lamp {
+  position: relative;
+  width: 9px; height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: rgb(var(--accent-rgb) / .16);
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  transition: background var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease);
+}
+.rack.is-live .rack-lamp {
+  background: rgb(var(--accent-rgb) / calc(.35 + .65 * var(--sig, 0)));
+  box-shadow:
+    inset 0 0 0 var(--hair) var(--accent-line),
+    0 0 calc(4px + 10px * var(--sig, 0)) rgb(var(--accent-rgb) / calc(.30 + .5 * var(--sig, 0)));
+}
+/* Bypassed: the box is still there, the signal is going round it. */
+.rack.is-bypassed .rack-lamp {
+  background: var(--warn);
+  opacity: .5;
+  box-shadow: inset 0 0 0 var(--hair) var(--warn);
+}
+
+@media (max-width: 720px) {
+  /* No room for ears on a phone, and a rack unit nobody can mount is just a
+     panel — so it becomes one rather than losing its margins to decoration. */
+  .rack-panel { margin-inline: 0; }
+  .rack-panel::before, .rack-panel::after { display: none; }
+}
