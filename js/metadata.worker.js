@@ -63,6 +63,8 @@ async function makeThumb(blob) {
     accent = vibrant(sctx.getImageData(0, 0, 24, 24).data);
   } catch { /* colour is a nicety */ }
 
+  const relief = surfaceOf(bmp);
+
   bmp.close?.();
 
   let out = null;
@@ -74,7 +76,76 @@ async function makeThumb(blob) {
   } catch {
     try { out = await canvas.convertToBlob(); } catch { out = null; }
   }
-  return out ? { blob: out, accent } : null;
+  return out ? { blob: out, accent, relief } : null;
+}
+
+/* ------------------------------------------------------------------ relief */
+
+const RELIEF = 64;          // the normal map is 64x64; it is lighting, not detail
+
+/**
+ * A surface for the cover, from the cover's own luminance.
+ *
+ * The sleeve is lit like an object but the picture printed on it is a decal —
+ * turn the record and the light sweeps across the artwork as if it were behind
+ * glass, because as far as the renderer is concerned it is. This gives the
+ * print somewhere to catch the light: type, borders and the edges of shapes
+ * get a gradient, flat fields stay flat.
+ *
+ * A height map from luminance is a lie about the physics and the right lie —
+ * ink is not taller where it is darker. What it is actually measuring is where
+ * the *edges* are, and edges are where a real print catches light: the rim of a
+ * letterform, the border of a block of colour. Sobel over the luminance gives
+ * exactly that, and it costs one 64x64 draw of a bitmap the decoder has already
+ * produced.
+ *
+ * Stored as two signed bytes a pixel — the x and y of the surface normal, with
+ * z implied — which is 8 KB per album, next to a 40 KB cover.
+ */
+function surfaceOf(bmp) {
+  if (!canEncode) return null;
+  try {
+    const c = new OffscreenCanvas(RELIEF, RELIEF);
+    const g = c.getContext('2d', { alpha: false, willReadFrequently: true });
+    g.drawImage(bmp, 0, 0, RELIEF, RELIEF);
+    const px = g.getImageData(0, 0, RELIEF, RELIEF).data;
+
+    // Luminance once, so the Sobel below reads one array instead of four.
+    const lum = new Float32Array(RELIEF * RELIEF);
+    for (let i = 0, p = 0; i < lum.length; i++, p += 4) {
+      lum[i] = (0.2126 * px[p] + 0.7152 * px[p + 1] + 0.0722 * px[p + 2]) / 255;
+    }
+
+    const out = new Int8Array(RELIEF * RELIEF * 2);
+    const at = (x, y) => lum[Math.min(RELIEF - 1, Math.max(0, y)) * RELIEF +
+                             Math.min(RELIEF - 1, Math.max(0, x))];
+    let energy = 0;
+
+    for (let y = 0; y < RELIEF; y++) {
+      for (let x = 0; x < RELIEF; x++) {
+        const dx = (at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1))
+                 - (at(x - 1, y - 1) + 2 * at(x - 1, y) + at(x - 1, y + 1));
+        const dy = (at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1))
+                 - (at(x - 1, y - 1) + 2 * at(x, y - 1) + at(x + 1, y - 1));
+        const i = (y * RELIEF + x) * 2;
+        // Scaled so an ordinary edge lands mid-range rather than clipping.
+        out[i] = Math.max(-127, Math.min(127, Math.round(dx * 96)));
+        out[i + 1] = Math.max(-127, Math.min(127, Math.round(dy * 96)));
+        energy += Math.abs(dx) + Math.abs(dy);
+      }
+    }
+
+    /* How much edge there is, which decides whether relief suits this cover at
+       all. A photograph of a face is nearly all soft gradient and lighting it
+       as though it were embossed looks like a mistake; a typographic sleeve or
+       a hard-edged graphic is exactly what this is for. The threshold is
+       applied at draw time, not here — the measurement is cheap and keeping it
+       means the decision can be retuned without re-importing a library. */
+    const density = energy / (RELIEF * RELIEF * 2);
+    return { map: out, size: RELIEF, density: Math.round(density * 1000) / 1000 };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -172,7 +243,7 @@ async function handle(job) {
     seenAlbums.add(track.albumKey);
     const thumb = await makeThumb(tags.picture);
     if (thumb) {
-      art = { key: track.albumKey, blob: thumb.blob, accent: thumb.accent };
+      art = { key: track.albumKey, blob: thumb.blob, accent: thumb.accent, relief: thumb.relief };
       track.accent = thumb.accent;
     }
   }

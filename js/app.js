@@ -15,6 +15,7 @@ import { animate, ease, reduceMotion, startDeviceTilt, deviceTiltNeedsPermission
 import { startIntro } from './intro.js';
 import { mountBackdrop } from './backdrop.js';
 import { toggleStage, isOpen as stageOpen } from './stage.js';
+import { startRelief } from './relief.js';
 
 /* Destinations are numbered, like channels on a desk — the number is part of
    how you learn where things are, not decoration. */
@@ -786,6 +787,11 @@ async function boot() {
   session.restore(toast).then((outcome) => {
     if (outcome === 'resumed' || outcome === 'ready') applyAccent();
   });
+
+  /* The printed cover gets somewhere to catch the light. One delegated
+     controller for the whole page — see relief.js for why it is not one per
+     sleeve. */
+  startRelief();
 
   /* Device tilt, where it was left switched on.
    *

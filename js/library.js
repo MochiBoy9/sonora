@@ -124,6 +124,14 @@ function flushArt() {
   for (const a of items) {
     db.putArt(a.key, a.blob).catch(() => {});
     if (a.accent) accents.set(a.key, a.accent);
+    /* The surface, under its own key in the same store. A typed array goes
+       into IndexedDB as itself, so it comes back out ready to read without a
+       parse — and an album whose cover has no relief simply has no record,
+       which is the same thing as "this one is flat". */
+    if (a.relief) {
+      reliefs.set(a.key, a.relief);
+      db.putArt(a.key + '#relief', a.relief).catch(() => {});
+    }
     // Seed the cache from the blob we already hold: no round trip, and it
     // clears any "no art here" verdict reached while the import was running.
     artMisses.delete(a.key);
@@ -254,6 +262,36 @@ function decorate(t) {
 }
 
 const accents = new Map();      // albumKey -> [r,g,b], filled during import
+
+/* albumKey -> { map, size, density }, the cover's own surface. Held in memory
+   only for albums that have been looked at; a library of four hundred at 8 KB
+   each would be three megabytes of normals nobody is currently hovering. */
+const reliefs = new Map();
+const reliefMisses = new Set();
+
+/**
+ * The relief map for an album, or null.
+ *
+ * Synchronous when it is already warm, which is the case that matters — this
+ * is asked for on pointerenter and an await there would light the sleeve one
+ * frame after the pointer arrived.
+ */
+export function reliefFor(key) {
+  if (!key || reliefMisses.has(key)) return null;
+  return reliefs.get(key) || null;
+}
+
+/** Fetches it from the store, once, for a sleeve that is about to want it. */
+export function loadRelief(key) {
+  if (!key || reliefs.has(key) || reliefMisses.has(key)) {
+    return Promise.resolve(reliefs.get(key) || null);
+  }
+  return db.getArt(key + '#relief').then((rec) => {
+    if (rec && rec.map) { reliefs.set(key, rec); return rec; }
+    reliefMisses.add(key);
+    return null;
+  }).catch(() => { reliefMisses.add(key); return null; });
+}
 export const accentFor = (key) =>
   accents.get(key) || state.albumBy.get(key)?.accent || null;
 
