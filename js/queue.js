@@ -7,11 +7,11 @@
 import { el, ico, fmtTime, fmtCount } from './util.js';
 import * as player from './player.js';
 import * as lib from './library.js';
-import { paintArt, artBox, menu, trackMenu, toast, emptyState } from './ui.js';
+import { paintArt, artBox, menu, trackMenu, toast, emptyState, promptDialog } from './ui.js';
 import { VirtualList } from './virtual.js';
 import { createVisualizer } from './visualizer.js';
 import { storedMode } from './stage.js';
-import { tick, animate, enter, ease } from './motion.js';
+import { tick, animate, enter, ease, reduceMotion } from './motion.js';
 
 const ROW_H = 56;
 
@@ -96,6 +96,38 @@ function buildNowPlaying(host, visible) {
 
   mountVisualizer(canvas, visible);
 
+  /* The sleeve leans into the music.
+   *
+   * `player.analysis()` is already read once a frame for every visualiser on
+   * screen, so this is one more consumer of a number that has been computed
+   * either way — no second FFT, no second reading of the analyser.
+   *
+   * `pulse` is bass against its own running average, which is why this settles
+   * between beats rather than jittering with the waveform. The transform is
+   * eased toward its target rather than tracking it exactly: a sleeve that
+   * matched a kick sample-for-sample would twitch, and what a heavy object
+   * does with a transient is lag it.
+   */
+  const stage = host.querySelector('.np-stage');
+  let lean = 0;
+  let stopLean = null;
+  function syncLean() {
+    const wanted = player.state.playing && !reduceMotion.matches;
+    if (wanted && !stopLean) {
+      stopLean = tick((dt) => {
+        const a = player.analysis();
+        lean += ((a.pulse * 0.9 + a.level * 0.35) - lean) * Math.min(1, dt / 110);
+        stage.style.transform =
+          `scale(${(1 + lean * 0.032).toFixed(4)}) rotateX(${(lean * -2.4).toFixed(2)}deg)`;
+      });
+    } else if (!wanted && stopLean) {
+      stopLean();
+      stopLean = null;
+      lean = 0;
+      stage.style.transform = '';           // hand it back to CSS
+    }
+  }
+
   function paintArtOnly() {
     const t = player.state.current;
     if (t) paintArt(art, t.albumKey);
@@ -114,8 +146,11 @@ function buildNowPlaying(host, visible) {
       title.textContent = t.title;
       animate(host.querySelector('.np-meta'),
         { opacity: [0, 1], transform: ['translateY(10px)', 'none'] }, { duration: 400, easing: ease.out });
+      // 'release', because the lean writes this element's transform every
+      // frame and a committed `scale(1)` would be one more thing sitting on it.
       animate(host.querySelector('.np-stage'),
-        { opacity: [0.5, 1], transform: ['scale(.95)', 'scale(1)'] }, { duration: 460, easing: ease.out });
+        { opacity: [0.5, 1], transform: ['scale(.95)', 'scale(1)'] },
+        { duration: 460, easing: ease.out, commit: 'release' });
     }
     artist.textContent = t.artist;
     artist.href = '#/artist/' + t.artistKey;
@@ -150,6 +185,7 @@ function buildNowPlaying(host, visible) {
     // The class goes on .np, not on the panel: the artwork glow and the
     // visualiser's resting opacity both hang off it.
     host.querySelector('.np').classList.toggle('is-playing', player.state.playing);
+    syncLean();
   }
 
   return { paint, paintState, paintArtOnly };
@@ -193,6 +229,29 @@ function mountVisualizer(canvas, visible) {
 function buildQueue(host) {
   const head = el('div', { class: 'queue-head' },
     el('div', { class: 'queue-summary' }),
+    // The queue is where a sequence actually gets built — by hand, by
+    // right-clicking things in over an evening — and until now that work
+    // evaporated the moment you played something else.
+    el('button', {
+      class: 'link-btn', text: 'Keep',
+      title: 'Save this queue as a playlist',
+      onclick: () => {
+        const tracks = player.state.queue.map((id) => lib.getTrack(id)).filter(Boolean);
+        if (!tracks.length) return toast('Nothing in the queue to keep');
+        const from = player.state.origin && player.state.origin.label;
+        promptDialog({
+          title: 'Keep this queue',
+          label: 'Playlist name',
+          value: from ? String(from) : 'Queue ' + new Date().toLocaleDateString(),
+          confirm: 'Keep',
+          onConfirm: async (name) => {
+            if (!name) return;
+            await lib.createPlaylist(name, tracks.map((t) => t.id));
+            toast(`Kept ${tracks.length} tracks as “${name}”`);
+          },
+        });
+      },
+    }),
     el('button', { class: 'link-btn', text: 'Clear', onclick: () => { player.clearQueue(); toast('Queue cleared'); } }));
   host.appendChild(head);
 

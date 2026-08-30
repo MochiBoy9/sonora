@@ -55,7 +55,7 @@ function parseHash() {
   return { name, arg };
 }
 
-function navigate() {
+function swapView() {
   const host = $('#view');
   const route = parseHash();
 
@@ -76,6 +76,61 @@ function navigate() {
   if (remembered) requestAnimationFrame(() => { host.scrollTop = remembered; });
 
   document.title = titleFor(route);
+}
+
+/**
+ * Routes used to blank and rebuild. Wrapped in a view transition they cross-
+ * fade instead — and where a cover has been marked on the way out (see
+ * `markTransition` in views.js), the browser matches it to the record on the
+ * page being arrived at and flies one into the other.
+ *
+ * The swap itself is unchanged and still synchronous; `startViewTransition`
+ * only takes a snapshot either side of it. On an engine without it, or for
+ * someone who has asked for less motion, the callback runs directly and the
+ * app behaves exactly as it did before.
+ */
+let transitioning = false;
+
+function navigate() {
+  const paired = document.querySelector('[style*="view-transition-name"]');
+
+  /* Four reasons to do the plain swap, and every one of them is a case where a
+     transition is either impossible or unwanted:
+     — the engine has no view transitions;
+     — someone asked for less motion;
+     — the document is hidden, where the API aborts by design (a background
+       tab has nothing to take a snapshot of);
+     — one is already running, and starting a second skips the first. */
+  if (!document.startViewTransition || reduceMotion.matches ||
+      document.visibilityState === 'hidden' || transitioning) {
+    clearTransitionMarks();
+    return swapView();
+  }
+
+  document.documentElement.classList.toggle('vt-paired', !!paired);
+  transitioning = true;
+  const done = () => {
+    transitioning = false;
+    // Marks are per-navigation. Left in place they collide with the next one,
+    // and two elements sharing a view-transition-name is a transition the
+    // browser refuses to run at all.
+    clearTransitionMarks();
+    document.documentElement.classList.remove('vt-paired');
+  };
+
+  const vt = document.startViewTransition(() => swapView());
+  // A skipped or aborted transition rejects. That is a normal outcome — the
+  // route still changed — so it is caught rather than left to surface as an
+  // unhandled rejection in everybody's console.
+  vt.finished.then(done, done);
+}
+
+/** Removes every view-transition-name this app put on the page. */
+function clearTransitionMarks() {
+  for (const n of document.querySelectorAll('[data-vt]')) {
+    n.style.removeProperty('view-transition-name');
+    n.removeAttribute('data-vt');
+  }
 }
 
 function titleFor(route) {
@@ -699,8 +754,15 @@ async function boot() {
   lib.events.on('art', applyAccent);
 
   await player.init();
+  intro.report('AUDIO GRAPH OK');
   await lib.init();
+  // Real numbers, printed at the moment they are known. An empty library says
+  // so rather than being given a figure to make the boot look busier.
+  intro.report(lib.trackCount()
+    ? `${lib.trackCount().toLocaleString()} TRACKS · ${lib.state.albums.length.toLocaleString()} ALBUMS`
+    : 'NO LIBRARY YET');
   await stats.init();
+  intro.report(lib.serial);
 
   navigate();
   syncNotice();

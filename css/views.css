@@ -292,6 +292,165 @@
 }
 .art-echo-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
+/* ------------------------------------------------------------------ back */
+
+/*
+ * The record turns over.
+ *
+ * `.sleeve-flip` is a second turning element inside the sleeve, and it has to
+ * be: the pointer tilt is written inline on `.sleeve` itself, so a flip on the
+ * same element would be overwritten by the next mouse move. Nested, the two
+ * compose — the record leans toward you *and* turns over.
+ */
+.sleeve-flip {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transition: transform 720ms cubic-bezier(.55, 0, .2, 1);
+}
+.sleeve.is-flipped .sleeve-flip { transform: rotateY(180deg); }
+
+/* Both faces are opaque and back-to-back, so each hides the other's mirror
+   image. Without this the tracklist reads through the cover, reversed. */
+.sleeve.has-back .art-3d,
+.sleeve-back { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+
+.sleeve-back {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 18px 14px;
+  overflow: hidden;
+  /* Printed card, not glass: the back of a sleeve is the one surface in the
+     app that should look like ink on board rather than light behind glass. */
+  background:
+    linear-gradient(160deg, rgb(var(--surface-3-rgb) / .96), rgb(var(--surface-rgb) / .99));
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+}
+
+.back-head { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; border-bottom: var(--hair) solid var(--line); }
+.back-artist {
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.back-title {
+  font-size: calc(14px * var(--scale));
+  font-weight: 600;
+  letter-spacing: -.015em;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.back-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  /* A long tracklist runs out under the spec block rather than being cut off
+     mid-letter. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 88%, transparent);
+  mask-image: linear-gradient(to bottom, #000 88%, transparent);
+}
+.back-list li {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: baseline;
+  font-size: calc(10.5px * var(--scale));
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.back-n, .back-d {
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.back-d { text-align: right; }
+.back-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The spec block: what the files are, as opposed to what they claim. */
+.back-spec {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1px 10px;
+  margin: 0;
+  padding-top: 8px;
+  border-top: var(--hair) solid var(--line);
+  font-family: var(--mono);
+  font-size: calc(8.5px * var(--scale));
+  letter-spacing: .06em;
+}
+.back-spec dt { color: var(--text-3); text-transform: uppercase; letter-spacing: .16em; }
+.back-spec dd { margin: 0; color: var(--text-2); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.back-cat {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: calc(8.5px * var(--scale));
+  letter-spacing: .18em;
+  color: var(--text-3);
+  padding-top: 6px;
+  border-top: var(--hair) solid var(--line);
+}
+
+/* The control that turns it. Sits under the record, on the floor. */
+.flip-btn {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--floor-h) * -0.1);
+  transform: translateX(-50%);
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 12px;
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  background: rgb(var(--surface-2-rgb) / .72);
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  --k: 6px;
+  clip-path: var(--nick-nw);
+  border-radius: var(--radius);
+  border: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease), color var(--dur-1) linear, background var(--dur-1) linear;
+}
+.flip-btn .ico { width: 13px; height: 13px; }
+.hero-show:hover .flip-btn, .flip-btn:focus-visible, .flip-btn[aria-pressed="true"] { opacity: 1; }
+.flip-btn:hover { color: var(--accent); background: rgb(var(--accent-rgb) / .12); }
+/* No pointer means no hover to reveal it with. */
+@media (hover: none) { .flip-btn { opacity: 1; } }
+
+/* Turned over, the reflection is of the back — but the floor plate is a copy
+   of the *front*, so it stops being true the moment the record turns. Hide it
+   rather than show a lie. */
+.sleeve.is-flipped ~ .art-floor,
+.sleeve-stage:has(.sleeve.is-flipped) .art-floor { opacity: 0; }
+
 /* A hairline where the object meets the floor. Without it the record and its
    reflection read as one tall smear; with it, there is a surface. */
 .hero-show .sleeve-stage::after {
@@ -345,14 +504,59 @@
   gap: 12px;
 }
 
-.shelf { padding-bottom: 24px; }
+/* A shelf below the fold is not laid out at all until it is approached, which
+   is the one part of the library that is not virtualised and therefore the one
+   place this is worth asking for. The intrinsic size keeps the scrollbar
+   honest while the content is skipped. */
+.shelf {
+  padding-bottom: 24px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 340px;
+}
 
 .rail-wrap { position: relative; margin: 0 calc(var(--gutter) * -1); }
 
-/* The camera the shelf's arrival is seen through. Without it `rotateX` is not
-   a rotation at all — it is a vertical squash, which is what a card tilting
-   "in 3D" looks like when nothing has told the browser where the eye is. */
+/* The camera the shelf is seen through. Without it `rotateY` is not a rotation
+   at all — it is a horizontal squash, which is what a card turning "in 3D"
+   looks like when nothing has told the browser where the eye is. */
 .rail, .grid { perspective: 1200px; }
+
+/* ------------------------------------------------------------------ rack */
+
+/*
+ * A shelf is a rack of records you flip through, so the record in the middle
+ * faces you and the ones to either side turn away from it.
+ *
+ * This is a scroll-driven animation, which means the browser runs it on the
+ * compositor from the rail's own scroll position — no listener, no per-frame
+ * JavaScript, and none of the main-thread cost that ruled this effect out
+ * before. `view(inline)` gives each card its progress across the rail.
+ *
+ * Two guards, both load-bearing:
+ *
+ *   `.is-flippable` is added by shelf() only when the rail actually overflows.
+ *   A view timeline on a scroller that cannot scroll never advances, and the
+ *   animation would sit frozen on its first keyframe — leaving every card in a
+ *   short shelf permanently turned fourteen degrees.
+ *
+ *   The whole block is inside @supports, so an engine without scroll-driven
+ *   animations gets flat cards rather than a broken rack. Nothing else changes.
+ */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .rail.is-flippable > * {
+      animation: shelf-turn linear both;
+      animation-timeline: view(inline);
+      animation-range: cover 0% cover 100%;
+    }
+  }
+}
+
+@keyframes shelf-turn {
+  from { transform: rotateY(calc(14deg * var(--parallax))) translateZ(calc(-44px * var(--parallax))); }
+  50%  { transform: rotateY(0deg) translateZ(0); }
+  to   { transform: rotateY(calc(-14deg * var(--parallax))) translateZ(calc(-44px * var(--parallax))); }
+}
 
 .rail {
   display: grid;
@@ -811,4 +1015,143 @@
 
 @media (max-width: 760px) {
   .circle-bar .circle-hint { display: none; }
+}
+
+/* ------------------------------------------------------------------ census */
+
+/* What the library is made of, as bars rather than as a pie: these are counts
+   to read off a machine, not proportions to admire. */
+.census { display: grid; gap: 5px; padding-bottom: 4px; }
+.census-head { margin-top: 16px; padding-bottom: 7px; }
+.census-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) 62px;
+  align-items: center;
+  gap: 12px;
+}
+.census-key {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  letter-spacing: .1em;
+  color: var(--text-2);
+  text-transform: uppercase;
+}
+.census-bar {
+  position: relative;
+  height: 8px;
+  background: rgb(var(--surface-3-rgb) / .7);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  --k: 3px;
+  clip-path: var(--nick-nw);
+}
+.census-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent-grad);
+  box-shadow: 0 0 12px -4px var(--accent-glow);
+}
+.census-n {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text-3);
+}
+
+.about .mono { font-family: var(--mono); letter-spacing: .16em; color: var(--text-3); }
+
+/* ------------------------------------------------------------------ crate */
+
+/*
+ * Records in a crate, seen from the front.
+ *
+ * The stage owns the perspective and the records are laid out by their
+ * distance from the middle, not by their index — which is why this cannot be
+ * a grid and why the positions are written rather than flowed. Each record
+ * eases to where it was put, so the whole rack swings rather than jumps.
+ */
+.crate {
+  position: relative;
+  height: min(58vh, 460px);
+  min-height: 300px;
+  perspective: 1500px;
+  perspective-origin: 50% 42%;
+  outline: none;
+}
+.crate:focus-visible { box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+
+.crate-rail {
+  position: absolute;
+  inset: 0 0 88px;
+  transform-style: preserve-3d;
+}
+
+/*
+ * Two-class selector on purpose. A crate item is also a `.card`, and aero.css
+ * — which loads last — declares `.card { position: relative }` for the
+ * specular edge. A single-class rule here loses that fight silently, every
+ * record takes its static position instead of the centre, and the crate stacks
+ * into a column. Same trap that file warns about for the queue panel.
+ */
+.crate-rail > .crate-item {
+  /* Centred by left/top plus a translate that every JS transform re-states as
+     its first term, because that line replaces the transform wholesale. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(46%, 258px);
+  padding: 0;
+  cursor: pointer;
+  transform-style: preserve-3d;
+  transition: transform 520ms var(--ease), opacity 380ms linear;
+  will-change: transform, opacity;
+}
+/* Only the record at the front carries its own name; the rest are backdrop,
+   and eleven stacked titles is noise rather than information. */
+.crate-item .card-title,
+.crate-item .card-sub { display: none; }
+.crate-item .card-art { margin-bottom: 0; }
+/* The pointer tilt belongs to the record you are looking at. On the ones
+   behind it, two rotations fight and the rack shears. */
+.crate-item:not(.is-front) .sleeve { transform: none !important; }
+.crate-item:not(.is-front) .card-fab,
+.crate-item:not(.is-front) .card-tick { display: none; }
+.crate-item.is-front { filter: drop-shadow(0 26px 40px rgb(0 0 0 / .55)); }
+
+.crate-meta {
+  position: absolute;
+  left: 0; right: 0; bottom: 34px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  pointer-events: none;
+}
+.crate-title {
+  font-size: calc(21px * var(--scale));
+  font-weight: 600;
+  letter-spacing: -.02em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0 20px;
+}
+.crate-sub {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.crate-hint {
+  position: absolute;
+  left: 0; right: 0; bottom: 8px;
+  text-align: center;
+  opacity: .5;
+  pointer-events: none;
+}
+
+.album-slot { position: relative; }
+
+@media (prefers-reduced-motion: reduce) {
+  .crate-item { transition: none; }
 }

@@ -300,12 +300,9 @@ export function tilt3d(node, { max = 9, lift = 14, scale = 1.02 } = {}) {
   const sx = spring({ from: 0, to: 0, stiffness: 210, damping: 22, onUpdate: (v) => { rx = v; write(); } });
   const sy = spring({ from: 0, to: 0, stiffness: 210, damping: 22, onUpdate: (v) => { ry = v; write(); } });
   const sz = spring({ from: 0, to: 0, stiffness: 190, damping: 24, onUpdate: (v) => { z = v; write(); } });
-  // The light follows on its own, slacker spring: a highlight that arrives a
-  // beat after the surface it is on is what makes the surface read as heavy.
-  const sl = spring({
-    from: 0, to: 0, stiffness: 150, damping: 26,
-    onUpdate: (v) => node.style.setProperty('--lit', v.toFixed(3)),
-  });
+  // `--lit` is registered as a <number> in aero.css, so it is a real animatable
+  // property and CSS eases it there. This used to be a fourth spring on the
+  // shared ticker; it is now one assignment and a transition.
 
   // The box is measured once per hover, not once per move: reading it inside
   // pointermove forces a layout on every event, and a grid of these turns a
@@ -329,11 +326,11 @@ export function tilt3d(node, { max = 9, lift = 14, scale = 1.02 } = {}) {
     sy.to = px * 2 * max * gain;
     sx.to = -py * 2 * max * gain;
     sz.to = lift * gain;
-    sl.to = 1;
+    node.style.setProperty('--lit', '1');
     node.style.setProperty('--tx', (px * 2).toFixed(3));
     node.style.setProperty('--ty', (py * 2).toFixed(3));
   };
-  const onLeave = () => { box = null; sx.to = 0; sy.to = 0; sz.to = 0; sl.to = 0; };
+  const onLeave = () => { box = null; sx.to = 0; sy.to = 0; sz.to = 0; node.style.setProperty('--lit', '0'); };
 
   node.addEventListener('pointerenter', onEnter);
   node.addEventListener('pointermove', onMove);
@@ -345,7 +342,7 @@ export function tilt3d(node, { max = 9, lift = 14, scale = 1.02 } = {}) {
     node.removeEventListener('pointermove', onMove);
     node.removeEventListener('pointerleave', onLeave);
     node.removeEventListener('pointercancel', onLeave);
-    sx.stop(); sy.stop(); sz.stop(); sl.stop();
+    sx.stop(); sy.stop(); sz.stop();
     node.style.transform = '';
     node.style.removeProperty('--tx');
     node.style.removeProperty('--ty');

@@ -5,7 +5,7 @@
  * rendered directly, because 12 nodes are cheaper than the machinery.
  */
 
-import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText } from './util.js';
+import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText, formatName } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import * as db from './db.js';
@@ -52,6 +52,24 @@ function readout(node, value, opts) {
 
 const albumOf = (key) => lib.state.albumBy.get(key);
 const artistOf = (key) => lib.state.artistBy.get(key);
+
+/**
+ * Marks the one element that should fly between two routes rather than
+ * cross-fade with the rest of the page.
+ *
+ * Exactly one element may wear a given `view-transition-name` at a time — two
+ * of them and the browser declines to run the transition at all — so this is
+ * put on the cover being left behind, and again on the record being arrived
+ * at. The two never coexist, because the old view is torn down and the new one
+ * built inside the same callback.
+ *
+ * `data-vt` is the handle app.js uses to take the names off again afterwards.
+ */
+export function markTransition(node, name = 'vt-sleeve') {
+  if (!node || typeof document.startViewTransition !== 'function') return;
+  node.style.setProperty('view-transition-name', name);
+  node.setAttribute('data-vt', '');
+}
 
 function playAll(tracks, index = 0, origin) {
   if (!tracks.length) return;
@@ -156,7 +174,14 @@ export function albumCard(album, { onOpen } = {}) {
     const al = albumOf(key);
     if (al) playAll(al.tracks, 0, { type: 'album', key, label: al.title });
   });
-  const open = () => onOpen ? onOpen(card.dataset.key) : (location.hash = '#/album/' + card.dataset.key);
+  const open = () => {
+    if (onOpen) return onOpen(card.dataset.key);
+    // The cover you clicked is the thing that should arrive on the next page,
+    // so it is named on the way out and the album's record is named on the way
+    // in. Everything else about the two pages cross-fades around it.
+    markTransition(card.querySelector('.sleeve'));
+    location.hash = '#/album/' + card.dataset.key;
+  };
   card.addEventListener('click', open);
   card.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
   card.addEventListener('contextmenu', (e) => {
@@ -169,9 +194,26 @@ export function albumCard(album, { onOpen } = {}) {
   return card;
 }
 
+/**
+ * How thick a record is: a single is a card, a double LP is a slab.
+ *
+ * Twelve tracks is the length of an ordinary album and sits at 1, which is the
+ * thickness the edge plane was drawn for. Clamped hard at both ends, because a
+ * one-track release still has to be a physical object and a 90-track box set
+ * cannot be allowed to become a wall.
+ */
+const thicknessOf = (album) =>
+  Math.max(0.45, Math.min(1.9, Math.sqrt((album.tracks.length || 1) / 12)));
+
 export function renderAlbumCard(card, album) {
   card.dataset.key = album.key;
   paintArt(card.querySelector('.art-img'), album.key);
+  card.querySelector('.sleeve')?.style.setProperty('--thick', thicknessOf(album).toFixed(3));
+  // Two extra plates behind a record that came on more than one disc. Drawn by
+  // the sleeve's own pseudo-elements, so a set costs no more DOM than a single.
+  const discs = Math.min(3, new Set(album.tracks.map((t) => t.disc || 1)).size);
+  const sleeve = card.querySelector('.sleeve');
+  if (sleeve) { if (discs > 1) sleeve.dataset.discs = String(discs); else delete sleeve.dataset.discs; }
   const t = card.querySelector('.card-title');
   if (t.textContent !== album.title) t.textContent = album.title;
   const s = card.querySelector('.card-sub');
@@ -229,6 +271,10 @@ function shelf(title, items, makeCard, { seeAll } = {}) {
     const max = rail.scrollWidth - rail.clientWidth;
     prev.hidden = rail.scrollLeft < 4;
     next.hidden = max < 4 || rail.scrollLeft > max - 4;
+    // The rack only turns on a rail that can actually be flipped through. A
+    // view timeline on a scroller with nowhere to scroll never advances, and
+    // the cards would sit frozen on the first keyframe — permanently askew.
+    rail.classList.toggle('is-flippable', max > 4);
   };
   rail.addEventListener('scroll', sync, { passive: true });
   new ResizeObserver(sync).observe(rail);
@@ -369,9 +415,14 @@ function viewHome(host) {
   // depth rather than sliding in from the side. Observers, not a scroll
   // handler: the crossing is computed off the main thread, which is the only
   // version of this that a virtualised list further down the page can afford.
-  const offHeads = reveal(host.querySelectorAll('.shelf .section-head'), { y: 14, z: -40, rotate: 0, duration: 560, each: 0 });
-  const offCards = reveal(host.querySelectorAll('.shelf .rail > *'), { y: 26, z: -140, rotate: 5, each: 52 });
-  return () => { offHeads(); offCards(); };
+  // Each shelf arrives as one thing rather than as a stagger of cards, and the
+  // observer is pointed at the shelf itself. Both follow from
+  // `content-visibility: auto`: a skipped subtree has no boxes, so an observer
+  // watching the cards inside it would be watching nothing — while the shelf
+  // is exactly the element the browser is already deciding about. The cards
+  // get their own motion from the rack as you flip through them.
+  const offShelves = reveal(host.querySelectorAll('.shelf'), { y: 26, z: -110, rotate: 3, each: 0, duration: 700 });
+  return () => offShelves();
 }
 
 /* ------------------------------------------------------------------ SONGS */
@@ -421,17 +472,177 @@ function viewAlbums(host) {
     return () => {};
   }
 
-  const grid = new VirtualGrid({
-    viewport: host, minCell: 168, gap: 22, aspect: 1, footer: 64,
-    create: () => albumCard(null),
-    render: (node, album) => renderAlbumCard(node, album),
-  });
-  grid.setItems(albums);
-  enter([head], { y: 10 });
+  /* Two ways to look at a wall of records: as a wall, or as a crate you flip
+     through. The choice is remembered, because it is a way of working rather
+     than a novelty to be re-chosen every visit. */
+  let mode = 'grid';
+  try { mode = localStorage.getItem(ALBUM_VIEW) === 'crate' ? 'crate' : 'grid'; } catch { /* private */ }
 
-  const off = lib.events.on('change', () => grid.setItems(lib.state.albums));
-  const offArt = lib.events.on('art', () => grid.refresh());
-  return () => { off(); offArt(); grid.destroy(); };
+  const bar = el('div', { class: 'toolbar' }, el('div', { class: 'segmented', role: 'tablist' }));
+  const seg = bar.firstChild;
+  for (const [id, label] of [['grid', 'Grid'], ['crate', 'Crate']]) {
+    seg.appendChild(el('button', {
+      class: 'seg' + (id === mode ? ' is-on' : ''), role: 'tab', text: label,
+      'aria-selected': id === mode ? 'true' : 'false',
+      onclick: () => setMode(id),
+    }));
+  }
+  host.appendChild(bar);
+
+  const slot = el('div', { class: 'album-slot' });
+  host.appendChild(slot);
+
+  let teardown = () => {};
+  function setMode(next) {
+    if (next === mode && slot.firstChild) return;
+    mode = next;
+    try { localStorage.setItem(ALBUM_VIEW, mode); } catch { /* private */ }
+    for (const b of seg.children) {
+      const on = b.textContent.toLowerCase() === mode;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    try { teardown(); } catch (err) { console.warn(err); }
+    slot.textContent = '';
+    teardown = mode === 'crate' ? mountCrate(slot) : mountGrid(slot);
+  }
+
+  function mountGrid(into) {
+    const grid = new VirtualGrid({
+      viewport: host, minCell: 168, gap: 22, aspect: 1, footer: 64,
+      create: () => albumCard(null),
+      render: (node, album) => renderAlbumCard(node, album),
+    });
+    grid.setItems(lib.state.albums);
+    const off = lib.events.on('change', () => grid.setItems(lib.state.albums));
+    const offArt = lib.events.on('art', () => grid.refresh());
+    void into;
+    return () => { off(); offArt(); grid.destroy(); };
+  }
+
+  setMode(mode);
+  enter([head, bar], { y: 10 });
+  return () => { try { teardown(); } catch (err) { console.warn(err); } };
+}
+
+const ALBUM_VIEW = 'sonora:albumview';
+
+/* ------------------------------------------------------------------ crate */
+
+/**
+ * Records in a crate, seen from the front.
+ *
+ * Only a window of records around the current one exists in the DOM — eleven
+ * of them, recycled — so a crate of fifty thousand costs the same as a crate
+ * of eleven. That is the same argument the virtualiser makes, made again in a
+ * shape the virtualiser cannot help with, because these are positioned by
+ * their distance from the middle rather than by their index.
+ *
+ * Positions are written in JavaScript rather than by a scroll-driven
+ * animation, and deliberately: nothing moves per frame here. Eleven transforms
+ * are written when the selection changes and never again — a keypress, not a
+ * scroll. CSS then eases each record to where it was put, which is what makes
+ * the whole rack swing rather than jump.
+ */
+function mountCrate(host) {
+  const WINDOW = 5;                       // how many either side of the middle
+  const box = el('div', {
+    class: 'crate', tabindex: '0', role: 'listbox', 'aria-label': 'Albums',
+  });
+  const rail = el('div', { class: 'crate-rail' });
+  const meta = el('div', { class: 'crate-meta' },
+    el('h2', { class: 'crate-title' }),
+    el('p', { class: 'crate-sub' }));
+  const hint = el('p', { class: 'crate-hint label', text: 'Arrow keys to flip · Enter to open' });
+  box.append(rail, meta, hint);
+  host.appendChild(box);
+
+  let albums = lib.state.albums;
+  let at = 0;
+  const cards = new Map();                // offset -> node, recycled in place
+
+  function paint() {
+    albums = lib.state.albums;
+    if (!albums.length) return;
+    at = Math.max(0, Math.min(albums.length - 1, at));
+
+    for (let o = -WINDOW; o <= WINDOW; o++) {
+      let node = cards.get(o);
+      if (!node) {
+        node = albumCard(null);
+        node.classList.add('crate-item');
+        rail.appendChild(node);
+        cards.set(o, node);
+      }
+      const album = albums[at + o];
+      if (!album) { node.hidden = true; continue; }
+      node.hidden = false;
+      renderAlbumCard(node, album);
+
+      // Fanned out from the middle: the further away, the further back, the
+      // more turned, and the dimmer. The record at the front is the exception
+      // and has to be — it is centred, square to the viewer and a little
+      // forward of the rest, because it is the one being looked at. Folding it
+      // into the same formula as its neighbours turns it 42 degrees and pushes
+      // it sideways, which is a crate with nothing at the front of it.
+      const s = o < 0 ? -1 : 1;
+      const d = Math.abs(o);
+      const x = d === 0 ? 0 : s * (58 + (d - 1) * 30);
+      const z = d === 0 ? 70 : -d * 120;
+      const ry = d === 0 ? 0 : -s * 44;
+      // The -50% pair is the centring the stylesheet asked for and cannot
+      // apply itself, because this line replaces the whole transform.
+      node.style.transform =
+        `translate(-50%, -50%) translate3d(${x.toFixed(1)}px, 0, ${z.toFixed(0)}px)` +
+        ` rotateY(${ry.toFixed(0)}deg)`;
+      node.style.opacity = d === 0 ? '1' : String(Math.max(0.15, 1 - d * 0.22));
+      node.style.zIndex = String(20 - d);
+      node.classList.toggle('is-front', o === 0);
+      node.setAttribute('aria-selected', o === 0 ? 'true' : 'false');
+      // Only the record at the front is a target. Clicking one behind it and
+      // getting a different album than the one you pointed at is the classic
+      // failure of every cover-flow ever shipped.
+      node.style.pointerEvents = o === 0 ? 'auto' : 'none';
+    }
+
+    const cur = albums[at];
+    meta.querySelector('.crate-title').textContent = cur.title;
+    meta.querySelector('.crate-sub').textContent =
+      [cur.artist, cur.year || null, fmtCount(cur.tracks.length, 'track')].filter(Boolean).join(' · ');
+    box.setAttribute('aria-activedescendant', '');
+  }
+
+  const move = (by) => { at += by; paint(); };
+
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') { move(1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft') { move(-1); e.preventDefault(); }
+    else if (e.key === 'Home') { at = 0; paint(); e.preventDefault(); }
+    else if (e.key === 'End') { at = albums.length - 1; paint(); e.preventDefault(); }
+    else if (e.key === 'Enter' && albums[at]) {
+      markTransition(cards.get(0)?.querySelector('.sleeve'));
+      location.hash = '#/album/' + albums[at].key;
+    }
+  });
+
+  // A wheel is how people flip through a crate on a laptop. Either axis: a
+  // horizontal trackpad swipe and a vertical wheel mean the same thing here.
+  let wheelAt = 0;
+  box.addEventListener('wheel', (e) => {
+    const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (!d) return;
+    e.preventDefault();
+    const now = performance.now();
+    if (now - wheelAt < 110) return;      // one record per gesture, not per event
+    wheelAt = now;
+    move(d > 0 ? 1 : -1);
+  }, { passive: false });
+
+  paint();
+  box.focus({ preventScroll: true });
+  const off = lib.events.on('change', paint);
+  const offArt = lib.events.on('art', paint);
+  return () => { off(); offArt(); box.remove(); cards.clear(); };
 }
 
 /* ------------------------------------------------------------------ ALBUM */
@@ -445,7 +656,7 @@ function viewAlbum(host, key) {
   // The album page is the one place worth putting the record on a stand: it is
   // a page about a single object, so the object gets a floor, an edge and a
   // reflection, and it turns to follow the pointer.
-  const art = sleeve(key, 'hero-art', { reflect: true });
+  const art = sleeve(key, 'hero-art', { reflect: true, back: backCover(album), record: true });
   const meta = el('div', { class: 'hero-meta' },
     el('p', { class: 'eyebrow', text: 'Album' }),
     el('h1', { class: 'hero-title', text: album.title }),
@@ -469,7 +680,33 @@ function viewAlbum(host, key) {
   host.appendChild(hero);
   applyHeroTint(hero, key);
   decode(hero.querySelector('.hero-title'), album.title, { duration: 620 });
+  markTransition(art.querySelector('.sleeve'));
   const untilt = tilt3d(art.querySelector('.sleeve'), { max: 11, lift: 30, scale: 1.012 });
+
+  /* Turning the record over.
+   *
+   * A real button rather than a click on the artwork: the sleeve is 232px of
+   * inviting target that people will click expecting it to play, and a page
+   * whose largest element does something unguessable is a page that has
+   * traded discoverability for a trick. The button says what it does, takes
+   * focus, and answers Enter and Space for free. */
+  const flip = art.querySelector('.sleeve');
+  const flipBtn = el('button', {
+    class: 'flip-btn', 'aria-pressed': 'false',
+    title: 'Turn the sleeve over', 'aria-label': 'Show the back of the sleeve',
+    html: ico('refresh') + '<span>Back</span>',
+    onclick: () => {
+      const on = !flip.classList.contains('is-flipped');
+      flip.classList.toggle('is-flipped', on);
+      flipBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      flipBtn.setAttribute('aria-label', on ? 'Show the front of the sleeve' : 'Show the back of the sleeve');
+      flipBtn.querySelector('span').textContent = on ? 'Front' : 'Back';
+      // The back is real content, not decoration, so it stops being hidden
+      // from a screen reader the moment it is the side facing out.
+      art.querySelector('.sleeve-back').setAttribute('aria-hidden', on ? 'false' : 'true');
+    },
+  });
+  art.appendChild(flipBtn);
 
   const columns = ['index', 'title', 'duration'];
   const oneArtist = album.tracks.every((t) => t.artist === album.artist);
@@ -504,10 +741,87 @@ function viewAlbum(host, key) {
       const i = parseInt(row.dataset.index, 10);
       if (!isNaN(i)) factory.render(row, album.tracks[i], i);
     }
+    // The record comes out of the sleeve for this album and no other, and it
+    // stops turning rather than disappearing when playback pauses — which is
+    // what a paused turntable looks like.
+    const mine = player.state.current && player.state.current.albumKey === key;
+    flip.classList.toggle('is-playing', !!mine);
+    flip.classList.toggle('is-paused', !!mine && !player.state.playing);
   };
+  refresh();
   const off = player.events.on('track', refresh);
   const offState = player.events.on('state', refresh);
   return () => { off(); offState(); untilt(); };
+}
+
+/* ------------------------------------------------------------------ back cover */
+
+/**
+ * The back of the sleeve: the tracklist as it is printed on a record, and
+ * under it the spec block for what the files actually are.
+ *
+ * Everything here was already in the index. The tag reader worked the
+ * technical fields out on its way to the duration and the worker now keeps
+ * them, so this is a printing job rather than a parsing one.
+ *
+ * A library imported before those fields existed simply has fewer rows — the
+ * block prints what is known and says nothing about what is not, which is the
+ * only honest thing to do with a record that predates the question.
+ */
+function backCover(album) {
+  const back = el('div', { class: 'sleeve-back', 'aria-hidden': 'true' });
+
+  back.appendChild(el('div', { class: 'back-head' },
+    el('span', { class: 'back-artist', text: album.artist }),
+    el('span', { class: 'back-title', text: album.title })));
+
+  const list = el('ol', { class: 'back-list' });
+  for (const t of album.tracks) {
+    list.appendChild(el('li', {},
+      el('span', { class: 'back-n', text: String(t.track || '') }),
+      el('span', { class: 'back-t', text: t.title }),
+      el('span', { class: 'back-d', text: t.duration ? fmtTime(t.duration) : '' })));
+  }
+  back.appendChild(list);
+
+  /* One line per fact, and only for facts. A mixed-format album says so rather
+     than picking whichever file happened to be first. */
+  const uniq = (fn) => [...new Set(album.tracks.map(fn).filter(Boolean))];
+  const formats = uniq((t) => formatName(t.name || ''));
+  const rates = uniq((t) => t.sampleRate);
+  const depths = uniq((t) => t.bitDepth);
+  const chans = uniq((t) => t.channels);
+  const rateOf = (n) => (n % 1000 === 0 ? n / 1000 + ' kHz' : (n / 1000).toFixed(1) + ' kHz');
+  const bitrates = album.tracks.map((t) => t.bitrate).filter((n) => n > 0);
+  const avg = bitrates.length ? Math.round(bitrates.reduce((a, b) => a + b, 0) / bitrates.length) : 0;
+  const bytes = album.tracks.reduce((n, t) => n + (t.size || 0), 0);
+
+  const spec = el('dl', { class: 'back-spec' });
+  const row = (k, v) => { if (v) { spec.appendChild(el('dt', { text: k })); spec.appendChild(el('dd', { text: v })); } };
+  row('Format', formats.join(' · '));
+  row('Rate', rates.length ? rates.sort((a, b) => a - b).map(rateOf).join(' · ') : '');
+  row('Depth', depths.length ? depths.sort((a, b) => a - b).map((d) => d + '-bit').join(' · ') : '');
+  row('Channels', chans.length ? chans.map((c) => (c === 1 ? 'Mono' : c === 2 ? 'Stereo' : c + ' ch')).join(' · ') : '');
+  row('Bitrate', avg ? '~' + avg + ' kbps' : '');
+  // Only the tracks that have actually been listened to have a figure, so the
+  // count comes with it: "DR11 · 4 of 9" is a partial reading, and saying so is
+  // the difference between a measurement and a claim.
+  const drs = album.tracks.map((t) => t.dr).filter((n) => n > 0);
+  row('Dynamic range', drs.length
+    ? 'DR' + Math.round(drs.reduce((a, b) => a + b, 0) / drs.length) +
+      (drs.length < album.tracks.length ? ` · ${drs.length} of ${album.tracks.length}` : '')
+    : '');
+  row('On disk', bytes ? fmtBytes(bytes) : '');
+  row('Runtime', album.duration ? fmtTotal(album.duration) : '');
+  if (spec.children.length) back.appendChild(spec);
+
+  // The album key, which is a hash, set where a catalogue number goes. It is
+  // the only stable name this record has inside the app.
+  back.appendChild(el('div', { class: 'back-cat' },
+    el('span', { text: 'SNR-' + String(album.key).toUpperCase() }),
+    album.year ? el('span', { text: String(album.year) }) : null));
+
+  return back;
 }
 
 /** Paints a soft wash of the album's own colour behind its header. */
@@ -1250,6 +1564,57 @@ function viewSettings(host) {
   });
   host.appendChild(storage);
 
+  /* What the collection is made of. Bars in the mono stack rather than a pie
+     chart: these are counts to be read off, not proportions to be admired, and
+     a machine that tells you what it is holding is behaving like an
+     instrument. */
+  const shape = el('section', { class: 'block' }, sectionHead('What is in here'));
+  const paintShape = () => {
+    for (const n of [...shape.children].slice(1)) n.remove();
+    const c = lib.census();
+    if (!c.total) {
+      shape.appendChild(el('p', { class: 'muted small', text: 'Nothing indexed yet.' }));
+      return;
+    }
+
+    const bars = (rows, total, label) => {
+      const wrap = el('div', { class: 'census' });
+      for (const [k, n] of rows.slice(0, 6)) {
+        wrap.appendChild(el('div', { class: 'census-row' },
+          el('span', { class: 'census-key', text: label(k) }),
+          el('span', { class: 'census-bar' },
+            el('i', { style: { width: Math.max(1.5, (n / total) * 100) + '%' } })),
+          el('span', { class: 'census-n', text: n.toLocaleString() })));
+      }
+      return wrap;
+    };
+
+    const pct = Math.round((c.lossless / c.total) * 100);
+    shape.appendChild(el('p', { class: 'muted small', text:
+      `${c.total.toLocaleString()} tracks · ${fmtBytes(c.bytes)} on disk · ${pct}% lossless` }));
+
+    shape.appendChild(el('p', { class: 'label census-head', text: 'Container' }));
+    shape.appendChild(bars(c.formats, c.total, (k) => k.toUpperCase()));
+
+    if (c.known.rate) {
+      shape.appendChild(el('p', { class: 'label census-head', text: 'Sample rate' }));
+      shape.appendChild(bars(c.rates, c.known.rate,
+        (k) => (k % 1000 === 0 ? k / 1000 : (k / 1000).toFixed(1)) + ' kHz'));
+    }
+    if (c.known.depth) {
+      shape.appendChild(el('p', { class: 'label census-head', text: 'Bit depth' }));
+      shape.appendChild(bars(c.depths, c.known.depth, (k) => k + '-bit'));
+    }
+    // Said plainly rather than folded into the bars: a library imported before
+    // the reader kept stream details is not a library of unknown files.
+    if (c.known.rate < c.total) {
+      shape.appendChild(el('p', { class: 'muted small', text:
+        `${(c.total - c.known.rate).toLocaleString()} tracks were indexed before Sonora recorded stream details. Rescan a folder to fill them in.` }));
+    }
+  };
+  paintShape();
+  host.appendChild(shape);
+
   const keys = el('section', { class: 'block' },
     sectionHead('Keyboard'),
     el('div', { class: 'settings-row' },
@@ -1267,10 +1632,12 @@ function viewSettings(host) {
   const about = el('section', { class: 'block about' },
     sectionHead('About'),
     el('p', { class: 'muted', text: 'Sonora plays audio files from this computer. Files are read directly by the browser — nothing is uploaded, and the library index lives in local storage on this device.' }),
-    el('p', { class: 'muted small', text: 'Every audio container is indexed and tagged — MP3, M4A/AAC, FLAC, Ogg/Opus, WAV, AIFF, WebM/Matroska and the rest. Anything this browser has no decoder for is still catalogued, and says so on its row.' }));
+    el('p', { class: 'muted small', text: 'Every audio container is indexed and tagged — MP3, M4A/AAC, FLAC, Ogg/Opus, WAV, AIFF, WebM/Matroska and the rest. Anything this browser has no decoder for is still catalogued, and says so on its row.' }),
+    // The serial: random, generated once, derived from nothing about you.
+    el('p', { class: 'muted small mono', text: lib.serial }));
   host.appendChild(about);
 
-  enter([head, folders, conn, appearance, viz, online, listening, storage, keys, about], { each: 34, y: 12 });
+  enter([head, folders, conn, appearance, viz, online, listening, storage, shape, keys, about], { each: 34, y: 12 });
   const off = lib.events.on('roots', paintRoots);
   return () => off();
 }

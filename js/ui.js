@@ -25,11 +25,36 @@ export function placeholderStyle(key) {
     hsl(${hue + 30} 30% 11%) 100%)`;
 }
 
+/**
+ * How hard this cover wants its edge lit, 0…1.
+ *
+ * A near-black sleeve needs a strong arris or it dissolves into the ground; a
+ * bright one needs almost none or the rim blows out into a halo. The number is
+ * the inverse of the artwork's own luminance, and the artwork's colour was
+ * already extracted at import for the accent — so this costs one multiply and
+ * no new work at all.
+ *
+ * Rec. 709 coefficients: green carries most of what the eye reads as
+ * brightness, and a flat average would call a saturated blue cover as bright
+ * as a pale yellow one.
+ */
+function rimFor(key) {
+  const rgb = key && lib.accentFor(key);
+  if (!rgb) return null;
+  const L = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+  return Math.max(0.15, Math.min(1, 1 - L));
+}
+
 /** Fills an <img> from the art cache — synchronously when it is already warm. */
 export function paintArt(img, key) {
   img.dataset.key = key || '';
   const holder = img.parentNode;
   if (holder) holder.style.background = key ? placeholderStyle(key) : '';
+  if (holder) {
+    const rim = rimFor(key);
+    if (rim === null) holder.style.removeProperty('--rim');
+    else holder.style.setProperty('--rim', rim.toFixed(3));
+  }
   if (!key) { img.removeAttribute('src'); img.classList.remove('is-loaded'); return; }
 
   const cached = lib.artURL(key);
@@ -69,10 +94,22 @@ export function artBox(key, size, cls = '') {
  * The edge is `<i aria-hidden>` because it is a side of a box rather than a
  * picture; there is nothing there to describe.
  */
-export function sleeve(key, cls = '', { reflect = false } = {}) {
+export function sleeve(key, cls = '', { reflect = false, back = null, record = false } = {}) {
   const art = artBox(key, null, 'art-3d ' + cls);
-  const inner = el('div', { class: 'sleeve' },
-    el('i', { class: 'art-edge', 'aria-hidden': 'true' }), art);
+
+  // Two nested turning elements, because two different things turn it. The
+  // pointer tilt is written inline on `.sleeve` by tilt3d; the flip is a class
+  // on `.sleeve-flip` inside it. One element cannot carry both without one
+  // overwriting the other, and the pointer would win — which is to say the
+  // record would never turn over.
+  let face = [el('i', { class: 'art-edge', 'aria-hidden': 'true' }), art];
+  if (back) face = [el('div', { class: 'sleeve-flip' }, ...face, back)];
+
+  // The record lives behind the face and in front of the edge, and it is a
+  // sibling of the flip wrapper rather than inside it: a disc that turned over
+  // with the sleeve would be a disc printed on the back cover.
+  const inner = el('div', { class: 'sleeve' + (back ? ' has-back' : '') },
+    record ? el('i', { class: 'record', 'aria-hidden': 'true' }) : null, ...face);
   const stage = el('div', { class: 'sleeve-stage' }, inner);
   if (reflect) {
     // The floor. A second <img> pointed at the object URL the cache already
@@ -436,11 +473,24 @@ export function addToPlaylistDialog(tracks) {
 }
 
 export function infoDialog(track) {
+  const rate = track.sampleRate
+    ? (track.sampleRate % 1000 === 0 ? track.sampleRate / 1000 : (track.sampleRate / 1000).toFixed(1)) + ' kHz'
+    : '';
+  const chans = track.channels === 1 ? 'Mono' : track.channels === 2 ? 'Stereo'
+    : track.channels ? track.channels + ' ch' : '';
+  const stream = [rate, track.bitDepth ? track.bitDepth + '-bit' : '', chans,
+    track.bitrate ? '~' + track.bitrate + ' kbps' : ''].filter(Boolean).join(' · ');
+
   const rows = [
     ['Title', track.title], ['Artist', track.artist], ['Album', track.album],
     ['Album artist', track.albumArtist], ['Track', track.track || '—'],
     ['Year', track.year || '—'], ['Genre', track.genre || '—'],
     ['Duration', track.duration ? fmtTime(track.duration) : '—'],
+    ['Stream', stream || '—'],
+    // Absent until it has been listened to, and the copy says why rather than
+    // showing an em dash that reads like a missing tag.
+    ['Dynamic range', track.dr ? `DR${Math.round(track.dr)} · ${track.dr.toFixed(1)} dB crest`
+                               : 'Not measured yet — play it through'],
     ['File', track.name], ['Path', track.path],
   ];
   const body = el('dl', { class: 'info-grid' });

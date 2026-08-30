@@ -13,7 +13,7 @@
  */
 
 import * as db from './db.js';
-import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, sortName, cmpText, idle } from './util.js';
+import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle } from './util.js';
 
 export const events = new Emitter();
 
@@ -33,6 +33,24 @@ export const state = {
 
 /** Live file references. Not persisted — rebuilt by rescanning on launch. */
 const handles = new Map();      // id -> FileSystemFileHandle | File
+
+/**
+ * Lyric files noticed beside the music, keyed by the track id with its
+ * extension taken off — so `d:1/Petra Vance/04 Ferry Road.lrc` is filed under
+ * `d:1/Petra Vance/04 Ferry Road` and found by the track of the same name.
+ *
+ * Not persisted, for the same reason handles are not: a File cannot be stored
+ * and a handle without permission cannot be read. They are found again by the
+ * same scan that finds the music.
+ */
+const sidecars = new Map();
+
+/** The file that would hold this track's words, if one came in beside it. */
+export function lyricFileFor(id) {
+  const hit = sidecars.get(String(id).replace(/\.[^./]+$/, ''));
+  if (!hit) return null;
+  return hit instanceof File ? Promise.resolve(hit) : hit.getFile().catch(() => null);
+}
 
 let worker = null;
 let workerReady = false;
@@ -123,6 +141,65 @@ function decorate(t) {
 const accents = new Map();      // albumKey -> [r,g,b], filled during import
 export const accentFor = (key) =>
   accents.get(key) || state.albumBy.get(key)?.accent || null;
+
+/* ------------------------------------------------------------------ serial */
+
+/**
+ * This library's own number.
+ *
+ * Instruments have serial numbers, and this one has a use beyond the
+ * conceit: an exported rack preset can say which machine made it, and a
+ * support question can name a library without naming anything in it. It is
+ * random, generated once and kept — derived from nothing, so it identifies
+ * this installation and cannot be turned back into a fact about the listener.
+ */
+export let serial = '';
+
+function makeSerial() {
+  // Crockford's alphabet: no I, L, O or U, so nothing is misread aloud or
+  // mistyped, and nothing accidentally spells anything.
+  const A = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  const bytes = new Uint8Array(8);
+  (globalThis.crypto || {}).getRandomValues
+    ? crypto.getRandomValues(bytes)
+    : bytes.forEach((_, i) => { bytes[i] = (Math.random() * 256) | 0; });
+  let out = '';
+  for (let i = 0; i < 8; i++) out += A[bytes[i] % 32];
+  return `SNR-${out.slice(0, 4)}-${out.slice(4)}`;
+}
+
+/* ------------------------------------------------------------------ census */
+
+/**
+ * What the library is actually made of, counted in one pass.
+ *
+ * Everything here is already in the index — this only groups it. Tracks that
+ * predate the reader keeping stream details simply do not appear in those
+ * tallies, and the `known` counts are what let the page say so instead of
+ * implying the collection is 90% "unknown".
+ */
+export function census() {
+  const formats = new Map();
+  const rates = new Map();
+  const depths = new Map();
+  let bytes = 0, known = { rate: 0, depth: 0 }, lossless = 0;
+  const LOSSLESS = new Set(['flac', 'wav', 'wave', 'aiff', 'aif', 'alac', 'ape', 'wv', 'tta']);
+
+  for (const t of state.tracks.values()) {
+    const e = (t.name || '').slice((t.name || '').lastIndexOf('.') + 1).toLowerCase() || '?';
+    formats.set(e, (formats.get(e) || 0) + 1);
+    bytes += t.size || 0;
+    if (LOSSLESS.has(e)) lossless++;
+    if (t.sampleRate > 0) { rates.set(t.sampleRate, (rates.get(t.sampleRate) || 0) + 1); known.rate++; }
+    if (t.bitDepth > 0) { depths.set(t.bitDepth, (depths.get(t.bitDepth) || 0) + 1); known.depth++; }
+  }
+
+  const rank = (m) => [...m].sort((a, b) => b[1] - a[1]);
+  return {
+    total: state.tracks.size, bytes, lossless,
+    formats: rank(formats), rates: rank(rates), depths: rank(depths), known,
+  };
+}
 
 /* ------------------------------------------------------------------ indexes */
 
@@ -306,6 +383,10 @@ export function sortTracks(list, key, dir = 1) {
     duration: (a, b) => (a.duration || 0) - (b.duration || 0),
     added:  (a, b) => (a.addedAt || 0) - (b.addedAt || 0),
     year:   (a, b) => (a.year || 0) - (b.year || 0),
+    // Unmeasured tracks sort as zero, which puts them at the quiet end
+    // ascending and out of the way descending — either is better than
+    // pretending they are the most squashed masters in the library.
+    dr:     (a, b) => (a.dr || 0) - (b.dr || 0),
   }[key] || ((a, b) => cmpText(a.title, b.title));
   return list.slice().sort((a, b) => by(a, b) * dir);
 }
@@ -418,6 +499,8 @@ async function* walkDirectory(dir, prefix = '', depth = 0) {
       yield* walkDirectory(entry, prefix + entry.name + '/', depth + 1);
     } else if (isAudio(entry.name)) {
       yield { handle: entry, path: prefix + entry.name, name: entry.name };
+    } else if (isLyric(entry.name)) {
+      yield { handle: entry, path: prefix + entry.name, name: entry.name, lyric: true };
     }
   }
 }
@@ -486,10 +569,17 @@ const LOOSE_ID = 'd:loose';
 
 /** Universal path: a folder chosen through <input webkitdirectory>. */
 export async function addFileList(fileList, label) {
+  const all = Array.from(fileList);
   // isAudioFile, not isAudio: a File knows its own type, so a container with an
   // unfamiliar suffix still counts if the OS calls it audio.
-  const files = Array.from(fileList).filter(isAudioFile);
+  const files = all.filter(isAudioFile);
   if (!files.length) return null;
+
+  // Lyric sidecars come in with the music or not at all. A folder handed over
+  // by an upload dialog cannot be reopened to look for them afterwards, so the
+  // one chance to notice `04 Ferry Road.lrc` sitting beside `04 Ferry Road.mp3`
+  // is right now, while the browser still has both.
+  const lyrics = all.filter((f) => isLyric(f.name));
 
   const first = files[0].webkitRelativePath || '';
   const name = label || first.split('/')[0] || 'Files';
@@ -502,11 +592,13 @@ export async function addFileList(fileList, label) {
     events.emit('roots');
   }
 
-  const entries = files.map((f) => {
+  const relative = (f) => {
     const rel = f.webkitRelativePath || f.name;
     const cut = rel.indexOf('/');
-    return { file: f, path: cut >= 0 ? rel.slice(cut + 1) : rel, name: f.name };
-  });
+    return cut >= 0 ? rel.slice(cut + 1) : rel;
+  };
+  const entries = files.map((f) => ({ file: f, path: relative(f), name: f.name }));
+  for (const f of lyrics) entries.push({ file: f, path: relative(f), name: f.name, lyric: true });
   await ingest(root, entries);
   return root;
 }
@@ -544,8 +636,11 @@ export async function addDataTransfer(dt) {
     }
   }
 
-  const files = Array.from(dt.files || []).filter(isAudioFile);
-  if (files.length) return addFileList(files, 'Dropped files');
+  // Handed over whole rather than pre-filtered: addFileList picks the audio out
+  // itself, and it also picks out the lyric sidecars — which a filter to
+  // `isAudioFile` here would have thrown away before it ever saw them.
+  const all = Array.from(dt.files || []);
+  if (all.some(isAudioFile)) return addFileList(all, 'Dropped files');
   return null;
 }
 
@@ -583,6 +678,15 @@ async function ingest(root, entries) {
   const seen = new Set();
 
   for (const e of entries) {
+    // A lyric file is not a track. It is filed under the audio file it sits
+    // beside, by the path they share up to the extension, and never given an
+    // id of its own — otherwise "04 Ferry Road.lrc" turns up in the library as
+    // a song nobody can play.
+    if (e.lyric) {
+      sidecars.set(root.id + '/' + e.path.replace(/\.[^./]+$/, ''), e.handle || e.file);
+      continue;
+    }
+
     const id = root.id + '/' + e.path;
     seen.add(id);
     let file = e.file;
@@ -671,6 +775,14 @@ async function parseOnMainThread(jobs) {
       year: parseInt(String(tags.year || '').slice(0, 4), 10) || 0,
       genre: tags.genre || '', duration: tags.duration || 0, addedAt: Date.now(),
       guessed: tags.guessed || '',
+      // Same spec fields the worker keeps, so the fallback path produces the
+      // same record rather than a quietly poorer one.
+      sampleRate: tags.sampleRate > 0 ? tags.sampleRate | 0 : undefined,
+      channels: tags.channels > 0 ? tags.channels | 0 : undefined,
+      bitDepth: tags.bitDepth > 0 ? tags.bitDepth | 0 : undefined,
+      bitrate: tags.duration > 0 && j.size > 0
+        ? Math.round((j.size * 8) / tags.duration / 1000)
+        : (tags.bitrate > 0 ? Math.round(tags.bitrate / 1000) : undefined),
     });
     t.albumKey = albumKeyOf(t.albumArtist || t.artist || '', t.album);
     state.tracks.set(t.id, t);
@@ -818,13 +930,17 @@ export const favouriteTracks = () =>
 
 /** Paints the stored library first, then reconnects to disk in the background. */
 export async function init() {
-  const [tracks, roots, playlists, recent, faves] = await Promise.all([
+  const [tracks, roots, playlists, recent, faves, sn] = await Promise.all([
     db.getAllTracks().catch(() => []),
     db.getRoots().catch(() => []),
     db.getPlaylists().catch(() => []),
     db.getKV('recent').catch(() => null),
     db.getKV('favourites').catch(() => null),
+    db.getKV('serial').catch(() => null),
   ]);
+
+  serial = typeof sn === 'string' && sn ? sn : makeSerial();
+  if (serial !== sn) db.setKV('serial', serial).catch(() => {});
 
   for (const t of tracks) { decorate(t); state.tracks.set(t.id, t); }
   state.roots = roots;

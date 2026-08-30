@@ -64,6 +64,7 @@ const u16 = (b, i) => (b[i] << 8) | b[i + 1];
 const u24 = (b, i) => (b[i] << 16) | (b[i + 1] << 8) | b[i + 2];
 const u32 = (b, i) => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
 const u32le = (b, i) => (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) >>> 0;
+const u16le = (b, i) => (b[i] | (b[i + 1] << 8)) >>> 0;
 /** ID3 synchsafe integer: 7 usable bits per byte. */
 const syncsafe = (b, i) => (b[i] << 21) | (b[i + 1] << 14) | (b[i + 2] << 7) | b[i + 3];
 
@@ -182,6 +183,21 @@ async function readID3v2(reader, out, base = 0) {
       if (text && !out[field]) out[field] = text;
     } else if ((id === 'APIC' || id === 'PIC') && !out.picture && frame.length > 4) {
       out.picture = readAPIC(frame, id === 'PIC');
+    } else if ((id === 'USLT' || id === 'ULT') && !out.lyrics && frame.length > 5) {
+      // Unsynchronised lyrics: one encoding byte, three of language, then a
+      // short content descriptor terminated the same way the text is, then the
+      // lyrics themselves. The descriptor is nearly always empty and nearly
+      // always skipped by readers that assume so — this one actually walks it,
+      // because the writers that do fill it in are the ones that would
+      // otherwise put "eng" at the top of somebody's song.
+      const enc = frame[0];
+      const descStart = 4;
+      const descEnd = endOfString(frame, descStart, enc);
+      const from = descEnd + (enc === 1 || enc === 2 ? 2 : 1);
+      if (from < frame.length) {
+        const text = decodeText(frame.subarray(from), enc);
+        if (text && text.trim()) out.lyrics = text;
+      }
     }
     p += len;
   }
@@ -264,7 +280,7 @@ async function mp3Duration(reader, start, out) {
 
 const MP4_FIELD = {
   '©nam': 'title', '©ART': 'artist', 'aART': 'albumArtist', '©alb': 'album',
-  '©day': 'year', '©gen': 'genre', '©wrt': 'composer',
+  '©day': 'year', '©gen': 'genre', '©wrt': 'composer', '©lyr': 'lyrics',
 };
 
 async function readMP4(reader, out) {
@@ -379,10 +395,15 @@ async function readFLAC(reader, out) {
       if (type === 0) {                                 // STREAMINFO
         const b = await reader.at(p + 4, Math.min(size, 34));
         if (b.length >= 18) {
+          // Bit-packed, not byte-aligned: 20 bits of sample rate, then 3 of
+          // channel count and 5 of bit depth, then 36 of total samples. Both
+          // counts are stored one less than they are.
           const rate = (b[10] << 12) | (b[11] << 4) | (b[12] >> 4);
           const total = ((b[13] & 0x0f) * 4294967296) + u32(b, 14);
           if (rate > 0 && total > 0) out.duration = total / rate;
           out.sampleRate = rate;
+          out.channels = ((b[12] >> 1) & 0x07) + 1;
+          out.bitDepth = (((b[12] & 0x01) << 4) | (b[13] >> 4)) + 1;
         }
       } else if (type === 4) {                          // VORBIS_COMMENT
         readVorbisComment(await reader.at(p + 4, size), out, 0);
@@ -415,6 +436,9 @@ const VORBIS_FIELD = {
   TITLE: 'title', ARTIST: 'artist', ALBUM: 'album', ALBUMARTIST: 'albumArtist',
   'ALBUM ARTIST': 'albumArtist', TRACKNUMBER: 'track', DISCNUMBER: 'disc',
   DATE: 'year', YEAR: 'year', GENRE: 'genre', COMPOSER: 'composer',
+  // Every writer picks a different one of these, so all of them map to the
+  // same field and the first to arrive wins.
+  LYRICS: 'lyrics', UNSYNCEDLYRICS: 'lyrics', 'UNSYNCED LYRICS': 'lyrics',
 };
 
 function readVorbisComment(b, out, p) {
@@ -517,6 +541,9 @@ async function readWAV(reader, out) {
     if (id === 'fmt ') {
       const b = await reader.at(p + 8, Math.min(size, 16));
       if (b.length >= 12) byteRate = u32le(b, 8);
+      // The rest of the chunk was already in hand; it just was not being read.
+      if (b.length >= 8)  { out.channels = u16le(b, 2); out.sampleRate = u32le(b, 4); }
+      if (b.length >= 16) out.bitDepth = u16le(b, 14);
     } else if (id === 'data') {
       if (byteRate > 0) out.duration = size / byteRate;
     } else if (id === 'LIST' && size < (1 << 20)) {

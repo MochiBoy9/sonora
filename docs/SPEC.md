@@ -1,6 +1,6 @@
 # Sonora — Feature Specification & UX Plan
 
-**Version** 2.3 · **Status** implemented and verified unless a section says
+**Version** 2.4 · **Status** implemented and verified unless a section says
 otherwise · **Audience** full-stack, design, QA
 
 ---
@@ -46,6 +46,9 @@ and does it send anything anywhere the listener did not ask for?*
 | F5 | **The Rack** | Ten-band parametric EQ, dynamics, space, stereo width, and pitch and speed as two separate controls. | Unity |
 | F6 | **Looks** | Nineteen visual settings and eight named looks, all of it CSS custom properties. | Aqua |
 | F7 | **Favourites** | A star on every row, on the transport and on `F`; its own destination, kept in the order you marked them. | Empty |
+| F8 | **Lyrics** | A sidecar, then the tag, then — only with Online on — LRCLIB. Timed on the immersive view. | Local only |
+| F9 | **Dynamic range** | Crest factor measured off the file while you listen, on a meter tapped before the rack. | On |
+| F10 | **The crate** | Albums as records in perspective, flipped through; the grid is still there and the choice is remembered. | Grid |
 
 ### 1.3 The shape of the change
 
@@ -181,6 +184,18 @@ a virtualised list.
 `.label` mono uppercase micro-label · `.grad-text` accent gradient text ·
 `.segmented` mode switch · `.band-card` context card · `.link-state` connection
 readout · `body::before` 44px graph-paper grid.
+
+### 2.6 Platform features this release depends on
+
+Four things that landed in browsers after the app was first written, and what
+each is load-bearing for. All four degrade to what the app did before.
+
+| Feature | Used for | Guard |
+|---|---|---|
+| `@property` | `--tx` / `--ty` / `--lit` / `--rim` / `--thick` typed as numbers, so CSS interpolates the light and the JS spring that used to is deleted | `var(--x, 0)` fallbacks everywhere; unregistered, they are untyped strings and the fallbacks carry it |
+| View Transitions | Route changes cross-fade; a clicked cover flies into the album's record | `document.startViewTransition` is feature-tested, and a skipped or aborted transition is caught rather than left to reject |
+| `animation-timeline: view()` | The shelf rack: cards turn from the rail's own scroll position, on the compositor | Whole block inside `@supports`; and `.is-flippable` only when the rail overflows, because a view timeline on a scroller that cannot scroll never advances and freezes every card on frame zero |
+| `content-visibility` | Shelves below the fold are not laid out | Purely an optimisation; also why the shelf reveal observes the shelf and not the cards inside it, since a skipped subtree has no boxes to measure |
 
 ### 2.5 The sleeve
 
@@ -1053,6 +1068,84 @@ The star is a real `<button>` with `aria-pressed` and a label that names the
 action it will perform, not the state it is in. It is in the tab order of the
 row like the menu button, and it is never the only way to set the mark — the
 context menu and `F` both do it.
+
+---
+
+## F8 · Lyrics
+
+> `js/lyrics.js`, `js/tags.js`, `js/library.js`, `js/stage.js`
+
+### F8.1 Objective
+
+The words to the song, without becoming a different application to get them.
+
+### F8.2 Three tiers, in order
+
+| # | Source | Reaches the network |
+|---|---|---|
+| 1 | `.lrc` / `.txt` sidecar beside the audio | No |
+| 2 | ID3 `USLT`, MP4 `©lyr`, Vorbis `LYRICS` | No |
+| 3 | LRCLIB `GET /api/get` | **Only with `sonora:online` set** |
+
+The order is the argument. A file the listener put there on purpose beats a
+tag; a tag beats a stranger's transcription.
+
+**Sidecars** are found by the scan that finds the music and filed under the
+track id with its extension removed. They are never given an id of their own —
+a `.lrc` must not appear in the library as a song nobody can play. They are not
+persisted, for the same reason handles are not.
+
+**Tags** are read on demand, not at import. Lyrics run to kilobytes and most
+tracks have none; storing them would put megabytes into an index whose whole
+design is to be small enough to paint before the disk is touched. `USLT` is
+parsed with its content descriptor walked rather than assumed empty — the
+writers that fill it in are the ones that would otherwise print "eng" above
+the first line.
+
+**Online** rides F2's consent exactly: same key, same month-long cache in the
+`band` store, same promise. What leaves the device is one track's artist,
+title, album and length. The endpoint, its parameters and its 404 behaviour
+were checked against the live service rather than assumed.
+
+### F8.3 Acceptance criteria
+
+| # | Criterion |
+|---|---|
+| 1 | With Online off, no request is made for any track. |
+| 2 | A `.lrc` dropped alongside its audio is found, and is not indexed as a track. |
+| 3 | Timed lyrics scroll themselves; untimed ones are shown as text. |
+| 4 | Multiple stamps on one line produce one entry per stamp, sorted. |
+| 5 | `[ti:]`-style metadata never appears as a line. |
+| 6 | A track with no words anywhere shows no lyrics affordance at all. |
+
+---
+
+## F9 · Dynamic range
+
+> `js/player.js`, `js/ui.js`, `js/views.js`
+
+Crest factor — peak over RMS, in dB — measured while the track plays.
+
+**Why not at import.** `OfflineAudioContext` is a Window interface and not
+available in a worker, so decoding a library would land on the main thread and
+destroy an import that currently runs at 400 files a second. Measuring what
+played is both cheaper and more in keeping with §F4.2's argument for measuring
+listening time rather than counting plays.
+
+**Where it is tapped.** A second `AnalyserNode` on `gain`, *before* the rack.
+The spectrum on screen shows what leaves the speakers; a figure about the
+master has to describe what leaves the file, or it describes the equaliser.
+The node is a leaf, so it costs an analysis and no audio.
+
+**When it is written.** After the lesser of 25 seconds and 80% of the track —
+a flat threshold would exclude every interlude and two-minute single, and a
+short track played to the end is a better sample than half a long one — and
+only if enough frames actually sampled it. Elapsed time comes from
+`audio.currentTime`, never from frame deltas: frames stop in a background tab
+while the decoder's clock does not.
+
+Verified exact against known signals: sine 3.01 dB, square 0 dB, triangle
+4.77 dB.
 
 ---
 

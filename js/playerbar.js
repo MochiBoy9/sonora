@@ -11,7 +11,7 @@ import * as lib from './library.js';
 import { paintArt, menu, trackMenu, toast } from './ui.js';
 import { createVisualizer } from './visualizer.js';
 import { storedMode } from './stage.js';
-import { tick, draggable, animate, spring, ease } from './motion.js';
+import { tick, draggable, animate, spring, ease, reduceMotion } from './motion.js';
 
 export function mountPlayerBar(host) {
   host.innerHTML = `
@@ -49,6 +49,7 @@ export function mountPlayerBar(host) {
     </div>
 
     <div class="pb-right">
+      <div class="vu" aria-hidden="true"><i class="vu-peak"></i><i class="vu-needle"></i></div>
       <button class="icon-btn pb-stage" title="Visualiser (V)" aria-label="Open visualiser">${ico('expand')}</button>
       <button class="icon-btn pb-queue" title="Queue (Q)" aria-label="Queue">${ico('queue')}</button>
       <div class="pb-volume">
@@ -204,9 +205,40 @@ export function mountPlayerBar(host) {
     seek.setAttribute('aria-valuenow', Math.round(ratio * 100));
   }
 
+  /* ------------------------------------------------------------ vu */
+
+  /*
+   * A needle with real ballistics.
+   *
+   * A VU meter is defined by how it *moves*, not by what it reads: 300 ms to
+   * arrive at a step and a slower fall back, which is what stops a meter
+   * flickering on every transient and is the reason people can read one at a
+   * glance. Attack and release are therefore deliberately different constants,
+   * and the peak dot falls under its own weight rather than following at all.
+   *
+   * It reads the same per-frame analysis object every visualiser reads, so it
+   * costs no second look at the analyser — and it shares the transport's own
+   * ticker, which already stops when playback does.
+   */
+  const vuNeedle = q('.vu-needle');
+  const vuPeak = q('.vu-peak');
+  let vu = 0, vuHold = 0;
+
+  function paintVU(dt, a) {
+    const target = Math.min(1, a.level * 1.25);
+    // 300 ms to arrive, roughly a second to fall away.
+    const k = target > vu ? Math.min(1, dt / 300) : Math.min(1, dt / 900);
+    vu += (target - vu) * k;
+    vuHold = Math.max(vuHold - dt / 2600, vu);
+    vuNeedle.style.transform = `rotate(${(-42 + vu * 84).toFixed(2)}deg)`;
+    vuPeak.style.transform = `rotate(${(-42 + vuHold * 84).toFixed(2)}deg)`;
+    host.classList.toggle('vu-hot', vuHold > 0.86);
+  }
+
   let bufferedAt = 0;
   const frame = (dt, now) => {
     if (!player.state.current) return;
+    if (!reduceMotion.matches) paintVU(dt, player.analysis());
     if (!scrubbing) {
       const d = player.state.duration || 0;
       const t = player.currentTime();

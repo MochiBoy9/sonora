@@ -207,3 +207,11 @@ export function fmtBytes(n) {
   const u = ['B', 'KB', 'MB', 'GB'], i = Math.min(3, Math.floor(Math.log(n) / Math.log(1024)));
   return `${(n / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`;
 }
+
+/**
+ * Lyric sidecars. `.lrc` carries timings, `.txt` almost never does — both are
+ * read, and which one it turns out to be is decided by looking at the contents
+ * rather than at the suffix.
+ */
+const LYRIC_EXT = new Set(['lrc', 'txt']);
+export const isLyric = (name) => LYRIC_EXT.has(ext(name));

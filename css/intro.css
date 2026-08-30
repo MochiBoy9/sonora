@@ -217,3 +217,12 @@
   .intro-tag { font-size: calc(12.5px * var(--scale)); }
   .intro-frame { inset: 14px; width: calc(100% - 28px); height: calc(100% - 28px); }
 }
+
+/* The boot readout: what the machine is doing, in the machine's own hand.
+   It borrows the hint line, which is idle until the skip prompt appears. */
+.intro-hint.is-readout {
+  color: rgb(var(--accent-rgb) / .78);
+  letter-spacing: .26em;
+  opacity: 1 !important;
+  transition: opacity var(--dur-2) linear;
+}

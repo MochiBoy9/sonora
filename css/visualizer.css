@@ -241,3 +241,76 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
 @media (max-height: 560px) {
   .stage-art-wrap { display: none; }
 }
+
+/* ------------------------------------------------------------------ lyrics */
+
+/*
+ * Words on the stage, run as a teleprompter: the line being sung sits still
+ * and the song moves past it.
+ *
+ * The whole block is translated by one custom property rather than scrolled.
+ * `scrollTop` on an element inside a full-screen composited stage is a layout
+ * read on every frame that the line changes, and this view already has a
+ * ticker doing real work — a transform is the version the compositor can
+ * handle on its own.
+ */
+.stage-lyrics {
+  --shift: 0px;
+  position: relative;
+  max-height: 40vh;
+  margin-top: 22px;
+  overflow: hidden;
+  /* Fades at both ends, so lines arrive and leave rather than being cut. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 74%, transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 74%, transparent);
+}
+
+/* Synced lyrics scroll themselves and hold the current line a third of the way
+   down. Unsynced ones have nothing to follow, so they simply sit there and are
+   read — and are given the height back that the scroller would have used. */
+.stage-lyrics.is-synced { padding-top: 30%; }
+.stage-lyrics.is-synced > .stage-line {
+  transform: translateY(var(--shift));
+  transition: transform 620ms var(--ease);
+}
+
+.stage-line {
+  margin: 0;
+  padding: 3px 0;
+  font-size: calc(clamp(15px, 1.5vw, 21px) * var(--scale));
+  line-height: 1.42;
+  font-weight: 500;
+  letter-spacing: -.01em;
+  color: var(--text-3);
+  transition: color var(--dur-2) var(--ease), opacity var(--dur-2) var(--ease);
+  opacity: .55;
+  text-wrap: balance;
+}
+.stage-line.is-gap { padding: 0; height: 10px; }
+
+/* The line being sung. Colour and weight, not scale — a line that grows pushes
+   every line under it, and the whole point of the transform above is that
+   nothing but the block moves. */
+.stage-lyrics.is-synced .stage-line.is-now {
+  color: var(--text);
+  opacity: 1;
+  text-shadow: 0 0 26px rgb(var(--art-rgb) / .5);
+}
+/* Unsynced: no line is "now", so all of them are equally readable. */
+.stage-lyrics:not(.is-synced) .stage-line { opacity: .82; color: var(--text-2); }
+
+/* The artwork gives way when the words are up: on a 900px-tall window the
+   record and forty lines of lyrics cannot both be the subject. */
+.stage.has-lyrics .stage-art-wrap { flex: 0 1 34%; opacity: .82; }
+.stage.has-lyrics .stage-meta { flex: 1 1 auto; min-width: 0; }
+
+.stage-lyric-btn[aria-pressed="true"] { color: var(--accent); background: rgb(var(--accent-rgb) / .14); }
+
+@media (max-width: 760px) {
+  .stage.has-lyrics .stage-art-wrap { display: none; }
+  .stage-lyrics { max-height: 46vh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-lyrics.is-synced > .stage-line { transition: none; }
+}

@@ -14,6 +14,7 @@ import * as player from './player.js';
 import * as lib from './library.js';
 import { paintArt } from './ui.js';
 import { createVisualizer, MODES, isMode } from './visualizer.js';
+import * as lyrics from './lyrics.js';
 import { tick, animate, spring, draggable, settled, ease, reduceMotion } from './motion.js';
 
 const MODE_KEY = 'sonora:viz';
@@ -62,6 +63,19 @@ export function openStage(backdrop) {
   const artist = el('p', { class: 'stage-artist' });
   const tags = el('div', { class: 'stage-tags' });
 
+  /* The words, when there are any.
+   *
+   * A `role="log"` with `aria-live="off"`: the lines are announced by nothing,
+   * because a screen reader reciting a song over the top of the song is not an
+   * accessibility feature. They are readable on demand, which is the right
+   * behaviour for a transcript of audio that is already playing.
+   */
+  const lyricBox = el('div', { class: 'stage-lyrics', role: 'log', 'aria-live': 'off', hidden: true });
+  const lyricBtn = el('button', {
+    class: 'icon-btn stage-lyric-btn', title: 'Lyrics (L)', 'aria-label': 'Show lyrics',
+    'aria-pressed': 'false', html: ico('file'), hidden: true,
+  });
+
   const elapsed = el('span', { class: 'stage-time', text: '0:00' });
   const total = el('span', { class: 'stage-time', text: '0:00' });
   const fill = el('div', { class: 'seek-fill' });
@@ -80,8 +94,9 @@ export function openStage(backdrop) {
   host.append(
     canvas,
     el('div', { class: 'stage-veil' }),
-    el('div', { class: 'stage-top' }, modeBar, closeBtn),
-    el('div', { class: 'stage-body' }, artWrap, el('div', { class: 'stage-meta' }, title, artist, tags)),
+    el('div', { class: 'stage-top' }, modeBar, lyricBtn, closeBtn),
+    el('div', { class: 'stage-body' }, artWrap,
+      el('div', { class: 'stage-meta' }, title, artist, tags, lyricBox)),
     el('div', { class: 'stage-foot' },
       el('div', { class: 'stage-scrub' }, elapsed, seek, total),
       transport));
@@ -224,6 +239,7 @@ export function openStage(backdrop) {
       knob.style.left = (r * 100).toFixed(2) + '%';
       elapsed.textContent = fmtTime(r * d);
       seek.setAttribute('aria-valuenow', Math.round(r * 100));
+      followLyric(player.currentTime());
     }
     lift += ((a.pulse * 26 + a.level * 18) - lift) * Math.min(1, dt / 90);
     art.style.transform =
@@ -231,14 +247,93 @@ export function openStage(backdrop) {
     host.style.setProperty('--viz-level', a.level.toFixed(3));
   });
 
+  /* ---------------------------------------------------------------- lyrics */
+
+  /*
+   * Words on the stage.
+   *
+   * Only two things happen per frame: a binary search over stamps that are
+   * already sorted, and — on the frames where the line actually changes — one
+   * class swap and one transform. The whole block is translated as a unit so
+   * the current line stays put and the song scrolls past it, which is both
+   * cheaper than moving every line and the way a teleprompter behaves.
+   */
+  let words = null;
+  let shown = -1;
+  let wantLyrics = false;
+
+  function renderLyrics() {
+    lyricBox.textContent = '';
+    shown = -1;
+    if (!words || !words.lines.length) return;
+    for (const line of words.lines) {
+      lyricBox.appendChild(el('p', {
+        class: 'stage-line' + (line.text ? '' : ' is-gap'),
+        text: line.text || ' ',
+      }));
+    }
+    lyricBox.classList.toggle('is-synced', !!words.synced);
+  }
+
+  function followLyric(time) {
+    if (!wantLyrics || !words || !words.synced) return;
+    const i = lyrics.lineAt(words, time);
+    if (i === shown) return;
+    const nodes = lyricBox.children;
+    if (nodes[shown]) nodes[shown].classList.remove('is-now');
+    shown = i;
+    const node = nodes[i];
+    if (!node) return;
+    node.classList.add('is-now');
+    // One transform on the container, not a scroll: scrollTop on a element
+    // inside a full-screen composited stage is a layout read every frame.
+    lyricBox.style.setProperty('--shift', `${-node.offsetTop}px`);
+  }
+
+  function syncLyricUI() {
+    lyricBtn.hidden = !words;
+    lyricBox.hidden = !(words && wantLyrics);
+    lyricBtn.setAttribute('aria-pressed', wantLyrics ? 'true' : 'false');
+    lyricBtn.setAttribute('aria-label', wantLyrics ? 'Hide lyrics' : 'Show lyrics');
+    host.classList.toggle('has-lyrics', !!(words && wantLyrics));
+  }
+
+  async function loadLyrics() {
+    const t = player.state.current;
+    words = null;
+    shown = -1;
+    syncLyricUI();
+    if (!t) return;
+    const found = await lyrics.forTrack(t);
+    // The track may have moved on while we were looking.
+    if (!open || player.state.current !== t) return;
+    words = found && found.lines.length ? found : null;
+    renderLyrics();
+    syncLyricUI();
+  }
+
+  lyricBtn.addEventListener('click', () => {
+    wantLyrics = !wantLyrics;
+    syncLyricUI();
+    if (wantLyrics) { shown = -1; followLyric(player.currentTime()); }
+  });
+
   /* ---------------------------------------------------------------- wiring */
 
   const offTrack = player.events.on('track', paint);
+  const offLyrics = player.events.on('track', loadLyrics);
+  loadLyrics();
   const offState = player.events.on('state', () => { paintState(); paint(); });
   const offArt = lib.events.on('art', () => { const t = player.state.current; if (t) paintArt(artImg, t.albumKey); });
 
   const onKey = (e) => {
-    if (e.key === 'Escape') { e.stopPropagation(); closeStage(); }
+    if (e.key === 'Escape') { e.stopPropagation(); closeStage(); return; }
+    // Only while the stage is open, and only when there is something to show:
+    // a key that does nothing on most tracks is a key nobody learns.
+    if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey && !e.altKey && words) {
+      e.stopPropagation();
+      lyricBtn.click();
+    }
   };
   document.addEventListener('keydown', onKey, true);
 
@@ -257,7 +352,7 @@ export function openStage(backdrop) {
     stopTick();
     sx.stop(); sy.stop();
     viz.destroy();
-    offTrack(); offState(); offArt();
+    offTrack(); offState(); offArt(); offLyrics();
     document.removeEventListener('keydown', onKey, true);
     host.removeEventListener('pointermove', onMove);
     document.body.classList.remove('stage-open');
