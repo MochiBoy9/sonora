@@ -89,21 +89,40 @@ function swapView() {
  * someone who has asked for less motion, the callback runs directly and the
  * app behaves exactly as it did before.
  */
+let transitioning = false;
+
 function navigate() {
   const paired = document.querySelector('[style*="view-transition-name"]');
-  if (!document.startViewTransition || reduceMotion.matches) {
+
+  /* Four reasons to do the plain swap, and every one of them is a case where a
+     transition is either impossible or unwanted:
+     — the engine has no view transitions;
+     — someone asked for less motion;
+     — the document is hidden, where the API aborts by design (a background
+       tab has nothing to take a snapshot of);
+     — one is already running, and starting a second skips the first. */
+  if (!document.startViewTransition || reduceMotion.matches ||
+      document.visibilityState === 'hidden' || transitioning) {
     clearTransitionMarks();
     return swapView();
   }
+
   document.documentElement.classList.toggle('vt-paired', !!paired);
-  const vt = document.startViewTransition(() => swapView());
-  // Marks are per-navigation. Left in place they would collide with the next
-  // one, and two elements sharing a view-transition-name is a transition the
-  // browser refuses to run at all.
-  vt.finished.finally(() => {
+  transitioning = true;
+  const done = () => {
+    transitioning = false;
+    // Marks are per-navigation. Left in place they collide with the next one,
+    // and two elements sharing a view-transition-name is a transition the
+    // browser refuses to run at all.
     clearTransitionMarks();
     document.documentElement.classList.remove('vt-paired');
-  });
+  };
+
+  const vt = document.startViewTransition(() => swapView());
+  // A skipped or aborted transition rejects. That is a normal outcome — the
+  // route still changed — so it is caught rather than left to surface as an
+  // unhandled rejection in everybody's console.
+  vt.finished.then(done, done);
 }
 
 /** Removes every view-transition-name this app put on the page. */

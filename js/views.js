@@ -5,7 +5,7 @@
  * rendered directly, because 12 nodes are cheaper than the machinery.
  */
 
-import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText } from './util.js';
+import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText, formatName } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import * as db from './db.js';
@@ -479,7 +479,7 @@ function viewAlbum(host, key) {
   // The album page is the one place worth putting the record on a stand: it is
   // a page about a single object, so the object gets a floor, an edge and a
   // reflection, and it turns to follow the pointer.
-  const art = sleeve(key, 'hero-art', { reflect: true });
+  const art = sleeve(key, 'hero-art', { reflect: true, back: backCover(album) });
   const meta = el('div', { class: 'hero-meta' },
     el('p', { class: 'eyebrow', text: 'Album' }),
     el('h1', { class: 'hero-title', text: album.title }),
@@ -505,6 +505,31 @@ function viewAlbum(host, key) {
   decode(hero.querySelector('.hero-title'), album.title, { duration: 620 });
   markTransition(art.querySelector('.sleeve'));
   const untilt = tilt3d(art.querySelector('.sleeve'), { max: 11, lift: 30, scale: 1.012 });
+
+  /* Turning the record over.
+   *
+   * A real button rather than a click on the artwork: the sleeve is 232px of
+   * inviting target that people will click expecting it to play, and a page
+   * whose largest element does something unguessable is a page that has
+   * traded discoverability for a trick. The button says what it does, takes
+   * focus, and answers Enter and Space for free. */
+  const flip = art.querySelector('.sleeve');
+  const flipBtn = el('button', {
+    class: 'flip-btn', 'aria-pressed': 'false',
+    title: 'Turn the sleeve over', 'aria-label': 'Show the back of the sleeve',
+    html: ico('refresh') + '<span>Back</span>',
+    onclick: () => {
+      const on = !flip.classList.contains('is-flipped');
+      flip.classList.toggle('is-flipped', on);
+      flipBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      flipBtn.setAttribute('aria-label', on ? 'Show the front of the sleeve' : 'Show the back of the sleeve');
+      flipBtn.querySelector('span').textContent = on ? 'Front' : 'Back';
+      // The back is real content, not decoration, so it stops being hidden
+      // from a screen reader the moment it is the side facing out.
+      art.querySelector('.sleeve-back').setAttribute('aria-hidden', on ? 'false' : 'true');
+    },
+  });
+  art.appendChild(flipBtn);
 
   const columns = ['index', 'title', 'duration'];
   const oneArtist = album.tracks.every((t) => t.artist === album.artist);
@@ -543,6 +568,68 @@ function viewAlbum(host, key) {
   const off = player.events.on('track', refresh);
   const offState = player.events.on('state', refresh);
   return () => { off(); offState(); untilt(); };
+}
+
+/* ------------------------------------------------------------------ back cover */
+
+/**
+ * The back of the sleeve: the tracklist as it is printed on a record, and
+ * under it the spec block for what the files actually are.
+ *
+ * Everything here was already in the index. The tag reader worked the
+ * technical fields out on its way to the duration and the worker now keeps
+ * them, so this is a printing job rather than a parsing one.
+ *
+ * A library imported before those fields existed simply has fewer rows — the
+ * block prints what is known and says nothing about what is not, which is the
+ * only honest thing to do with a record that predates the question.
+ */
+function backCover(album) {
+  const back = el('div', { class: 'sleeve-back', 'aria-hidden': 'true' });
+
+  back.appendChild(el('div', { class: 'back-head' },
+    el('span', { class: 'back-artist', text: album.artist }),
+    el('span', { class: 'back-title', text: album.title })));
+
+  const list = el('ol', { class: 'back-list' });
+  for (const t of album.tracks) {
+    list.appendChild(el('li', {},
+      el('span', { class: 'back-n', text: String(t.track || '') }),
+      el('span', { class: 'back-t', text: t.title }),
+      el('span', { class: 'back-d', text: t.duration ? fmtTime(t.duration) : '' })));
+  }
+  back.appendChild(list);
+
+  /* One line per fact, and only for facts. A mixed-format album says so rather
+     than picking whichever file happened to be first. */
+  const uniq = (fn) => [...new Set(album.tracks.map(fn).filter(Boolean))];
+  const formats = uniq((t) => formatName(t.name || ''));
+  const rates = uniq((t) => t.sampleRate);
+  const depths = uniq((t) => t.bitDepth);
+  const chans = uniq((t) => t.channels);
+  const rateOf = (n) => (n % 1000 === 0 ? n / 1000 + ' kHz' : (n / 1000).toFixed(1) + ' kHz');
+  const bitrates = album.tracks.map((t) => t.bitrate).filter((n) => n > 0);
+  const avg = bitrates.length ? Math.round(bitrates.reduce((a, b) => a + b, 0) / bitrates.length) : 0;
+  const bytes = album.tracks.reduce((n, t) => n + (t.size || 0), 0);
+
+  const spec = el('dl', { class: 'back-spec' });
+  const row = (k, v) => { if (v) { spec.appendChild(el('dt', { text: k })); spec.appendChild(el('dd', { text: v })); } };
+  row('Format', formats.join(' · '));
+  row('Rate', rates.length ? rates.sort((a, b) => a - b).map(rateOf).join(' · ') : '');
+  row('Depth', depths.length ? depths.sort((a, b) => a - b).map((d) => d + '-bit').join(' · ') : '');
+  row('Channels', chans.length ? chans.map((c) => (c === 1 ? 'Mono' : c === 2 ? 'Stereo' : c + ' ch')).join(' · ') : '');
+  row('Bitrate', avg ? '~' + avg + ' kbps' : '');
+  row('On disk', bytes ? fmtBytes(bytes) : '');
+  row('Runtime', album.duration ? fmtTotal(album.duration) : '');
+  if (spec.children.length) back.appendChild(spec);
+
+  // The album key, which is a hash, set where a catalogue number goes. It is
+  // the only stable name this record has inside the app.
+  back.appendChild(el('div', { class: 'back-cat' },
+    el('span', { text: 'SNR-' + String(album.key).toUpperCase() }),
+    album.year ? el('span', { text: String(album.year) }) : null));
+
+  return back;
 }
 
 /** Paints a soft wash of the album's own colour behind its header. */

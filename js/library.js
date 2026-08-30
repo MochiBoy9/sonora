@@ -671,6 +671,14 @@ async function parseOnMainThread(jobs) {
       year: parseInt(String(tags.year || '').slice(0, 4), 10) || 0,
       genre: tags.genre || '', duration: tags.duration || 0, addedAt: Date.now(),
       guessed: tags.guessed || '',
+      // Same spec fields the worker keeps, so the fallback path produces the
+      // same record rather than a quietly poorer one.
+      sampleRate: tags.sampleRate > 0 ? tags.sampleRate | 0 : undefined,
+      channels: tags.channels > 0 ? tags.channels | 0 : undefined,
+      bitDepth: tags.bitDepth > 0 ? tags.bitDepth | 0 : undefined,
+      bitrate: tags.duration > 0 && j.size > 0
+        ? Math.round((j.size * 8) / tags.duration / 1000)
+        : (tags.bitrate > 0 ? Math.round(tags.bitrate / 1000) : undefined),
     });
     t.albumKey = albumKeyOf(t.albumArtist || t.artist || '', t.album);
     state.tracks.set(t.id, t);

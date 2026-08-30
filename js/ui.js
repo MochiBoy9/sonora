@@ -69,10 +69,18 @@ export function artBox(key, size, cls = '') {
  * The edge is `<i aria-hidden>` because it is a side of a box rather than a
  * picture; there is nothing there to describe.
  */
-export function sleeve(key, cls = '', { reflect = false } = {}) {
+export function sleeve(key, cls = '', { reflect = false, back = null } = {}) {
   const art = artBox(key, null, 'art-3d ' + cls);
-  const inner = el('div', { class: 'sleeve' },
-    el('i', { class: 'art-edge', 'aria-hidden': 'true' }), art);
+
+  // Two nested turning elements, because two different things turn it. The
+  // pointer tilt is written inline on `.sleeve` by tilt3d; the flip is a class
+  // on `.sleeve-flip` inside it. One element cannot carry both without one
+  // overwriting the other, and the pointer would win — which is to say the
+  // record would never turn over.
+  let face = [el('i', { class: 'art-edge', 'aria-hidden': 'true' }), art];
+  if (back) face = [el('div', { class: 'sleeve-flip' }, ...face, back)];
+
+  const inner = el('div', { class: 'sleeve' + (back ? ' has-back' : '') }, ...face);
   const stage = el('div', { class: 'sleeve-stage' }, inner);
   if (reflect) {
     // The floor. A second <img> pointed at the object URL the cache already

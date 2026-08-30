@@ -64,6 +64,7 @@ const u16 = (b, i) => (b[i] << 8) | b[i + 1];
 const u24 = (b, i) => (b[i] << 16) | (b[i + 1] << 8) | b[i + 2];
 const u32 = (b, i) => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
 const u32le = (b, i) => (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) >>> 0;
+const u16le = (b, i) => (b[i] | (b[i + 1] << 8)) >>> 0;
 /** ID3 synchsafe integer: 7 usable bits per byte. */
 const syncsafe = (b, i) => (b[i] << 21) | (b[i + 1] << 14) | (b[i + 2] << 7) | b[i + 3];
 
@@ -379,10 +380,15 @@ async function readFLAC(reader, out) {
       if (type === 0) {                                 // STREAMINFO
         const b = await reader.at(p + 4, Math.min(size, 34));
         if (b.length >= 18) {
+          // Bit-packed, not byte-aligned: 20 bits of sample rate, then 3 of
+          // channel count and 5 of bit depth, then 36 of total samples. Both
+          // counts are stored one less than they are.
           const rate = (b[10] << 12) | (b[11] << 4) | (b[12] >> 4);
           const total = ((b[13] & 0x0f) * 4294967296) + u32(b, 14);
           if (rate > 0 && total > 0) out.duration = total / rate;
           out.sampleRate = rate;
+          out.channels = ((b[12] >> 1) & 0x07) + 1;
+          out.bitDepth = (((b[12] & 0x01) << 4) | (b[13] >> 4)) + 1;
         }
       } else if (type === 4) {                          // VORBIS_COMMENT
         readVorbisComment(await reader.at(p + 4, size), out, 0);
@@ -517,6 +523,9 @@ async function readWAV(reader, out) {
     if (id === 'fmt ') {
       const b = await reader.at(p + 8, Math.min(size, 16));
       if (b.length >= 12) byteRate = u32le(b, 8);
+      // The rest of the chunk was already in hand; it just was not being read.
+      if (b.length >= 8)  { out.channels = u16le(b, 2); out.sampleRate = u32le(b, 4); }
+      if (b.length >= 16) out.bitDepth = u16le(b, 14);
     } else if (id === 'data') {
       if (byteRate > 0) out.duration = size / byteRate;
     } else if (id === 'LIST' && size < (1 << 20)) {

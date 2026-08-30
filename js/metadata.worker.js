@@ -139,6 +139,24 @@ async function handle(job) {
     guessed: tags.guessed || '',
   };
 
+  /* What the file is, as opposed to what it says it is.
+   *
+   * The reader already worked all of this out on its way to the duration and
+   * then dropped it on the floor. Kept here so the back of the sleeve can
+   * print a spec block, and so the library can be counted by format.
+   *
+   * Bitrate is measured rather than declared wherever it can be: a container
+   * that names one is usually naming the nominal rate of a variable stream,
+   * and bytes over seconds is the number that is actually true. Only the whole
+   * file is available to divide, so it includes the tags and the cover — on a
+   * three-minute track that is a rounding error, and it is honest about being
+   * an average either way. */
+  if (tags.sampleRate > 0) track.sampleRate = tags.sampleRate | 0;
+  if (tags.channels > 0) track.channels = tags.channels | 0;
+  if (tags.bitDepth > 0) track.bitDepth = tags.bitDepth | 0;
+  if (track.duration > 0 && size > 0) track.bitrate = Math.round((size * 8) / track.duration / 1000);
+  else if (tags.bitrate > 0) track.bitrate = Math.round(tags.bitrate / 1000);
+
   // The album key groups tracks; art is stored once per key.
   track.albumKey = albumHintKey || albumKeyOf(track.albumArtist || track.artist || '', track.album);
 
