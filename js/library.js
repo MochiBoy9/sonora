@@ -142,6 +142,65 @@ const accents = new Map();      // albumKey -> [r,g,b], filled during import
 export const accentFor = (key) =>
   accents.get(key) || state.albumBy.get(key)?.accent || null;
 
+/* ------------------------------------------------------------------ serial */
+
+/**
+ * This library's own number.
+ *
+ * Instruments have serial numbers, and this one has a use beyond the
+ * conceit: an exported rack preset can say which machine made it, and a
+ * support question can name a library without naming anything in it. It is
+ * random, generated once and kept — derived from nothing, so it identifies
+ * this installation and cannot be turned back into a fact about the listener.
+ */
+export let serial = '';
+
+function makeSerial() {
+  // Crockford's alphabet: no I, L, O or U, so nothing is misread aloud or
+  // mistyped, and nothing accidentally spells anything.
+  const A = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  const bytes = new Uint8Array(8);
+  (globalThis.crypto || {}).getRandomValues
+    ? crypto.getRandomValues(bytes)
+    : bytes.forEach((_, i) => { bytes[i] = (Math.random() * 256) | 0; });
+  let out = '';
+  for (let i = 0; i < 8; i++) out += A[bytes[i] % 32];
+  return `SNR-${out.slice(0, 4)}-${out.slice(4)}`;
+}
+
+/* ------------------------------------------------------------------ census */
+
+/**
+ * What the library is actually made of, counted in one pass.
+ *
+ * Everything here is already in the index — this only groups it. Tracks that
+ * predate the reader keeping stream details simply do not appear in those
+ * tallies, and the `known` counts are what let the page say so instead of
+ * implying the collection is 90% "unknown".
+ */
+export function census() {
+  const formats = new Map();
+  const rates = new Map();
+  const depths = new Map();
+  let bytes = 0, known = { rate: 0, depth: 0 }, lossless = 0;
+  const LOSSLESS = new Set(['flac', 'wav', 'wave', 'aiff', 'aif', 'alac', 'ape', 'wv', 'tta']);
+
+  for (const t of state.tracks.values()) {
+    const e = (t.name || '').slice((t.name || '').lastIndexOf('.') + 1).toLowerCase() || '?';
+    formats.set(e, (formats.get(e) || 0) + 1);
+    bytes += t.size || 0;
+    if (LOSSLESS.has(e)) lossless++;
+    if (t.sampleRate > 0) { rates.set(t.sampleRate, (rates.get(t.sampleRate) || 0) + 1); known.rate++; }
+    if (t.bitDepth > 0) { depths.set(t.bitDepth, (depths.get(t.bitDepth) || 0) + 1); known.depth++; }
+  }
+
+  const rank = (m) => [...m].sort((a, b) => b[1] - a[1]);
+  return {
+    total: state.tracks.size, bytes, lossless,
+    formats: rank(formats), rates: rank(rates), depths: rank(depths), known,
+  };
+}
+
 /* ------------------------------------------------------------------ indexes */
 
 function scheduleReindex() {
@@ -871,13 +930,17 @@ export const favouriteTracks = () =>
 
 /** Paints the stored library first, then reconnects to disk in the background. */
 export async function init() {
-  const [tracks, roots, playlists, recent, faves] = await Promise.all([
+  const [tracks, roots, playlists, recent, faves, sn] = await Promise.all([
     db.getAllTracks().catch(() => []),
     db.getRoots().catch(() => []),
     db.getPlaylists().catch(() => []),
     db.getKV('recent').catch(() => null),
     db.getKV('favourites').catch(() => null),
+    db.getKV('serial').catch(() => null),
   ]);
+
+  serial = typeof sn === 'string' && sn ? sn : makeSerial();
+  if (serial !== sn) db.setKV('serial', serial).catch(() => {});
 
   for (const t of tracks) { decorate(t); state.tracks.set(t.id, t); }
   state.roots = roots;

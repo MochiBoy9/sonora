@@ -294,6 +294,32 @@ export function startIntro() {
     node.classList.add('is-still');
   }
 
+  /* ---------------------------------------------------------------- readout */
+
+  /*
+   * What the machine is doing while it does it.
+   *
+   * The intro used to be three seconds of an instrument saying nothing about
+   * itself, which is the one thing an instrument should never be. The numbers
+   * are real and already known at the moment they are printed — this reports
+   * the boot rather than decorating it, and if the library is empty it says
+   * that instead of inventing a figure.
+   *
+   * It writes into the hint line, which is otherwise idle until the "press any
+   * key" prompt fades in, and it stops the moment the sequence is over.
+   */
+  const readout = (text) => {
+    if (over || !hint || reduceMotion.matches) return;
+    hint.textContent = text;
+    hint.classList.add('is-readout');
+  };
+
+  let step = 0;
+  const say = (text) => {
+    const at = 420 + step++ * 460;
+    if (at < TOTAL - 300) setTimeout(() => readout(text), at * beat || at);
+  };
+
   const timer = setTimeout(() => finish(false), TOTAL);
 
   /* ---------------------------------------------------------------- skipping */
@@ -361,5 +387,11 @@ export function startIntro() {
     });
   }
 
-  return { ready, dismiss, get skipped() { return over; } };
+  return {
+    ready,
+    dismiss,
+    get skipped() { return over; },
+    /** Called by boot as each stage finishes, so the readout is not a fiction. */
+    report(text) { say(text); },
+  };
 }

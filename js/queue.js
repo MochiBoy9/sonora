@@ -7,7 +7,7 @@
 import { el, ico, fmtTime, fmtCount } from './util.js';
 import * as player from './player.js';
 import * as lib from './library.js';
-import { paintArt, artBox, menu, trackMenu, toast, emptyState } from './ui.js';
+import { paintArt, artBox, menu, trackMenu, toast, emptyState, promptDialog } from './ui.js';
 import { VirtualList } from './virtual.js';
 import { createVisualizer } from './visualizer.js';
 import { storedMode } from './stage.js';
@@ -229,6 +229,29 @@ function mountVisualizer(canvas, visible) {
 function buildQueue(host) {
   const head = el('div', { class: 'queue-head' },
     el('div', { class: 'queue-summary' }),
+    // The queue is where a sequence actually gets built — by hand, by
+    // right-clicking things in over an evening — and until now that work
+    // evaporated the moment you played something else.
+    el('button', {
+      class: 'link-btn', text: 'Keep',
+      title: 'Save this queue as a playlist',
+      onclick: () => {
+        const tracks = player.state.queue.map((id) => lib.getTrack(id)).filter(Boolean);
+        if (!tracks.length) return toast('Nothing in the queue to keep');
+        const from = player.state.origin && player.state.origin.label;
+        promptDialog({
+          title: 'Keep this queue',
+          label: 'Playlist name',
+          value: from ? String(from) : 'Queue ' + new Date().toLocaleDateString(),
+          confirm: 'Keep',
+          onConfirm: async (name) => {
+            if (!name) return;
+            await lib.createPlaylist(name, tracks.map((t) => t.id));
+            toast(`Kept ${tracks.length} tracks as “${name}”`);
+          },
+        });
+      },
+    }),
     el('button', { class: 'link-btn', text: 'Clear', onclick: () => { player.clearQueue(); toast('Queue cleared'); } }));
   host.appendChild(head);
 

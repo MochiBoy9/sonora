@@ -610,3 +610,64 @@ body.is-ready .app { opacity: 1; }
   .pb-now .art { display: none; }
   .topbar .route-tag { display: none; }
 }
+
+/* ------------------------------------------------------------------ vu */
+
+/*
+ * A needle, drawn rather than photographed: an arc of hairline scale with a
+ * pivot at the bottom and two hands on it — the needle and the peak that falls
+ * behind it. Both are rotated by the transport's ticker, so the whole meter is
+ * two transforms a frame and no layout.
+ */
+.vu {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  flex: none;
+  overflow: hidden;
+  --k: 4px;
+  clip-path: var(--nick-nw);
+  background: rgb(var(--surface-3-rgb) / .5);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+}
+/* The scale: ticks struck through the arc, dimmer past the top of the range. */
+.vu::before {
+  content: "";
+  position: absolute;
+  inset: 3px 3px auto;
+  height: 13px;
+  background:
+    repeating-conic-gradient(from -46deg at 50% 130%,
+      var(--line-2) 0 .6deg, transparent .6deg 8deg);
+  opacity: .9;
+}
+.vu::after {
+  content: "";
+  position: absolute;
+  right: 3px; top: 3px;
+  width: 34%; height: 13px;
+  background: linear-gradient(90deg, transparent, rgb(255 120 120 / .16));
+  pointer-events: none;
+}
+.vu-needle, .vu-peak {
+  position: absolute;
+  left: 50%;
+  bottom: -30%;
+  width: 1.5px;
+  height: 78%;
+  margin-left: -.75px;
+  transform-origin: 50% 100%;
+  background: var(--accent);
+  box-shadow: 0 0 8px 0 var(--accent-glow);
+  will-change: transform;
+}
+.vu-peak { background: rgb(var(--text-3)); box-shadow: none; opacity: .55; width: 1px; }
+.playerbar.vu-hot .vu-needle { background: var(--warn); box-shadow: 0 0 10px 0 rgb(255 200 87 / .5); }
+
+/* Nothing playing, no reading: a meter parked at rest rather than at zero
+   pretending to measure silence. */
+.playerbar:not(.is-playing) .vu { opacity: .38; }
+.vu { transition: opacity var(--dur-2) var(--ease); }
+
+@media (max-width: 1080px) { .vu { display: none; } }
+@media (prefers-reduced-motion: reduce) { .vu { display: none; } }

@@ -1404,6 +1404,57 @@ function viewSettings(host) {
   });
   host.appendChild(storage);
 
+  /* What the collection is made of. Bars in the mono stack rather than a pie
+     chart: these are counts to be read off, not proportions to be admired, and
+     a machine that tells you what it is holding is behaving like an
+     instrument. */
+  const shape = el('section', { class: 'block' }, sectionHead('What is in here'));
+  const paintShape = () => {
+    for (const n of [...shape.children].slice(1)) n.remove();
+    const c = lib.census();
+    if (!c.total) {
+      shape.appendChild(el('p', { class: 'muted small', text: 'Nothing indexed yet.' }));
+      return;
+    }
+
+    const bars = (rows, total, label) => {
+      const wrap = el('div', { class: 'census' });
+      for (const [k, n] of rows.slice(0, 6)) {
+        wrap.appendChild(el('div', { class: 'census-row' },
+          el('span', { class: 'census-key', text: label(k) }),
+          el('span', { class: 'census-bar' },
+            el('i', { style: { width: Math.max(1.5, (n / total) * 100) + '%' } })),
+          el('span', { class: 'census-n', text: n.toLocaleString() })));
+      }
+      return wrap;
+    };
+
+    const pct = Math.round((c.lossless / c.total) * 100);
+    shape.appendChild(el('p', { class: 'muted small', text:
+      `${c.total.toLocaleString()} tracks · ${fmtBytes(c.bytes)} on disk · ${pct}% lossless` }));
+
+    shape.appendChild(el('p', { class: 'label census-head', text: 'Container' }));
+    shape.appendChild(bars(c.formats, c.total, (k) => k.toUpperCase()));
+
+    if (c.known.rate) {
+      shape.appendChild(el('p', { class: 'label census-head', text: 'Sample rate' }));
+      shape.appendChild(bars(c.rates, c.known.rate,
+        (k) => (k % 1000 === 0 ? k / 1000 : (k / 1000).toFixed(1)) + ' kHz'));
+    }
+    if (c.known.depth) {
+      shape.appendChild(el('p', { class: 'label census-head', text: 'Bit depth' }));
+      shape.appendChild(bars(c.depths, c.known.depth, (k) => k + '-bit'));
+    }
+    // Said plainly rather than folded into the bars: a library imported before
+    // the reader kept stream details is not a library of unknown files.
+    if (c.known.rate < c.total) {
+      shape.appendChild(el('p', { class: 'muted small', text:
+        `${(c.total - c.known.rate).toLocaleString()} tracks were indexed before Sonora recorded stream details. Rescan a folder to fill them in.` }));
+    }
+  };
+  paintShape();
+  host.appendChild(shape);
+
   const keys = el('section', { class: 'block' },
     sectionHead('Keyboard'),
     el('div', { class: 'settings-row' },
@@ -1421,10 +1472,12 @@ function viewSettings(host) {
   const about = el('section', { class: 'block about' },
     sectionHead('About'),
     el('p', { class: 'muted', text: 'Sonora plays audio files from this computer. Files are read directly by the browser — nothing is uploaded, and the library index lives in local storage on this device.' }),
-    el('p', { class: 'muted small', text: 'Every audio container is indexed and tagged — MP3, M4A/AAC, FLAC, Ogg/Opus, WAV, AIFF, WebM/Matroska and the rest. Anything this browser has no decoder for is still catalogued, and says so on its row.' }));
+    el('p', { class: 'muted small', text: 'Every audio container is indexed and tagged — MP3, M4A/AAC, FLAC, Ogg/Opus, WAV, AIFF, WebM/Matroska and the rest. Anything this browser has no decoder for is still catalogued, and says so on its row.' }),
+    // The serial: random, generated once, derived from nothing about you.
+    el('p', { class: 'muted small mono', text: lib.serial }));
   host.appendChild(about);
 
-  enter([head, folders, conn, appearance, viz, online, listening, storage, keys, about], { each: 34, y: 12 });
+  enter([head, folders, conn, appearance, viz, online, listening, storage, shape, keys, about], { each: 34, y: 12 });
   const off = lib.events.on('roots', paintRoots);
   return () => off();
 }

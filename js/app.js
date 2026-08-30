@@ -754,8 +754,15 @@ async function boot() {
   lib.events.on('art', applyAccent);
 
   await player.init();
+  intro.report('AUDIO GRAPH OK');
   await lib.init();
+  // Real numbers, printed at the moment they are known. An empty library says
+  // so rather than being given a figure to make the boot look busier.
+  intro.report(lib.trackCount()
+    ? `${lib.trackCount().toLocaleString()} TRACKS · ${lib.state.albums.length.toLocaleString()} ALBUMS`
+    : 'NO LIBRARY YET');
   await stats.init();
+  intro.report(lib.serial);
 
   navigate();
   syncNotice();
