@@ -194,9 +194,26 @@ export function albumCard(album, { onOpen } = {}) {
   return card;
 }
 
+/**
+ * How thick a record is: a single is a card, a double LP is a slab.
+ *
+ * Twelve tracks is the length of an ordinary album and sits at 1, which is the
+ * thickness the edge plane was drawn for. Clamped hard at both ends, because a
+ * one-track release still has to be a physical object and a 90-track box set
+ * cannot be allowed to become a wall.
+ */
+const thicknessOf = (album) =>
+  Math.max(0.45, Math.min(1.9, Math.sqrt((album.tracks.length || 1) / 12)));
+
 export function renderAlbumCard(card, album) {
   card.dataset.key = album.key;
   paintArt(card.querySelector('.art-img'), album.key);
+  card.querySelector('.sleeve')?.style.setProperty('--thick', thicknessOf(album).toFixed(3));
+  // Two extra plates behind a record that came on more than one disc. Drawn by
+  // the sleeve's own pseudo-elements, so a set costs no more DOM than a single.
+  const discs = Math.min(3, new Set(album.tracks.map((t) => t.disc || 1)).size);
+  const sleeve = card.querySelector('.sleeve');
+  if (sleeve) { if (discs > 1) sleeve.dataset.discs = String(discs); else delete sleeve.dataset.discs; }
   const t = card.querySelector('.card-title');
   if (t.textContent !== album.title) t.textContent = album.title;
   const s = card.querySelector('.card-sub');
@@ -479,7 +496,7 @@ function viewAlbum(host, key) {
   // The album page is the one place worth putting the record on a stand: it is
   // a page about a single object, so the object gets a floor, an edge and a
   // reflection, and it turns to follow the pointer.
-  const art = sleeve(key, 'hero-art', { reflect: true, back: backCover(album) });
+  const art = sleeve(key, 'hero-art', { reflect: true, back: backCover(album), record: true });
   const meta = el('div', { class: 'hero-meta' },
     el('p', { class: 'eyebrow', text: 'Album' }),
     el('h1', { class: 'hero-title', text: album.title }),
@@ -564,7 +581,14 @@ function viewAlbum(host, key) {
       const i = parseInt(row.dataset.index, 10);
       if (!isNaN(i)) factory.render(row, album.tracks[i], i);
     }
+    // The record comes out of the sleeve for this album and no other, and it
+    // stops turning rather than disappearing when playback pauses — which is
+    // what a paused turntable looks like.
+    const mine = player.state.current && player.state.current.albumKey === key;
+    flip.classList.toggle('is-playing', !!mine);
+    flip.classList.toggle('is-paused', !!mine && !player.state.playing);
   };
+  refresh();
   const off = player.events.on('track', refresh);
   const offState = player.events.on('state', refresh);
   return () => { off(); offState(); untilt(); };

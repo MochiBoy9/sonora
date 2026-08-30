@@ -129,6 +129,13 @@ body::after { z-index: 0; }
 @property --ty  { syntax: "<number>"; inherits: true; initial-value: 0; }
 @property --lit { syntax: "<number>"; inherits: true; initial-value: 0; }
 
+/* How hard this particular cover wants its edge lit, and how thick the slab
+   is. Both are written per sleeve — by paintArt and by the album card — and
+   both need a sane initial value, because a sleeve is drawn long before
+   anybody has worked out what is on it. */
+@property --rim   { syntax: "<number>"; inherits: true; initial-value: 0.5; }
+@property --thick { syntax: "<number>"; inherits: true; initial-value: 1; }
+
 /* A record is an object, so its artwork is drawn as one.
  *
  * A sleeve has a face that catches the light, a thickness you can see when it
@@ -177,7 +184,7 @@ body::after { z-index: 0; }
  *     `--lit` so it grows in as the surface engages and is worth nothing at
  *     rest.
  *
- * One pseudo-element, three gradients, no filter. Both halves are multiplied
+ * One pseudo-element, four layers, no filter. Every part of it is multiplied
  * by `--gloss`, so Plain gets a flat picture back. */
 .art-3d::before {
   content: "";
@@ -186,7 +193,12 @@ body::after { z-index: 0; }
   z-index: 1;
   pointer-events: none;
   opacity: var(--gloss);
-  background:
+  /* Four layers, front to back: grain, the pointer's pool of light, the wash
+     down the lit side, the fall into shade on the other. Longhands rather than
+     the `background` shorthand, because the shorthand resets blend mode, size
+     and repeat — and the grain is the only layer that wants any of them. */
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.34'/%3E%3C/svg%3E"),
     radial-gradient(56% 56% at calc(50% + var(--tx, 0) * 40%) calc(50% + var(--ty, 0) * 40%),
       rgb(255 255 255 / calc(.42 * var(--lit, 0))),
       rgb(255 255 255 / calc(.10 * var(--lit, 0))) 44%, transparent 70%),
@@ -194,6 +206,11 @@ body::after { z-index: 0; }
       rgb(255 255 255 / .19), rgb(255 255 255 / .05) 26%, transparent 46%),
     linear-gradient(calc(148deg + var(--tx, 0) * 20deg),
       transparent 54%, rgb(0 0 0 / .10) 78%, rgb(0 0 0 / .22));
+  background-size: 140px 140px, auto, auto, auto;
+  background-repeat: repeat, no-repeat, no-repeat, no-repeat;
+  /* Overlay keeps the grain out of the shadows: noise in the dark half of a
+     cover is dirt, and in the light half it is tooth. */
+  background-blend-mode: overlay, normal, normal, normal;
 }
 
 /* The side of the slab. Invisible face-on, which is correct — you do not see
@@ -208,7 +225,10 @@ body::after { z-index: 0; }
   position: absolute;
   inset: 0;
   pointer-events: none;
-  transform: translateZ(calc(-24px * var(--sleeve, 0)));
+  /* Thickness is the record's own: --thick comes from how many tracks are on
+     it, so a single is a card and a box set is a slab. Depth that encodes
+     something true rather than decorating with it. */
+  transform: translateZ(calc(-24px * var(--sleeve, 0) * var(--thick, 1)));
   background:
     linear-gradient(150deg, rgb(var(--art-rgb) / .34), rgb(0 0 0 / .68) 62%);
   box-shadow: 0 0 0 var(--hair) rgb(0 0 0 / .55);
@@ -223,14 +243,22 @@ body::after { z-index: 0; }
  * separate a slab from a hole — plus, on top of those, a soft glow along
  * whichever edge is currently facing the pointer. The first pair is what makes
  * the sleeve look raised; the second is the cue that tells you it has turned
- * rather than merely grown. */
+ * rather than merely grown.
+ *
+ * How hard it is lit depends on the cover it is edging. `--rim` is written per
+ * sleeve by paintArt from the artwork's own extracted colour: a near-black
+ * sleeve needs a strong arris to separate it from the ground, and a bright one
+ * needs almost none or it blows out into a white halo. A material that
+ * responds to its own content is the difference between a style and a system,
+ * and the number this needs was already being computed at import for the
+ * accent. */
 .art-3d::after {
   box-shadow:
-    inset 1px 1px 0 0 rgb(255 255 255 / calc(.24 * var(--gloss))),
+    inset 1px 1px 0 0 rgb(255 255 255 / calc(.34 * var(--gloss) * var(--rim, .5) * 2)),
     inset -1px -1px 0 0 rgb(0 0 0 / calc(.34 * var(--gloss))),
     inset 0 0 0 var(--hair) rgb(160 220 255 / .16),
     inset calc(var(--tx, 0) * -4px) calc(var(--ty, 0) * -4px) 18px -8px
-      rgb(255 255 255 / calc(.40 * var(--gloss) * var(--lit, 0)));
+      rgb(255 255 255 / calc(.40 * var(--gloss) * var(--lit, 0) * (0.5 + var(--rim, .5))));
 }
 
 /* And the shadow it throws, which swings opposite the light. Offsets scale
@@ -249,6 +277,94 @@ body::after { z-index: 0; }
     calc(30px + 20px * var(--lit, 0)) -18px var(--sleeve-shadow),
     0 0 36px -12px rgb(var(--art-rgb) / calc(.62 * var(--art-bloom)));
   transition: box-shadow var(--dur-3) var(--ease);
+}
+
+/* ------------------------------------------------------------------ record */
+
+/*
+ * The disc inside the sleeve. It slides out while the album is playing and
+ * turns at 33⅓ — 1.8 seconds a revolution, which is the real number.
+ *
+ * Drawn rather than photographed: five stacked gradients — spindle, label,
+ * label rim, grooves, and the vinyl itself — so it takes the album's own
+ * colour on its label, scales to any size, and belongs to the same hairline
+ * language as the rest of the app. A photograph of a record would be the one
+ * bitmap in an interface made entirely of drawn parts.
+ *
+ * It costs nothing while nothing is playing: no element is animated until
+ * `.is-playing`, and the rotation is paused rather than left running the
+ * moment playback stops.
+ */
+.record {
+  position: absolute;
+  top: 3%;
+  left: 3%;
+  width: 94%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateZ(calc(-30px * var(--sleeve, 0) * var(--thick, 1)));
+  transition: opacity 420ms linear, transform 900ms cubic-bezier(.2, .9, .25, 1);
+  background:
+    radial-gradient(circle at 50% 50%, #05070a 0 2.1%, transparent 2.3%),
+    radial-gradient(circle at 50% 50%, transparent 16.6%, rgb(255 255 255 / .16) 16.8%, transparent 17.1%),
+    radial-gradient(circle at 50% 50%, rgb(var(--art-rgb) / .82) 0 16.7%, transparent 17%),
+    repeating-radial-gradient(circle at 50% 50%,
+      rgb(190 220 255 / .055) 0 1px, rgb(0 0 0 / 0) 1px 3.5px),
+    radial-gradient(circle at 38% 32%, rgb(255 255 255 / .10), transparent 46%),
+    radial-gradient(circle at 50% 50%, #171b21 0 62%, #0b0e13 88%, #05070a);
+  box-shadow: 0 10px 26px -14px rgb(0 0 0 / .8);
+}
+
+.sleeve.is-playing .record {
+  opacity: 1;
+  transform: translateZ(calc(-30px * var(--sleeve, 0) * var(--thick, 1)))
+             translateX(calc(36% * var(--parallax)));
+  animation: record-spin 1.8s linear infinite;
+}
+/* Stopped, not hidden: a record that is out of its sleeve and standing still
+   is what a paused turntable looks like. */
+.sleeve.is-paused .record { animation-play-state: paused; }
+
+@keyframes record-spin { to { rotate: 360deg; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .sleeve.is-playing .record { animation: none; }
+}
+
+/* ------------------------------------------------------------------ sets */
+
+/*
+ * A record that came on more than one disc is more than one sleeve, so it is
+ * drawn as more than one: up to two further plates behind the front, each a
+ * little further back and turned a degree or two out of true, the way a set
+ * actually sits on a shelf.
+ *
+ * Both are pseudo-elements of the sleeve, which means a box set costs a
+ * two-disc album exactly as much DOM as a single — nothing. They inherit
+ * `--thick` and `--sleeve` from the sleeve above them, so they scale with the
+ * record's own weight and switch off with Parallax like everything else.
+ */
+.sleeve[data-discs]::before,
+.sleeve[data-discs="3"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(150deg, rgb(var(--art-rgb) / .22), rgb(0 0 0 / .72) 66%);
+  box-shadow: 0 0 0 var(--hair) rgb(0 0 0 / .5);
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+}
+.sleeve[data-discs]::before {
+  transform: translateZ(calc(-40px * var(--sleeve, 0) * var(--thick, 1)))
+             translateX(calc(3% * var(--parallax))) rotate(1.1deg);
+}
+.sleeve[data-discs="3"]::after {
+  transform: translateZ(calc(-56px * var(--sleeve, 0) * var(--thick, 1)))
+             translateX(calc(5.5% * var(--parallax))) rotate(2.2deg);
 }
 
 /* A sleeve needs two elements, and which is which matters.
