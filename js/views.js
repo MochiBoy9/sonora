@@ -472,17 +472,177 @@ function viewAlbums(host) {
     return () => {};
   }
 
-  const grid = new VirtualGrid({
-    viewport: host, minCell: 168, gap: 22, aspect: 1, footer: 64,
-    create: () => albumCard(null),
-    render: (node, album) => renderAlbumCard(node, album),
-  });
-  grid.setItems(albums);
-  enter([head], { y: 10 });
+  /* Two ways to look at a wall of records: as a wall, or as a crate you flip
+     through. The choice is remembered, because it is a way of working rather
+     than a novelty to be re-chosen every visit. */
+  let mode = 'grid';
+  try { mode = localStorage.getItem(ALBUM_VIEW) === 'crate' ? 'crate' : 'grid'; } catch { /* private */ }
 
-  const off = lib.events.on('change', () => grid.setItems(lib.state.albums));
-  const offArt = lib.events.on('art', () => grid.refresh());
-  return () => { off(); offArt(); grid.destroy(); };
+  const bar = el('div', { class: 'toolbar' }, el('div', { class: 'segmented', role: 'tablist' }));
+  const seg = bar.firstChild;
+  for (const [id, label] of [['grid', 'Grid'], ['crate', 'Crate']]) {
+    seg.appendChild(el('button', {
+      class: 'seg' + (id === mode ? ' is-on' : ''), role: 'tab', text: label,
+      'aria-selected': id === mode ? 'true' : 'false',
+      onclick: () => setMode(id),
+    }));
+  }
+  host.appendChild(bar);
+
+  const slot = el('div', { class: 'album-slot' });
+  host.appendChild(slot);
+
+  let teardown = () => {};
+  function setMode(next) {
+    if (next === mode && slot.firstChild) return;
+    mode = next;
+    try { localStorage.setItem(ALBUM_VIEW, mode); } catch { /* private */ }
+    for (const b of seg.children) {
+      const on = b.textContent.toLowerCase() === mode;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    try { teardown(); } catch (err) { console.warn(err); }
+    slot.textContent = '';
+    teardown = mode === 'crate' ? mountCrate(slot) : mountGrid(slot);
+  }
+
+  function mountGrid(into) {
+    const grid = new VirtualGrid({
+      viewport: host, minCell: 168, gap: 22, aspect: 1, footer: 64,
+      create: () => albumCard(null),
+      render: (node, album) => renderAlbumCard(node, album),
+    });
+    grid.setItems(lib.state.albums);
+    const off = lib.events.on('change', () => grid.setItems(lib.state.albums));
+    const offArt = lib.events.on('art', () => grid.refresh());
+    void into;
+    return () => { off(); offArt(); grid.destroy(); };
+  }
+
+  setMode(mode);
+  enter([head, bar], { y: 10 });
+  return () => { try { teardown(); } catch (err) { console.warn(err); } };
+}
+
+const ALBUM_VIEW = 'sonora:albumview';
+
+/* ------------------------------------------------------------------ crate */
+
+/**
+ * Records in a crate, seen from the front.
+ *
+ * Only a window of records around the current one exists in the DOM — eleven
+ * of them, recycled — so a crate of fifty thousand costs the same as a crate
+ * of eleven. That is the same argument the virtualiser makes, made again in a
+ * shape the virtualiser cannot help with, because these are positioned by
+ * their distance from the middle rather than by their index.
+ *
+ * Positions are written in JavaScript rather than by a scroll-driven
+ * animation, and deliberately: nothing moves per frame here. Eleven transforms
+ * are written when the selection changes and never again — a keypress, not a
+ * scroll. CSS then eases each record to where it was put, which is what makes
+ * the whole rack swing rather than jump.
+ */
+function mountCrate(host) {
+  const WINDOW = 5;                       // how many either side of the middle
+  const box = el('div', {
+    class: 'crate', tabindex: '0', role: 'listbox', 'aria-label': 'Albums',
+  });
+  const rail = el('div', { class: 'crate-rail' });
+  const meta = el('div', { class: 'crate-meta' },
+    el('h2', { class: 'crate-title' }),
+    el('p', { class: 'crate-sub' }));
+  const hint = el('p', { class: 'crate-hint label', text: 'Arrow keys to flip · Enter to open' });
+  box.append(rail, meta, hint);
+  host.appendChild(box);
+
+  let albums = lib.state.albums;
+  let at = 0;
+  const cards = new Map();                // offset -> node, recycled in place
+
+  function paint() {
+    albums = lib.state.albums;
+    if (!albums.length) return;
+    at = Math.max(0, Math.min(albums.length - 1, at));
+
+    for (let o = -WINDOW; o <= WINDOW; o++) {
+      let node = cards.get(o);
+      if (!node) {
+        node = albumCard(null);
+        node.classList.add('crate-item');
+        rail.appendChild(node);
+        cards.set(o, node);
+      }
+      const album = albums[at + o];
+      if (!album) { node.hidden = true; continue; }
+      node.hidden = false;
+      renderAlbumCard(node, album);
+
+      // Fanned out from the middle: the further away, the further back, the
+      // more turned, and the dimmer. The record at the front is the exception
+      // and has to be — it is centred, square to the viewer and a little
+      // forward of the rest, because it is the one being looked at. Folding it
+      // into the same formula as its neighbours turns it 42 degrees and pushes
+      // it sideways, which is a crate with nothing at the front of it.
+      const s = o < 0 ? -1 : 1;
+      const d = Math.abs(o);
+      const x = d === 0 ? 0 : s * (58 + (d - 1) * 30);
+      const z = d === 0 ? 70 : -d * 120;
+      const ry = d === 0 ? 0 : -s * 44;
+      // The -50% pair is the centring the stylesheet asked for and cannot
+      // apply itself, because this line replaces the whole transform.
+      node.style.transform =
+        `translate(-50%, -50%) translate3d(${x.toFixed(1)}px, 0, ${z.toFixed(0)}px)` +
+        ` rotateY(${ry.toFixed(0)}deg)`;
+      node.style.opacity = d === 0 ? '1' : String(Math.max(0.15, 1 - d * 0.22));
+      node.style.zIndex = String(20 - d);
+      node.classList.toggle('is-front', o === 0);
+      node.setAttribute('aria-selected', o === 0 ? 'true' : 'false');
+      // Only the record at the front is a target. Clicking one behind it and
+      // getting a different album than the one you pointed at is the classic
+      // failure of every cover-flow ever shipped.
+      node.style.pointerEvents = o === 0 ? 'auto' : 'none';
+    }
+
+    const cur = albums[at];
+    meta.querySelector('.crate-title').textContent = cur.title;
+    meta.querySelector('.crate-sub').textContent =
+      [cur.artist, cur.year || null, fmtCount(cur.tracks.length, 'track')].filter(Boolean).join(' · ');
+    box.setAttribute('aria-activedescendant', '');
+  }
+
+  const move = (by) => { at += by; paint(); };
+
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') { move(1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft') { move(-1); e.preventDefault(); }
+    else if (e.key === 'Home') { at = 0; paint(); e.preventDefault(); }
+    else if (e.key === 'End') { at = albums.length - 1; paint(); e.preventDefault(); }
+    else if (e.key === 'Enter' && albums[at]) {
+      markTransition(cards.get(0)?.querySelector('.sleeve'));
+      location.hash = '#/album/' + albums[at].key;
+    }
+  });
+
+  // A wheel is how people flip through a crate on a laptop. Either axis: a
+  // horizontal trackpad swipe and a vertical wheel mean the same thing here.
+  let wheelAt = 0;
+  box.addEventListener('wheel', (e) => {
+    const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (!d) return;
+    e.preventDefault();
+    const now = performance.now();
+    if (now - wheelAt < 110) return;      // one record per gesture, not per event
+    wheelAt = now;
+    move(d > 0 ? 1 : -1);
+  }, { passive: false });
+
+  paint();
+  box.focus({ preventScroll: true });
+  const off = lib.events.on('change', paint);
+  const offArt = lib.events.on('art', paint);
+  return () => { off(); offArt(); box.remove(); cards.clear(); };
 }
 
 /* ------------------------------------------------------------------ ALBUM */

@@ -1059,3 +1059,99 @@
 }
 
 .about .mono { font-family: var(--mono); letter-spacing: .16em; color: var(--text-3); }
+
+/* ------------------------------------------------------------------ crate */
+
+/*
+ * Records in a crate, seen from the front.
+ *
+ * The stage owns the perspective and the records are laid out by their
+ * distance from the middle, not by their index — which is why this cannot be
+ * a grid and why the positions are written rather than flowed. Each record
+ * eases to where it was put, so the whole rack swings rather than jumps.
+ */
+.crate {
+  position: relative;
+  height: min(58vh, 460px);
+  min-height: 300px;
+  perspective: 1500px;
+  perspective-origin: 50% 42%;
+  outline: none;
+}
+.crate:focus-visible { box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+
+.crate-rail {
+  position: absolute;
+  inset: 0 0 88px;
+  transform-style: preserve-3d;
+}
+
+/*
+ * Two-class selector on purpose. A crate item is also a `.card`, and aero.css
+ * — which loads last — declares `.card { position: relative }` for the
+ * specular edge. A single-class rule here loses that fight silently, every
+ * record takes its static position instead of the centre, and the crate stacks
+ * into a column. Same trap that file warns about for the queue panel.
+ */
+.crate-rail > .crate-item {
+  /* Centred by left/top plus a translate that every JS transform re-states as
+     its first term, because that line replaces the transform wholesale. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(46%, 258px);
+  padding: 0;
+  cursor: pointer;
+  transform-style: preserve-3d;
+  transition: transform 520ms var(--ease), opacity 380ms linear;
+  will-change: transform, opacity;
+}
+/* Only the record at the front carries its own name; the rest are backdrop,
+   and eleven stacked titles is noise rather than information. */
+.crate-item .card-title,
+.crate-item .card-sub { display: none; }
+.crate-item .card-art { margin-bottom: 0; }
+/* The pointer tilt belongs to the record you are looking at. On the ones
+   behind it, two rotations fight and the rack shears. */
+.crate-item:not(.is-front) .sleeve { transform: none !important; }
+.crate-item:not(.is-front) .card-fab,
+.crate-item:not(.is-front) .card-tick { display: none; }
+.crate-item.is-front { filter: drop-shadow(0 26px 40px rgb(0 0 0 / .55)); }
+
+.crate-meta {
+  position: absolute;
+  left: 0; right: 0; bottom: 34px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  pointer-events: none;
+}
+.crate-title {
+  font-size: calc(21px * var(--scale));
+  font-weight: 600;
+  letter-spacing: -.02em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0 20px;
+}
+.crate-sub {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.crate-hint {
+  position: absolute;
+  left: 0; right: 0; bottom: 8px;
+  text-align: center;
+  opacity: .5;
+  pointer-events: none;
+}
+
+.album-slot { position: relative; }
+
+@media (prefers-reduced-motion: reduce) {
+  .crate-item { transition: none; }
+}
