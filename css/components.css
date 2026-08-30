@@ -159,9 +159,12 @@
 .art-sm { width: 36px; height: 36px; --cut: 4px; }
 .art-xs { width: 34px; height: 34px; --cut: 4px; }
 .art-pb { width: 52px; height: 52px; --cut: 6px; box-shadow: var(--sh-art); }
-/* Artist artwork keeps the circle: it is a portrait, not a panel. */
-.round, .round .art { clip-path: none; border-radius: 50%; }
-.round .art::after { border-radius: 50%; }
+/* Artist artwork keeps the circle: it is a portrait, not a panel. The edge
+   plane behind it has to take the same shape or the portrait acquires square
+   corners nobody asked for — round, it reads as a pressed disc, which is the
+   right object for an artist. */
+.round, .round .art, .round .art-edge { clip-path: none; border-radius: 50%; }
+.round .art::after, .round .art-3d::before { border-radius: 50%; }
 
 /* ------------------------------------------------------------------ virtual */
 
@@ -249,9 +252,20 @@
   font-variant-numeric: tabular-nums;
   color: var(--text-3);
 }
-.trow-actions { width: 32px; flex: none; display: flex; justify-content: flex-end; }
+.trow-actions { width: 64px; flex: none; display: flex; justify-content: flex-end; }
 .trow-more { opacity: 0; transition: opacity var(--dur-1) linear; }
 .trow:hover .trow-more, .trow-more:focus-visible { opacity: 1; }
+
+/* The star holds both glyphs and hides one, the same swap the transport makes
+   with play/pause — so marking a track cannot move anything on the row. Unset,
+   it only appears under the pointer; set, it stays, because a mark you can
+   only see while hovering is not a mark. */
+.trow-fav { opacity: 0; transition: opacity var(--dur-1) linear, color var(--dur-1) linear; }
+.trow-fav [href$="star-fill"] { display: none; }
+.trow:hover .trow-fav, .trow-fav:focus-visible { opacity: 1; }
+.trow.is-fav .trow-fav { opacity: 1; color: var(--accent); }
+.trow.is-fav .trow-fav [href$="star"] { display: none; }
+.trow.is-fav .trow-fav [href$="star-fill"] { display: block; }
 
 .trow.is-playing { background: linear-gradient(90deg, rgb(var(--accent-rgb) / .1), transparent 70%); }
 .trow.is-playing::before { transform: scaleY(1); box-shadow: 0 0 12px 0 var(--accent-glow); }
@@ -263,6 +277,26 @@
    for it — better than a row that simply refuses to play. */
 .trow.is-unsupported { opacity: .55; }
 .trow.is-unsupported .trow-title::after { content: " · NO DECODER"; font-family: var(--mono); font-size: calc(9.5px * var(--scale)); letter-spacing: .12em; color: var(--warn); }
+
+/* A row on a touch screen has no hover to reveal anything with, so the two
+   actions are simply always there — otherwise the star and the menu do not
+   exist at all on a phone. */
+@media (hover: none) {
+  .trow-more, .trow-fav { opacity: 1; }
+}
+
+/* Below these widths the row runs out of room before it runs out of columns,
+   and what it gives up first is what a phone needs least. The album is named
+   twice on most pages already — once by the row you tapped to get here — and
+   a duration is worth less than a title you can read. Dropping them is what
+   keeps the title from collapsing to two characters and an ellipsis. */
+@media (max-width: 600px) {
+  .trow-album { display: none; }
+}
+@media (max-width: 480px) {
+  .trow { gap: 12px; padding: 0 10px; }
+  .trow-time { display: none; }
+}
 
 .thead {
   height: 30px;
@@ -336,7 +370,6 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   gap: 4px;
   padding: 10px 10px 14px;
   cursor: pointer;
-  perspective: 900px;
   transition: background var(--dur-2) var(--ease);
   will-change: transform;
 }
@@ -354,9 +387,18 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .card:hover { background: rgb(var(--surface-2-rgb) / .34); }
 .card:hover::after { box-shadow: inset 0 0 0 var(--hair) var(--line-2); }
 
-.card-art { position: relative; margin-bottom: 10px; transform-style: preserve-3d; }
-.card-art .art { box-shadow: var(--sh-2); transition: box-shadow var(--dur-3) var(--ease); }
-.card:hover .card-art .art { box-shadow: var(--sh-3), 0 0 30px -14px rgb(var(--art-rgb) / .6); }
+/* The stage, not the sleeve: the perspective belongs to the artwork's own box
+   so the vanishing point is the middle of the cover rather than the middle of
+   the card, which is somewhere down among the title and the artist name. */
+.card-art { margin-bottom: 10px; }
+/* A sleeve brings its own shadow, which follows the pointer (aero.css), so the
+   flat one is only for artwork that is not one. Stated as :not() rather than
+   letting the sleeve override it, because `.card-art .art` outranks `.art-3d`
+   and the loser of that fight would have been the shadow that moves. */
+.card-art > .art:not(.art-3d) { box-shadow: var(--sh-2); transition: box-shadow var(--dur-3) var(--ease); }
+.card:hover .card-art > .art:not(.art-3d) { box-shadow: var(--sh-3), 0 0 30px -14px rgb(var(--art-rgb) / .6); }
+.card:hover .card-art .art-3d,
+.card:focus-visible .card-art .art-3d { --art-bloom: 1; }
 .card:hover .art-img.is-loaded { transform: scale(1.04); }
 
 /* Corner ticks that spring open on hover: the card is being targeted. */
@@ -626,6 +668,57 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 }
 .dialog-body { margin-bottom: 22px; color: var(--text-2); font-size: calc(13.5px * var(--scale)); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ------------------------------------------------------------------ keys */
+
+/* The shortcut sheet. Keys are set in the mono stack and drawn as physical
+   caps, and the list is a two-column grid rather than a table so the
+   descriptions all begin on the same rule regardless of how wide a chord is —
+   which is the one thing that makes a list of this shape scannable. */
+.keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  align-items: start;
+  gap: 24px 30px;
+  max-height: min(64vh, 620px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.keys-group {
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: var(--hair) solid var(--line);
+}
+.keys-list {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px 14px;
+  margin: 0;
+}
+.keys-list dt { display: flex; gap: 4px; justify-content: flex-end; }
+.keys-list dd { margin: 0; color: var(--text-2); font-size: calc(13px * var(--scale)); }
+.keys kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text);
+  background: rgb(var(--accent-rgb) / .08);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line), 0 1px 0 0 var(--line-2);
+  --k: 4px;
+  clip-path: var(--nick-nw);
+  border-radius: var(--radius);
+}
 
 .field { display: flex; flex-direction: column; gap: 8px; }
 .field-label {

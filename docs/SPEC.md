@@ -1,6 +1,6 @@
 # Sonora — Feature Specification & UX Plan
 
-**Version** 2.2 · **Status** implemented and verified unless a section says
+**Version** 2.3 · **Status** implemented and verified unless a section says
 otherwise · **Audience** full-stack, design, QA
 
 ---
@@ -35,7 +35,7 @@ That constraint is the product, not an implementation detail. Every feature
 below is measured against it: *does this still work with the network unplugged,
 and does it send anything anywhere the listener did not ask for?*
 
-### 1.2 The four features in this release
+### 1.2 The features in this release
 
 | # | Feature | One line | Default |
 |---|---------|----------|---------|
@@ -45,6 +45,7 @@ and does it send anything anywhere the listener did not ask for?*
 | F4 | **Circle Analysis Center** | Listening *time* — the honest metric — drawn as area-proportional circles by artist, genre or year. | On |
 | F5 | **The Rack** | Ten-band parametric EQ, dynamics, space, stereo width, and pitch and speed as two separate controls. | Unity |
 | F6 | **Looks** | Nineteen visual settings and eight named looks, all of it CSS custom properties. | Aqua |
+| F7 | **Favourites** | A star on every row, on the transport and on `F`; its own destination, kept in the order you marked them. | Empty |
 
 ### 1.3 The shape of the change
 
@@ -70,6 +71,25 @@ js/gl.js        CHG   sphereLines, for the bubbles
 css/base.css    CHG   the shape and material tokens the look engine writes
 tools/layout.mjs NEW  eight widths × eight routes: overflow, overlap, centring
 tools/audio.mjs  NEW  does the rack change the sound, measured after the rack
+```
+
+Since 2.2 (F7 and the corrections in §13.3):
+
+```
+js/library.js   CHG   the favourites list; merges recorded as they happen
+js/ui.js        CHG   the row star, the favourite menu item, a modal focus trap,
+                      sleeve() — artwork built as an object
+js/views.js     CHG   #/favourites, the Keyboard settings row, the album
+                      showcase, shelves revealed on approach
+js/app.js       CHG   the shortcut table and the sheet ? opens, F, title fix
+js/motion.js    CHG   reveal(), commit:'release', tilt3d publishes its light
+js/playerbar.js CHG   the transport star, the transport sleeve
+js/queue.js     CHG   the now-playing sleeve
+index.html      CHG   i-star, i-star-fill, i-keys
+css/aero.css    CHG   the sleeve: stage, edge, form shading, specular, rim
+css/components.css CHG the star, the shortcut sheet, the narrow-width row
+css/layout.css  CHG   the transport star
+css/views.css   CHG   the album showcase, floor and reflection; shelf camera
 ```
 
 ### 1.4 What did **not** change
@@ -161,6 +181,36 @@ a virtualised list.
 `.label` mono uppercase micro-label · `.grad-text` accent gradient text ·
 `.segmented` mode switch · `.band-card` context card · `.link-state` connection
 readout · `body::before` 44px graph-paper grid.
+
+### 2.5 The sleeve
+
+Artwork above thumbnail size is drawn as an object rather than as a picture.
+Three elements, all of them in `aero.css` so one slider still switches the lot
+off:
+
+| Element | Is | Notes |
+|---|---|---|
+| `.sleeve-stage` | the vanishing point | `perspective: 640px`. **Not** `.stage` — the immersive visualiser owns that, and `aero.css` loads last |
+| `.sleeve` | the thing that turns | `preserve-3d`; declares `--sleeve`, the depth gain, so the face *and* the edge both inherit it |
+| `.art-3d` | the face | form shading always, specular on `--lit`, rim on both arrises, shadow offset by `--tx`/`--ty` |
+| `.art-edge` | the side of the slab | a sibling plane at negative Z, invisible face-on |
+| `.art-floor` / `.art-echo` | the reflection | album showcase only; a second draw of the decoded image under a mask |
+
+The stage and the sleeve cannot be the same element: nothing supplies the
+perspective for its own rotation. The stage must be the artwork's own box, not
+the card around it — a perspective centred on the card puts the vanishing point
+down among the title and the artist, and the edge plane then projects out of
+the bottom of the sleeve as a black bar.
+
+`tilt3d` publishes `--tx`, `--ty` (pointer across the face, −1…1) and `--lit`
+(engagement, 0…1) on the sleeve, and scales its own rotation by `--parallax`
+and `data-motion`. One listener measures the pointer; every effect reads those
+three numbers. All of it is `transform`, `opacity` and gradients — no filter,
+nothing that can trigger layout, and nothing per-frame outside a hover.
+
+**Depth is `--parallax`, light is `--gloss`.** They are separate on purpose:
+one is the same question as how far a panel lifts off the world, the other is
+the same wet highlight the panels already wear.
 
 ---
 
@@ -910,6 +960,102 @@ contributes nothing and the app is the flat instrument it was.
 
 ---
 
+## F7 · Favourites
+
+> `js/library.js`, `js/ui.js`, `js/views.js`, `js/playerbar.js`, route `#/favourites`
+
+### F7.1 Objective
+
+One gesture for "keep this", reachable from every place a track appears, and
+one destination that collects them. The gap it fills is the ordinary one: a
+playlist is a decision about a *set*, and marking a single track should not
+require making one.
+
+### F7.2 User stories
+
+- *As a listener*, I can star a track from its row, from the transport while it
+  plays, from its context menu, or with one key — and it is the same mark in
+  all four places.
+- *As someone with a folder that is not connected today*, my marks are still
+  there when it is.
+- *As someone who re-imports a folder*, re-reading every file does not clear
+  what I have kept.
+- *As someone with a lot of them*, the list is in the order I made the
+  decisions, so the recent ones are at the top where I am looking.
+
+### F7.3 Behaviour
+
+**The mark.** `lib.toggleFavourite(id, force?)` flips or sets one track and
+returns the state it landed in. It writes `kv['favourites']` and emits
+`favourites`, which the transport, every visible track row and the Favourites
+page listen to.
+
+**Where it lives.** Beside the library, as an ordered id list plus a `Set` for
+membership — *not* a flag on the track record. Two reasons, both load-bearing:
+
+1. An import rewrites the whole record for any file whose size or mtime moved.
+   A flag stored there would be cleared by a re-scan that changed nothing a
+   listener can see.
+2. The order in which tracks were marked is information, and it has nowhere to
+   live on a record that is also sorted by six other keys.
+
+**Ids that point nowhere are kept.** A disconnected folder makes its tracks
+unreachable, not deleted. `favouriteTracks()` filters to what the library can
+resolve *now*; the stored list is untouched, so reconnecting the folder brings
+the marks back. Sweeping them would be the one destructive act in the feature
+and it would happen silently.
+
+**The row star.** Two glyphs in one button — `i-star` and `i-star-fill` — with
+one hidden, the same swap the transport makes for play/pause, so marking a
+track cannot move anything on the row it is on. Unset it appears on hover;
+set it stays. A pointerless device has no hover, so under `@media (hover: none)`
+both row actions are permanently visible.
+
+**Repainting.** A star repaints its own row synchronously on click, because the
+mark has to land under the pointer that asked for it. The `favourites` event
+then refreshes every other live row through `VirtualList.refresh()`, which
+rewrites what is on screen and moves nothing. The Favourites page is the one
+place where the *set* changes, so there it rebuilds — and when the last one
+goes it hands the route back to the router, because the empty state is a
+different page.
+
+### F7.4 Acceptance criteria
+
+| # | Criterion |
+|---|---|
+| 1 | A star set anywhere is set everywhere, without a reload. |
+| 2 | It survives a reload, and a re-import of the same folder. |
+| 3 | A track whose folder is disconnected keeps its mark and returns to the list when the folder does. |
+| 4 | `#/favourites` lists marks newest-first and has no sort header. |
+| 5 | Removing the last one shows the empty state, not an empty table. |
+| 6 | The row star is reachable without a pointer. |
+| 7 | A menu over several tracks marks all of them if any is unmarked, and clears them otherwise. |
+
+### F7.5 API surface
+
+```js
+lib.favourites            // { ids: string[], set: Set<string> } — newest first
+lib.isFavourite(id)       // boolean
+lib.toggleFavourite(id, force?)   // -> boolean, the state it landed in
+lib.favouriteTracks()     // Track[] the library can resolve, newest mark first
+lib.events.on('favourites', (id, on) => …)
+```
+
+### F7.6 Data — `kv['favourites']`
+
+`string[]` of track ids, most recently marked first. No timestamps: the array
+order *is* the timestamp, and a number nothing reads is a number that goes
+stale.
+
+### F7.7 Accessibility
+
+The star is a real `<button>` with `aria-pressed` and a label that names the
+action it will perform, not the state it is in. It is in the tab order of the
+row like the menu button, and it is never the only way to set the mark — the
+context menu and `F` both do it.
+
+---
+
 ## 4. User flows
 
 ### 4.1 First run
@@ -1004,6 +1150,19 @@ that names each region — it is the main carrier of the instrument feel.
   forever for it never leaves.
 - `prefers-reduced-motion` has a still-frame path in the intro, the backdrop,
   the visualiser and the circles. Not "less motion" — no motion.
+- An arrival ends where CSS already had the element, so it is animated with
+  `commit: 'release'` — cancel, do not `commitStyles`. Committing writes
+  `transform: translate3d(0,0,0)` inline, which then outranks every `:hover`
+  rule that wanted to move the thing, for the life of the page. That is how the
+  card lift in §F6.7 stopped working without anyone noticing: the entrance was
+  pinning a transform on top of it.
+- Scroll-triggered arrivals use `motion.reveal`, which is an
+  `IntersectionObserver` and never a scroll listener — the crossing is computed
+  off the main thread, which is the only version of this a page carrying a
+  virtualised list can afford. It fires once per element, and it carries a
+  two-second failsafe: an observer delivers an initial record for every target
+  it is given, so silence means the machinery is not running, and content
+  hidden pending an animation that will never arrive is content that is gone.
 
 ### 5.4 The backdrop
 
@@ -1046,7 +1205,7 @@ spins without saying what it is waiting for.
 | `art` | album key | WebP thumbnail blobs (448px long edge) |
 | `roots` | `id` | Folder handles / file-input roots, incl. `d:loose` |
 | `playlists` | `id` | User playlists |
-| `kv` | name | `session:v1`, `listen:v1`, `recent`, misc |
+| `kv` | name | `session:v1`, `listen:v1`, `recent`, `favourites`, misc |
 | `band` | `key` | **New in v2** — cached online answers |
 
 ### 6.2 Track
@@ -1224,8 +1383,8 @@ it is built to prove the rule rather than weaken it.
 | Area | Commitment |
 |---|---|
 | Contrast | Body text ≥ 7:1, secondary ≥ 4.5:1, in both themes. Hairlines are decorative and never the only signal. |
-| Keyboard | Every action reachable without a pointer. Shortcuts: Space, ←/→, ↑/↓, M, S, R, N, P, Q, V, `/`, Esc. |
-| Focus | A visible cyan focus ring on every interactive element; dialogs trap focus and return it. |
+| Keyboard | Every action reachable without a pointer. Shortcuts: Space, ←/→, ↑/↓, M, S, R, N, P, F, Q, V, B, E, `/`, `?`, Esc — and `?` puts that list on screen, generated from the same table `bindKeys` reads, so it cannot drift. |
+| Focus | A visible cyan focus ring on every interactive element; dialogs trap Tab and Shift+Tab inside themselves and return focus to whatever opened them. |
 | Screen readers | Landmarks throughout; `aria-selected` on the mode switch; live regions for the connection readout, scan progress and lookup status; every icon button has an `aria-label`. |
 | Motion | `prefers-reduced-motion` has a still-frame path in the intro, backdrop, visualiser and circles, and the Motion setting offers Full / Calm / None independently of the system. |
 | Sizing | Text size, density and contrast are settings, so someone who needs 125% type does not have to zoom the whole layout to get it. |
@@ -1315,7 +1474,41 @@ provenance on old libraries.
 **Preferences** are all new keys with safe defaults; `sonora:online` defaults to
 off, so an upgrading listener is not opted in to anything.
 
-**Nothing is removed.** No store, no key, no exported function.
+**Favourites need no schema change.** `kv['favourites']` is a new key in an
+existing store; absent, it reads as an empty list. `VERSION` stays at 2.
+
+**Nothing is removed.** No store, no key, no exported function. `trackTable()`
+gained a `destroy()` that unsubscribes and then destroys the list; the two
+in-tree callers were moved onto it, and `table.list.destroy()` still works for
+anything that has not been.
+
+### 13.3 Corrections in 2.3
+
+Three things that were wrong rather than missing:
+
+- **The import readout could silently drop a merge.** `finishScan` inferred
+  which albums had been folded by scanning the finished index for
+  `merged > 1`. But a merge rewrites `albumKey` on the tracks it moves, so by
+  the *second* pass over the same library there is nothing left to find — and
+  whether `finishScan` saw the pass that did the folding depended on which
+  side of a `requestAnimationFrame` the worker's `done` message landed. Merges
+  are now recorded in `mergeAlbums` as they happen, into a map cleared by
+  `startScan` and drained by `finishScan`. The announcement is deterministic,
+  and a fold that happened at launch is no longer re-announced by the next
+  unrelated import.
+- **`document.title` fell through to a bare "Sonora"** on Settings and on any
+  playlist, because `titleFor` looked the route up in `NAV` and neither is in
+  it. It now falls through to `routeLabel`, which already knew the answer, and
+  a playlist is named by its own name.
+- **Dialogs did not trap focus** despite §10 saying they did: Tab walked
+  straight out onto the page behind the scrim, and focus was never returned to
+  whatever opened the dialog. Both are now true.
+- **The card lift had never worked.** `.card:hover { transform: translateY(…) }`
+  is documented in `aero.css` as the parallax preference made visible, but
+  every card goes through `enter()`, and `enter()` finished by calling
+  `commitStyles()` — which writes `transform: translate3d(0,0,0)` into the
+  element's inline style, where it outranks any selector for the rest of the
+  page's life. Entrances now release instead of committing (§5.3).
 
 ---
 

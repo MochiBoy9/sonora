@@ -227,6 +227,92 @@
 .hero:hover .hero-art { transform: translateY(-3px); }
 .hero-artist .hero-art { width: 172px; height: 172px; }
 
+/* ------------------------------------------------------------------ showcase */
+
+/*
+ * The album page is a page about one object, so it is drawn as one: the record
+ * stands on a floor, at an angle, lit from where the pointer is, with its own
+ * reflection falling away underneath it.
+ *
+ * The perspective lives on the stage rather than on the sleeve, so the floor
+ * and the record share one vanishing point — put it on the sleeve and the
+ * reflection tilts in its own private space and the illusion dies. 900px for a
+ * 232px object is about a metre away from a record held at arm's length, which
+ * is the distance this wants to be looked at from.
+ */
+/* Room. A showcase is mostly the space around the thing being shown, and the
+   default hero padding is sized for a header rather than for an object on a
+   stand. */
+.hero-show { align-items: center; gap: 46px; padding: 52px 40px 48px; }
+
+.hero-show .sleeve-stage {
+  --sleeve-size: 232px;
+  --floor-h: 52px;
+  width: var(--sleeve-size);
+  flex: none;
+  perspective: 900px;
+  /* Room under the record for the reflection, taken as padding cancelled by an
+     equal negative margin: the flex row then centres on the record itself
+     rather than on the record plus its echo, and the echo overflows. */
+  padding-bottom: var(--floor-h);
+  margin-bottom: calc(var(--floor-h) * -1);
+}
+.hero-show .sleeve { width: var(--sleeve-size); height: var(--sleeve-size); }
+.hero-show .hero-art {
+  width: var(--sleeve-size);
+  height: var(--sleeve-size);
+  will-change: transform;
+  /* The record on its own page is always lit by its own colour, rather than
+     only when pointed at — this is the one place the cover is the subject. */
+  --art-bloom: 1;
+}
+/* The sleeve does the moving now, and two lifts on one object read as a wobble. */
+.hero-show:hover .hero-art { transform: none; }
+
+/* The floor. A flipped copy of the same decoded image, dropped away under a
+   mask — no filter, no second decode, and it costs one draw. */
+.art-floor {
+  position: absolute;
+  left: 0; right: 0;
+  top: var(--sleeve-size);
+  height: var(--floor-h);
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateZ(-1px) rotateX(1deg);
+  opacity: calc(.34 * var(--gloss) * var(--parallax));
+  -webkit-mask-image: linear-gradient(to bottom, #000, transparent 86%);
+  mask-image: linear-gradient(to bottom, #000, transparent 86%);
+}
+.art-echo {
+  position: absolute;
+  left: 0; top: calc(var(--sleeve-size) * -1);
+  width: 100%; height: var(--sleeve-size);
+  transform: scaleY(-1);
+  transform-origin: bottom;
+}
+.art-echo-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* A hairline where the object meets the floor. Without it the record and its
+   reflection read as one tall smear; with it, there is a surface. */
+.hero-show .sleeve-stage::after {
+  content: "";
+  position: absolute;
+  left: 6%; right: 6%;
+  top: var(--sleeve-size);
+  height: var(--hair);
+  background: linear-gradient(90deg, transparent, rgb(var(--hero-rgb, var(--art-rgb)) / .6), transparent);
+  opacity: calc(.9 * var(--parallax));
+  pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  /* Stacked, the reflection is 52px of nothing between the record and its
+     title. The object keeps its edge and its light; it just stops standing up. */
+  .hero-show { gap: 22px; padding-top: 30px; }
+  .hero-show .sleeve-stage { --sleeve-size: 168px; padding-bottom: 0; margin-bottom: 0; }
+  .hero-show .art-floor, .hero-show .sleeve-stage::after { display: none; }
+}
+
 .hero-meta { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-bottom: 4px; }
 .hero-title {
   font-size: calc(clamp(28px, 3.6vw, 50px) * var(--scale));
@@ -262,6 +348,11 @@
 .shelf { padding-bottom: 24px; }
 
 .rail-wrap { position: relative; margin: 0 calc(var(--gutter) * -1); }
+
+/* The camera the shelf's arrival is seen through. Without it `rotateX` is not
+   a rotation at all — it is a vertical squash, which is what a card tilting
+   "in 3D" looks like when nothing has told the browser where the eye is. */
+.rail, .grid { perspective: 1200px; }
 
 .rail {
   display: grid;

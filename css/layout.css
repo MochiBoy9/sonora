@@ -438,6 +438,12 @@ body.is-ready .app { opacity: 1; }
 .pb-right { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
 .pb-volume { display: flex; align-items: center; gap: 6px; }
 
+/* Same swap as the row star, so the mark reads the same in both places. */
+.pb-fav [href$="star-fill"] { display: none; }
+.playerbar.is-fav .pb-fav { color: var(--accent); }
+.playerbar.is-fav .pb-fav [href$="star"] { display: none; }
+.playerbar.is-fav .pb-fav [href$="star-fill"] { display: block; }
+
 .pb-mute [href$="volume-off"] { display: none; }
 .playerbar.is-muted .pb-mute [href$="-volume"] { display: none; }
 .playerbar.is-muted .pb-mute [href$="volume-off"] { display: block; }

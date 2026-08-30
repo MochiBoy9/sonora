@@ -11,10 +11,10 @@ import * as player from './player.js';
 import * as db from './db.js';
 import { VirtualList, VirtualGrid } from './virtual.js';
 import {
-  artBox, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog,
+  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
-import { enter, scramble, countTo, tilt3d } from './motion.js';
+import { enter, reveal, scramble, countTo, tilt3d } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
 import { mountCircles } from './circles.js';
 import { mountSound } from './sound.js';
@@ -84,10 +84,16 @@ function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel } 
   const list = new VirtualList({ viewport: host, rowHeight: ROW_H, ...factory });
   list.setItems(tracks);
 
+  // A star pressed anywhere — a row, the transport, a menu — has to land on
+  // every visible copy of that track, so the rows on screen are repainted
+  // rather than rebuilt: `refresh` rewrites what is live and moves nothing.
+  const offFav = lib.events.on('favourites', () => list.refresh());
+
   return {
     list,
     update() { tracks = getTracks(); list.setItems(tracks); },
     refresh() { list.refresh(); },
+    destroy() { offFav(); list.destroy(); },
     get tracks() { return tracks; },
   };
 }
@@ -127,16 +133,22 @@ function columnHeader(columns, sortState, onSort) {
 export function albumCard(album, { onOpen } = {}) {
   const card = el('article', { class: 'card', tabindex: '0', role: 'button' });
   card.innerHTML =
-    '<div class="card-art">' +
-      '<div class="art"><img class="art-img" alt="" decoding="async"></div>' +
+    '<div class="card-art sleeve-stage">' +
+      '<div class="sleeve">' +
+        '<i class="art-edge" aria-hidden="true"></i>' +
+        '<div class="art art-3d"><img class="art-img" alt="" decoding="async"></div>' +
+      '</div>' +
       '<i class="card-tick tl"></i><i class="card-tick br"></i>' +
       '<button class="fab card-fab" tabindex="-1" aria-label="Play">' + ico('play') + '</button>' +
     '</div>' +
     '<div class="card-title"></div><div class="card-sub"></div>';
 
-  // The artwork turns toward the pointer on a spring. The card supplies the
-  // perspective; only the plate inside it moves.
-  tilt3d(card.querySelector('.card-art'), { max: 8, lift: 16, scale: 1.015 });
+  // The sleeve turns toward the pointer on a spring and takes its light with
+  // it: the tilt publishes where the pointer is, and the stylesheet slides the
+  // highlight, the rim and the shadow to match. The ticks and the play button
+  // stay on the stage rather than on the sleeve — they are marks *on* the
+  // interface, and a target that tilts away is a target you cannot hit.
+  tilt3d(card.querySelector('.sleeve'), { max: 10, lift: 22, scale: 1.02 });
 
   card.querySelector('.card-fab').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -170,10 +182,15 @@ export function renderAlbumCard(card, album) {
 function artistCard(artist) {
   const card = el('article', { class: 'card card-artist', tabindex: '0', role: 'button' });
   card.innerHTML =
-    '<div class="card-art round"><div class="art"><img class="art-img" alt="" decoding="async"></div>' +
-    '<button class="fab card-fab" tabindex="-1" aria-label="Play">' + ico('play') + '</button></div>' +
+    '<div class="card-art sleeve-stage round">' +
+      '<div class="sleeve">' +
+        '<i class="art-edge" aria-hidden="true"></i>' +
+        '<div class="art art-3d"><img class="art-img" alt="" decoding="async"></div>' +
+      '</div>' +
+      '<button class="fab card-fab" tabindex="-1" aria-label="Play">' + ico('play') + '</button>' +
+    '</div>' +
     '<div class="card-title"></div><div class="card-sub"></div>';
-  tilt3d(card.querySelector('.card-art'), { max: 7, lift: 12, scale: 1.02 });
+  tilt3d(card.querySelector('.sleeve'), { max: 9, lift: 18, scale: 1.025 });
   const open = () => (location.hash = '#/artist/' + card.dataset.key);
   card.addEventListener('click', open);
   card.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
@@ -217,7 +234,10 @@ function shelf(title, items, makeCard, { seeAll } = {}) {
   new ResizeObserver(sync).observe(rail);
 
   wrap.appendChild(el('div', { class: 'rail-wrap' }, rail, prev, next));
-  enter(rail.children, { each: 32, y: 14 });
+  // The cards are revealed by viewHome once the whole page is in the document:
+  // an IntersectionObserver on a node that is still in a fragment observes
+  // nothing, and a shelf four screens down should not have played its arrival
+  // before anyone has scrolled to it.
   return wrap;
 }
 
@@ -343,8 +363,15 @@ function viewHome(host) {
   if (shelfRandom) frag.appendChild(shelfRandom);
 
   host.appendChild(frag);
-  enter([head], { y: 12 });
-  return () => {};
+  enter([head], { y: 12, z: -60 });
+
+  // Each shelf arrives as it is scrolled to, and its records come up out of
+  // depth rather than sliding in from the side. Observers, not a scroll
+  // handler: the crossing is computed off the main thread, which is the only
+  // version of this that a virtualised list further down the page can afford.
+  const offHeads = reveal(host.querySelectorAll('.shelf .section-head'), { y: 14, z: -40, rotate: 0, duration: 560, each: 0 });
+  const offCards = reveal(host.querySelectorAll('.shelf .rail > *'), { y: 26, z: -140, rotate: 5, each: 52 });
+  return () => { offHeads(); offCards(); };
 }
 
 /* ------------------------------------------------------------------ SONGS */
@@ -375,7 +402,7 @@ function viewSongs(host) {
   enter([head, bar], { y: 10 });
 
   const off = lib.events.on('change', () => table.update());
-  return () => { off(); table.list.destroy(); };
+  return () => { off(); table.destroy(); };
 }
 
 /* ------------------------------------------------------------------ ALBUMS */
@@ -414,8 +441,11 @@ function viewAlbum(host, key) {
   if (!album) return notFound(host, 'Album not found');
 
   const origin = { type: 'album', key, label: album.title };
-  const hero = el('header', { class: 'hero' });
-  const art = artBox(key, null, 'hero-art');
+  const hero = el('header', { class: 'hero hero-show' });
+  // The album page is the one place worth putting the record on a stand: it is
+  // a page about a single object, so the object gets a floor, an edge and a
+  // reflection, and it turns to follow the pointer.
+  const art = sleeve(key, 'hero-art', { reflect: true });
   const meta = el('div', { class: 'hero-meta' },
     el('p', { class: 'eyebrow', text: 'Album' }),
     el('h1', { class: 'hero-title', text: album.title }),
@@ -439,6 +469,7 @@ function viewAlbum(host, key) {
   host.appendChild(hero);
   applyHeroTint(hero, key);
   decode(hero.querySelector('.hero-title'), album.title, { duration: 620 });
+  const untilt = tilt3d(art.querySelector('.sleeve'), { max: 11, lift: 30, scale: 1.012 });
 
   const columns = ['index', 'title', 'duration'];
   const oneArtist = album.tracks.every((t) => t.artist === album.artist);
@@ -465,7 +496,7 @@ function viewAlbum(host, key) {
   });
 
   host.appendChild(list);
-  enter([hero], { y: 16, wipe: true });
+  enter([hero], { y: 16, z: -90, wipe: true });
   enter(list.children, { each: 13, y: 8, delay: 80 });
 
   const refresh = () => {
@@ -476,7 +507,7 @@ function viewAlbum(host, key) {
   };
   const off = player.events.on('track', refresh);
   const offState = player.events.on('state', refresh);
-  return () => { off(); offState(); };
+  return () => { off(); offState(); untilt(); };
 }
 
 /** Paints a soft wash of the album's own colour behind its header. */
@@ -648,6 +679,98 @@ function viewPlaylists(host) {
   return () => off();
 }
 
+/* ------------------------------------------------------------------ FAVOURITES */
+
+/**
+ * The starred tracks, newest mark first — the one list in the app whose order
+ * is neither alphabetical nor the order of a record, because it is a record of
+ * decisions rather than of music. Sorting it would throw that away, so it is
+ * the only track table with no column header.
+ */
+function viewFavourites(host) {
+  const origin = { type: 'favourites', label: 'Favourites' };
+  const get = () => lib.favouriteTracks();
+  const tracks0 = get();
+
+  /**
+   * A list and an empty state are two different pages, so the swap between
+   * them is a route refresh — and that refresh is always one task away from
+   * the event that asked for it.
+   *
+   * Doing it inline deadlocks the app: `Emitter.emit` walks a Set, a Set
+   * visits entries added to it *while* it is being walked, and rebuilding the
+   * view from inside the walk hands the new page's subscription straight back
+   * to the loop that is still running. It re-renders until the tab gives up.
+   * Deferring costs a frame nobody can see and makes the whole shape safe.
+   */
+  let queued = false;
+  const rebuild = () => {
+    if (queued) return;
+    queued = true;
+    setTimeout(() => {
+      queued = false;
+      document.dispatchEvent(new CustomEvent('sonora:refresh'));
+    }, 0);
+  };
+
+  const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
+    el('h1', { class: 'page-title', text: 'Favourites' }),
+    el('p', { class: 'page-sub' }));
+  host.appendChild(head);
+  decode(head.querySelector('.page-title'), 'Favourites');
+
+  const paintSub = () => {
+    const list = get();
+    head.querySelector('.page-sub').textContent = list.length
+      ? `${fmtCount(list.length, 'track')} · ${fmtTotal(list.reduce((s, t) => s + (t.duration || 0), 0))}`
+      : 'Nothing starred yet';
+  };
+  paintSub();
+
+  if (!tracks0.length) {
+    // The mark is on the row and on the transport, and the key is the same in
+    // both places — say which, because a feature nobody can find is not one.
+    host.appendChild(emptyState({
+      icon: 'star',
+      title: 'No favourites yet',
+      note: 'Press the star on any track — or F while it is playing — and it lands here, newest first.',
+      action: { label: 'Browse songs', onSelect: () => (location.hash = '#/songs') },
+    }));
+    enter([head], { y: 10 });
+    // Only when there is something to show: a star set and cleared again
+    // while this page is open must not rebuild it twice for nothing.
+    const off = lib.events.on('favourites', () => { if (get().length) rebuild(); });
+    const offChange = lib.events.on('change', () => { if (get().length) rebuild(); });
+    return () => { off(); offChange(); };
+  }
+
+  const bar = el('div', { class: 'toolbar' },
+    el('button', { class: 'btn primary', html: ico('play') + '<span>Play all</span>', onclick: () => playAll(get(), 0, origin) }),
+    el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(get(), origin) }));
+  host.appendChild(bar);
+
+  const table = trackTable(host, get, {
+    origin,
+    columns: ['index', 'art', 'title', 'album', 'duration'],
+    removeLabel: 'Remove from favourites',
+    onRemove: (t) => lib.toggleFavourite(t.id, false),
+  });
+  enter([head, bar], { y: 10 });
+
+  // Unstarring from this page removes the row, so the list is rebuilt rather
+  // than repainted — everywhere else in the app the set does not change. When
+  // the last one goes the page has to become the empty state instead.
+  const sync = () => {
+    if (!get().length) return rebuild();
+    paintSub();
+    table.update();
+  };
+  const off = lib.events.on('favourites', sync);
+  const offChange = lib.events.on('change', sync);
+  return () => { off(); offChange(); table.destroy(); };
+}
+
 function viewPlaylist(host, id) {
   const p = lib.state.playlists.find((x) => x.id === id);
   if (!p) return notFound(host, 'Playlist not found');
@@ -698,7 +821,7 @@ function viewPlaylist(host, id) {
 
   const rerender = () => table.update();
   const off = lib.events.on('playlists', rerender);
-  return () => { off(); table.list.destroy(); };
+  return () => { off(); table.destroy(); };
 }
 
 /* ------------------------------------------------------------------ SEARCH */
@@ -1127,14 +1250,27 @@ function viewSettings(host) {
   });
   host.appendChild(storage);
 
+  const keys = el('section', { class: 'block' },
+    sectionHead('Keyboard'),
+    el('div', { class: 'settings-row' },
+      el('div', { class: 'settings-ico', html: ico('keys') }),
+      el('div', { class: 'settings-text' },
+        el('div', { class: 'settings-name', text: 'Shortcuts' }),
+        el('div', { class: 'settings-note', text: 'Sonora is meant to be played from the keyboard. Press ? anywhere for the whole list.' })),
+      el('div', { class: 'settings-actions' },
+        el('button', {
+          class: 'btn ghost sm', text: 'Show shortcuts',
+          onclick: () => document.dispatchEvent(new CustomEvent('sonora:shortcuts')),
+        }))));
+  host.appendChild(keys);
+
   const about = el('section', { class: 'block about' },
     sectionHead('About'),
     el('p', { class: 'muted', text: 'Sonora plays audio files from this computer. Files are read directly by the browser — nothing is uploaded, and the library index lives in local storage on this device.' }),
-    el('p', { class: 'muted small', text: 'Every audio container is indexed and tagged — MP3, M4A/AAC, FLAC, Ogg/Opus, WAV, AIFF, WebM/Matroska and the rest. Anything this browser has no decoder for is still catalogued, and says so on its row.' }),
-    el('p', { class: 'muted small', text: 'Shortcuts: Space play/pause · ←/→ seek · ↑/↓ volume · N next · P previous · S shuffle · R repeat · V visualiser · / search · Q queue' }));
+    el('p', { class: 'muted small', text: 'Every audio container is indexed and tagged — MP3, M4A/AAC, FLAC, Ogg/Opus, WAV, AIFF, WebM/Matroska and the rest. Anything this browser has no decoder for is still catalogued, and says so on its row.' }));
   host.appendChild(about);
 
-  enter([head, folders, conn, appearance, viz, online, listening, storage, about], { each: 34, y: 12 });
+  enter([head, folders, conn, appearance, viz, online, listening, storage, keys, about], { each: 34, y: 12 });
   const off = lib.events.on('roots', paintRoots);
   return () => off();
 }
@@ -1348,6 +1484,7 @@ const ROUTES = {
   album: viewAlbum,
   artists: viewArtists,
   artist: viewArtist,
+  favourites: viewFavourites,
   playlists: viewPlaylists,
   playlist: viewPlaylist,
   search: viewSearch,

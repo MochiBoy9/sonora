@@ -111,13 +111,31 @@ export function settled(anim, duration) {
   return Promise.race([anim.finished.catch(() => {}), timeout]);
 }
 
-/** animate(el, {opacity:[0,1], transform:['translateY(8px)','none']}, {duration, delay}) */
+/**
+ * animate(el, {opacity:[0,1], transform:['translateY(8px)','none']}, {duration, delay})
+ *
+ * `commit` decides what happens at the end, and the choice matters more than
+ * it looks:
+ *
+ *   true (default) — write the final values inline and cancel. For an
+ *     animation whose end state is *not* what the stylesheet would say.
+ *   'release'      — cancel without writing anything, handing the element back
+ *     to CSS. This is what an entrance wants: an arrival ends where the
+ *     stylesheet already had the thing, so committing only leaves an inline
+ *     `transform: translate3d(0,0,0)` sitting on top of it — which then beats
+ *     every `:hover` rule that wanted to move it, for the life of the page.
+ *     That is exactly how the card lift went missing.
+ *   false          — leave the fill in place. For exits, where the node is
+ *     about to be removed and there is nothing to hand back to.
+ */
 export function animate(node, keyframes, opts = {}) {
   if (!node) return null;
   const o = { ...DEFAULTS, ...opts };
   if (reduceMotion.matches) { o.duration = 0; o.delay = 0; }
   const anim = node.animate(keyframes, o);
-  if (o.commit !== false) {
+  if (o.commit === 'release') {
+    anim.finished.then(() => { try { anim.cancel(); } catch {} }).catch(() => {});
+  } else if (o.commit !== false) {
     anim.finished.then(() => { try { anim.commitStyles(); anim.cancel(); } catch {} }).catch(() => {});
   }
   return anim;
@@ -130,18 +148,89 @@ export function animate(node, keyframes, opts = {}) {
  * panel look drawn rather than faded in. It is only applied when the caller
  * asks, because clip-path on a large subtree is not free.
  */
-export function enter(nodes, { each = 24, delay = 0, y = 10, duration = 460, wipe = false } = {}) {
+export function enter(nodes, { each = 24, delay = 0, y = 10, z = 0, duration = 460, wipe = false } = {}) {
   const list = nodes instanceof Element ? [nodes] : Array.from(nodes);
   const cap = Math.min(list.length, 24);            // never pay for offscreen work
   for (let i = 0; i < cap; i++) {
     const frames = {
       opacity: [0, 1],
-      transform: [`translate3d(0,${y}px,0)`, 'translate3d(0,0,0)'],
+      transform: [`translate3d(0,${y}px,${z}px)`, 'translate3d(0,0,0)'],
     };
     if (wipe) frames.clipPath = ['inset(0 100% 0 0)', 'inset(0 0% 0 0)'];
-    animate(list[i], frames, { duration, delay: delay + i * each, easing: ease.out });
+    // 'release': an arrival finishes where CSS already had the element, so it
+    // hands the transform back instead of pinning one on top of it.
+    animate(list[i], frames, { duration, delay: delay + i * each, easing: ease.out, commit: 'release' });
   }
   for (let i = cap; i < list.length; i++) list[i].style.opacity = '1';
+}
+
+/**
+ * The same arrival, but held until the thing is actually on screen.
+ *
+ * An IntersectionObserver rather than a scroll listener, and that is the whole
+ * point: the browser computes the crossing off the main thread and calls back
+ * once per element, where a scroll handler would have us measure every card on
+ * every frame — which is precisely the kind of per-frame work this app spent
+ * an evening learning to keep out of the scroller.
+ *
+ * It fires once. A card that has arrived has arrived; re-playing it because it
+ * scrolled past again is the tic that makes a page feel like a demo reel.
+ */
+export function reveal(nodes, { y = 22, z = -80, rotate = 4, duration = 760, each = 60, amount = 0.12 } = {}) {
+  const list = nodes instanceof Element ? [nodes] : Array.from(nodes);
+  if (!list.length) return () => {};
+  if (reduceMotion.matches || !('IntersectionObserver' in window)) {
+    for (const n of list) n.style.opacity = '1';
+    return () => {};
+  }
+
+  for (const n of list) n.style.opacity = '0';
+
+  /* The failsafe, and it is not optional.
+   *
+   * Hiding content until an observer says otherwise means that if the observer
+   * never runs, the content is gone — not un-animated, gone. An observer does
+   * deliver one callback for every target it is given, intersecting or not, at
+   * the first rendering opportunity; so if nothing at all has arrived after two
+   * seconds, the machinery is not running and the right answer is to show
+   * everything and forget the whole idea. Same reasoning as the CSS timer that
+   * removes the intro if the scripts never arrive: an entrance is a nicety, and
+   * a nicety may not be allowed to hold the page shut. */
+  let heard = false;
+  const failsafe = setTimeout(() => {
+    if (heard) return;
+    io.disconnect();
+    for (const n of list) n.style.opacity = '1';
+  }, 2000);
+
+  // Everything crossing in the same callback is one wave, so the stagger is
+  // counted per batch rather than per element: a card scrolled to on its own
+  // should not wait for the delay its index in the list would have earned it.
+  const io = new IntersectionObserver((entries) => {
+    heard = true;
+    clearTimeout(failsafe);
+    let i = 0;
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      io.unobserve(e.target);
+      const anim = animate(e.target, {
+        opacity: [0, 1],
+        transform: [
+          `translate3d(0,${y}px,${z}px) rotateX(${rotate}deg)`,
+          'translate3d(0,0,0) rotateX(0deg)',
+        ],
+      }, { duration, delay: i++ * each, easing: ease.out, commit: 'release' });
+      // Order matters: the animation is created first, so its `fill: both`
+      // is already holding frame zero before the inline opacity that was
+      // hiding the element is taken away. The other way round is one frame
+      // of the card at full brightness, which is a flash.
+      e.target.style.removeProperty('opacity');
+      if (!anim) e.target.style.opacity = '1';
+    }
+  }, { threshold: amount, rootMargin: '0px 0px -6% 0px' });
+
+  for (const n of list) io.observe(n);
+  return () => { clearTimeout(failsafe); io.disconnect(); };
 }
 
 /**
@@ -186,33 +275,65 @@ export function scramble(node, text, { duration = 640, settle = 0.55 } = {}) {
  * Pointer-tracked 3D tilt. The element turns toward the cursor on a spring and
  * returns when the pointer leaves; the parent supplies the perspective.
  *
+ * It also publishes where the light is. `--tx` and `--ty` are the pointer's
+ * position across the face, −1 to 1, and `--lit` is how engaged the surface is,
+ * 0 to 1 — so a stylesheet can slide a specular highlight across the artwork
+ * and darken the far edge without a second listener measuring the same pointer
+ * a second time. Three custom properties on one element are free; the
+ * alternative is a `mousemove` handler per effect.
+ *
+ * The whole thing is scaled by the Look's own `--parallax`, so "how far panels
+ * lift off the world" governs the tilt as well as the rise, and turning Motion
+ * down to Calm or None takes the tilt with it.
+ *
  * Returns a teardown.
  */
 export function tilt3d(node, { max = 9, lift = 14, scale = 1.02 } = {}) {
   if (!node || reduceMotion.matches) return () => {};
-  let rx = 0, ry = 0, z = 0;
+
+  let rx = 0, ry = 0, z = 0, gain = 1;
   const write = () => {
     node.style.transform =
       `translate3d(0,0,${z.toFixed(2)}px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg)` +
-      (z > 0.5 ? ` scale(${scale})` : '');
+      (z > 0.5 ? ` scale(${(1 + (scale - 1) * gain).toFixed(4)})` : '');
   };
   const sx = spring({ from: 0, to: 0, stiffness: 210, damping: 22, onUpdate: (v) => { rx = v; write(); } });
   const sy = spring({ from: 0, to: 0, stiffness: 210, damping: 22, onUpdate: (v) => { ry = v; write(); } });
   const sz = spring({ from: 0, to: 0, stiffness: 190, damping: 24, onUpdate: (v) => { z = v; write(); } });
+  // The light follows on its own, slacker spring: a highlight that arrives a
+  // beat after the surface it is on is what makes the surface read as heavy.
+  const sl = spring({
+    from: 0, to: 0, stiffness: 150, damping: 26,
+    onUpdate: (v) => node.style.setProperty('--lit', v.toFixed(3)),
+  });
 
   // The box is measured once per hover, not once per move: reading it inside
   // pointermove forces a layout on every event, and a grid of these turns a
-  // sweep of the cursor into a sweep of reflows.
+  // sweep of the cursor into a sweep of reflows. The Look is read at the same
+  // moment, for the same reason.
   let box = null;
-  const onEnter = () => { box = node.getBoundingClientRect(); };
-  const onMove = (e) => {
-    if (!box) box = node.getBoundingClientRect();
-    if (!box.width) return;
-    sy.to = ((e.clientX - box.left) / box.width - 0.5) * 2 * max;
-    sx.to = -((e.clientY - box.top) / box.height - 0.5) * 2 * max;
-    sz.to = lift;
+  const measure = () => {
+    box = node.getBoundingClientRect();
+    const root = document.documentElement;
+    const p = parseFloat(getComputedStyle(root).getPropertyValue('--parallax'));
+    const calm = root.getAttribute('data-motion');
+    gain = (isFinite(p) ? p : 1) * (calm === 'none' ? 0 : calm === 'calm' ? 0.45 : 1);
   };
-  const onLeave = () => { box = null; sx.to = 0; sy.to = 0; sz.to = 0; };
+
+  const onEnter = measure;
+  const onMove = (e) => {
+    if (!box) measure();
+    if (!box.width || !gain) return;
+    const px = (e.clientX - box.left) / box.width - 0.5;      // −0.5 … 0.5
+    const py = (e.clientY - box.top) / box.height - 0.5;
+    sy.to = px * 2 * max * gain;
+    sx.to = -py * 2 * max * gain;
+    sz.to = lift * gain;
+    sl.to = 1;
+    node.style.setProperty('--tx', (px * 2).toFixed(3));
+    node.style.setProperty('--ty', (py * 2).toFixed(3));
+  };
+  const onLeave = () => { box = null; sx.to = 0; sy.to = 0; sz.to = 0; sl.to = 0; };
 
   node.addEventListener('pointerenter', onEnter);
   node.addEventListener('pointermove', onMove);
@@ -224,8 +345,11 @@ export function tilt3d(node, { max = 9, lift = 14, scale = 1.02 } = {}) {
     node.removeEventListener('pointermove', onMove);
     node.removeEventListener('pointerleave', onLeave);
     node.removeEventListener('pointercancel', onLeave);
-    sx.stop(); sy.stop(); sz.stop();
+    sx.stop(); sy.stop(); sz.stop(); sl.stop();
     node.style.transform = '';
+    node.style.removeProperty('--tx');
+    node.style.removeProperty('--ty');
+    node.style.removeProperty('--lit');
   };
 }
 
