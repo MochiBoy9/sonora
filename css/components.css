@@ -1056,3 +1056,25 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .link-state[data-phase="failed"] .link-dot { background: var(--warn); }
 
 @keyframes link-blink { 50% { opacity: .2; } }
+
+/* ---------------------------------------------------------------- sleep timer
+
+   The button says nothing until a timer is running, and then it says how long.
+   An idle sleep timer is one of the least interesting things a transport bar
+   can show; a running one is one of the most. */
+.pb-sleep { position: relative; }
+.pb-sleep-left {
+  position: absolute;
+  inset: 0;
+  display: none;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.playerbar.sleep-on .pb-sleep { color: var(--accent); }
+.playerbar.sleep-on .pb-sleep .ico { opacity: .28; }
+.playerbar.sleep-on .pb-sleep-left { display: grid; }

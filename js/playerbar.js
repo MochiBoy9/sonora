@@ -53,6 +53,7 @@ export function mountPlayerBar(host) {
 
     <div class="pb-right">
       <div class="vu" aria-hidden="true"><i class="vu-peak"></i><i class="vu-needle"></i></div>
+      <button class="icon-btn pb-sleep" title="Sleep timer" aria-label="Sleep timer"><span class="pb-sleep-left"></span>${ico('clock')}</button>
       <button class="icon-btn pb-stage" title="Visualiser (V)" aria-label="Open visualiser">${ico('expand')}</button>
       <button class="icon-btn pb-queue" title="Queue (Q)" aria-label="Queue">${ico('queue')}</button>
       <div class="pb-volume">
@@ -96,6 +97,53 @@ export function mountPlayerBar(host) {
     player.cycleRepeat();
     toast(player.state.repeat === 'off' ? 'Repeat off' : player.state.repeat === 'all' ? 'Repeat all' : 'Repeat one');
   });
+  /* ------------------------------------------------------------ sleep */
+
+  /* A timer that ends the evening rather than cutting it off. The button only
+     announces itself once one is running — an idle sleep timer is one of the
+     least interesting things a transport bar can show, and a running one is
+     one of the most. */
+  const sleepBtn = q('.pb-sleep');
+  const sleepLeft = q('.pb-sleep-left');
+
+  sleepBtn.addEventListener('click', (e) => {
+    const on = player.sleepRemaining() !== null;
+    const items = [
+      { label: 'End of this track', onSelect: () => { player.setSleep('track'); toast('Stopping after this track'); } },
+      ...[15, 30, 45, 60, 90].map((m) => ({
+        label: `${m} minutes`,
+        onSelect: () => { player.setSleep(m); toast(`Sleeping in ${m} minutes`); },
+      })),
+    ];
+    if (on) items.push({ label: 'Cancel timer', onSelect: () => { player.setSleep(null); toast('Sleep timer off'); } });
+    menu(items, { anchor: e.currentTarget });
+  });
+
+  function paintSleep() {
+    const left = player.sleepRemaining();
+    const on = left !== null;
+    host.classList.toggle('sleep-on', on);
+    sleepBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (!on) {
+      sleepLeft.textContent = '';
+      sleepBtn.title = 'Sleep timer';
+      return;
+    }
+    if (left === 'track') {
+      sleepLeft.textContent = 'END';
+      sleepBtn.title = 'Stopping at the end of this track';
+      return;
+    }
+    const mins = Math.ceil(left / 60);
+    sleepLeft.textContent = mins > 99 ? '99+' : String(mins);
+    sleepBtn.title = `Sleeping in about ${mins} minute${mins === 1 ? '' : 's'}`;
+  }
+
+  // The readout only needs to change when the minute does, not every frame.
+  player.events.on('sleep', paintSleep);
+  setInterval(paintSleep, 10000);
+  paintSleep();
+
   q('.pb-queue').addEventListener('click', () => document.dispatchEvent(new CustomEvent('sonora:toggle-queue')));
   q('.pb-stage').addEventListener('click', () => document.dispatchEvent(new CustomEvent('sonora:stage')));
   q('.pb-mute').addEventListener('click', () => player.toggleMute());

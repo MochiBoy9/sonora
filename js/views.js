@@ -1492,6 +1492,34 @@ function viewSettings(host) {
       el('div', { class: 'settings-note', text: 'Uses the ReplayGain tag where a file has one, and what Sonora measured on the first listen where it does not.' })),
     el('div', { class: 'settings-actions' }, levelPick)));
 
+  const shufPick = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Shuffle style' });
+  for (const [mode, label, hint] of [
+    ['even', 'Even', 'Every track equally likely'],
+    ['weighted', 'Learned', 'Leans towards what you play and away from what you just heard'],
+  ]) {
+    const b = el('button', {
+      class: 'seg' + (player.state.shuffleMode === mode ? ' is-on' : ''),
+      role: 'radio', 'aria-checked': String(player.state.shuffleMode === mode),
+      text: label, title: hint,
+    });
+    b.addEventListener('click', () => {
+      player.setShuffleMode(mode);
+      for (const x of shufPick.children) {
+        const on = x === b;
+        x.classList.toggle('is-on', on);
+        x.setAttribute('aria-checked', String(on));
+      }
+    });
+    shufPick.appendChild(b);
+  }
+
+  pbRows.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('shuffle') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Shuffle style' }),
+      el('div', { class: 'settings-note', text: 'Learned leans gently towards what you actually play, and hard away from anything heard in the last hour.' })),
+    el('div', { class: 'settings-actions' }, shufPick)));
+
   playback.appendChild(pbRows);
   host.appendChild(playback);
 

@@ -49,6 +49,10 @@ export const state = {
      record was mastered with and only moves the record; track evens out every
      song, which is right for a shuffle and wrong for a concept album. */
   levelling: 'track',
+  /* 'even' is the plain shuffle; 'weighted' leans on what you actually play. */
+  shuffleMode: 'even',
+  /* A timestamp, the string 'track', or null. */
+  sleepUntil: null,
 };
 
 /** The longest overlap on offer. Past this it stops being a crossfade. */
@@ -691,6 +695,8 @@ const ARM_WINDOW = 1.5;
 function maybeHandover() {
   if (!state.seamless || handover || !state.playing) return;
   if (state.repeat === 'one') return;
+  // "Stop after this one" means exactly that: no handover into the next.
+  if (state.sleepUntil === 'track') return;
   const d = state.duration || audio.duration || 0;
   if (!d || !isFinite(d)) return;
 
@@ -960,10 +966,139 @@ function restoreOrder() {
 }
 
 function shuffleInPlace(arr) {
+  if (state.shuffleMode === 'weighted') return weightedShuffle(arr);
   for (let i = arr.length - 1; i > 0; i--) {
     const j = (Math.random() * (i + 1)) | 0;
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
+}
+
+/**
+ * A shuffle that knows what you actually listen to.
+ *
+ * A uniform shuffle of a four-thousand-track library is mostly a tour of the
+ * things you skipped in 2019. The signal for doing better is already here: the
+ * play counts, the favourites, and the recent list.
+ *
+ * The weighting is deliberately gentle, and that restraint is the whole design.
+ * A strong weighting stops being a shuffle and becomes a greatest-hits loop —
+ * you would hear your top forty tracks and nothing else, which is worse than
+ * random because at least random finds things. So the multipliers are small,
+ * everything keeps a floor, and the *only* aggressive term is a negative one:
+ * something played in the last few dozen tracks is pushed well down, because
+ * the one thing a shuffle must never do is repeat itself immediately.
+ *
+ * Implemented as a weighted sample without replacement, using the exponential
+ * trick — a key of `-ln(U)/w` sorted ascending draws exactly in proportion to
+ * the weights, in one pass and one sort, with no repeated scanning.
+ */
+function weightedShuffle(arr) {
+  const recent = lib.history.recent || [];
+  // Position in the recent list, most recent first.
+  const seenAt = new Map();
+  for (let i = 0; i < recent.length && i < 60; i++) {
+    if (!seenAt.has(recent[i])) seenAt.set(recent[i], i);
+  }
+
+  const keyed = arr.map((id) => {
+    const plays = lib.history.plays.get(id) || 0;
+    // Diminishing returns: the fortieth listen should not count forty times.
+    let w = 1 + Math.log1p(plays) * 0.55;
+    if (lib.isFavourite(id)) w *= 1.5;
+    const at = seenAt.get(id);
+    if (at !== undefined) {
+      // Heard in the last sixty: from a twentieth of a chance up to nearly
+      // normal as it recedes.
+      w *= 0.05 + 0.95 * (at / 60);
+    }
+    if (!(w > 0.01)) w = 0.01;
+    return { id, k: -Math.log(Math.random() || 1e-9) / w };
+  });
+
+  keyed.sort((a, b) => a.k - b.k);
+  for (let i = 0; i < arr.length; i++) arr[i] = keyed[i].id;
+  return arr;
+}
+
+/** 'even' is the plain shuffle; 'weighted' leans on your listening. */
+export function setShuffleMode(mode) {
+  state.shuffleMode = mode === 'weighted' ? 'weighted' : 'even';
+  db.setKV('shuffleMode', state.shuffleMode).catch(() => {});
+  if (state.shuffle) { buildShuffle(); events.emit('queue'); }
+  events.emit('state');
+}
+
+/* ------------------------------------------------------------------ sleep
+ *
+ * A timer that ends the evening rather than cutting it off.
+ *
+ * The last thirty seconds are a fade rather than a stop, because waking up to
+ * a hard silence is worse than the music. It rides the same volume node the
+ * slider uses, and it puts the volume back afterwards — a sleep timer that
+ * leaves you at zero the next morning is a bug people would blame on the
+ * speakers.
+ *
+ * "End of track" is the other thing people mean by this, and it is a different
+ * shape: no clock at all, just a flag that stops the handover from happening.
+ */
+const SLEEP_FADE = 30;
+
+let sleepTimer = 0;
+let sleepFade = null;
+
+/** Seconds left, or null if no timer is running. */
+export function sleepRemaining() {
+  if (state.sleepUntil === 'track') return 'track';
+  if (!state.sleepUntil) return null;
+  return Math.max(0, (state.sleepUntil - Date.now()) / 1000);
+}
+
+export function setSleep(minutes) {
+  clearTimeout(sleepTimer);
+  sleepTimer = 0;
+  if (sleepFade) { sleepFade(); sleepFade = null; }
+
+  if (!minutes) {
+    state.sleepUntil = null;
+  } else if (minutes === 'track') {
+    state.sleepUntil = 'track';
+  } else {
+    state.sleepUntil = Date.now() + minutes * 60000;
+    const ms = minutes * 60000;
+    // Two timers: one to start the fade, one to stop. The fade is scheduled on
+    // the audio clock so it keeps its shape even if the tab is throttled.
+    sleepTimer = setTimeout(() => {
+      beginSleepFade();
+      sleepTimer = setTimeout(() => finishSleep(), SLEEP_FADE * 1000);
+    }, Math.max(0, ms - SLEEP_FADE * 1000));
+  }
+  events.emit('sleep');
+  events.emit('state');
+}
+
+function beginSleepFade() {
+  if (!ctx || !gain) return;
+  const t = ctx.currentTime;
+  const from = gain.gain.value;
+  gain.gain.cancelScheduledValues(t);
+  gain.gain.setValueAtTime(from, t);
+  gain.gain.linearRampToValueAtTime(0.0001, t + SLEEP_FADE);
+  sleepFade = () => {
+    // Cancelled part-way: put the volume back where the slider says it is.
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    applyVolume();
+  };
+}
+
+function finishSleep() {
+  pause();
+  state.sleepUntil = null;
+  sleepFade = null;
+  // The gain was ramped to nearly zero to get here; the slider never moved, so
+  // restoring from it is what makes the next press of play work normally.
+  applyVolume();
+  events.emit('sleep');
+  events.emit('state');
 }
 
 export function playNext(tracks) {
@@ -1171,6 +1306,12 @@ for (const d of [deckA, deckB]) {
     // A handover already moved everything onto the other deck; this is just
     // the old one running out behind the fade.
     if (handover) return;
+    if (state.sleepUntil === 'track') {
+      pause();
+      seek(0);
+      setSleep(null);
+      return;
+    }
     next(true);
   });
 
@@ -1255,13 +1396,14 @@ if ('mediaSession' in navigator) {
 /* ------------------------------------------------------------------ restore */
 
 export async function init() {
-  const [vol, shuffle, repeat, crossfade, seamless, levelling] = await Promise.all([
+  const [vol, shuffle, repeat, crossfade, seamless, levelling, shuffleMode] = await Promise.all([
     db.getKV('volume').catch(() => null),
     db.getKV('shuffle').catch(() => null),
     db.getKV('repeat').catch(() => null),
     db.getKV('crossfade').catch(() => null),
     db.getKV('seamless').catch(() => null),
     db.getKV('levelling').catch(() => null),
+    db.getKV('shuffleMode').catch(() => null),
   ]);
   if (typeof vol === 'number') state.volume = clamp(vol, 0, 1);
   if (typeof shuffle === 'boolean') state.shuffle = shuffle;
@@ -1269,6 +1411,7 @@ export async function init() {
   if (typeof crossfade === 'number') state.crossfade = clamp(crossfade, 0, MAX_CROSSFADE);
   if (typeof seamless === 'boolean') state.seamless = seamless;
   if (levelling === 'off' || levelling === 'album' || levelling === 'track') state.levelling = levelling;
+  if (shuffleMode === 'weighted' || shuffleMode === 'even') state.shuffleMode = shuffleMode;
   applyVolume();
   // The rack owns playback speed, which is a property of the element and works
   // with or without a Web Audio graph — and the graph does not exist until the
