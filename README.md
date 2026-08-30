@@ -98,6 +98,7 @@ When an import merges something, the summary says so by name.
 | `F` | favourite what is playing |
 | `Q` | queue panel |
 | `V` | immersive visualiser |
+| `L` | lyrics, on the immersive view |
 | `B` | bypass the rack (A/B what it is doing) |
 | `E` | open the Sound page |
 | `/` or `⌘K` | search |
@@ -154,6 +155,44 @@ a star has to survive that, because it is a fact about you and not about the
 file. And a star whose track is currently out of reach — a folder you have not
 reconnected — is kept, not swept: the folder comes back tomorrow and so does
 the mark.
+
+## The words
+
+Press `L` on the immersive view and the lyrics run as a teleprompter: the line
+being sung holds still and the song moves past it.
+
+Sonora looks in three places, in this order, and the order is the point.
+
+1. **A sidecar.** `07 Ferry Road.lrc` sitting next to `07 Ferry Road.mp3` —
+   which is where people who care about lyrics already keep them. They are
+   noticed by the same scan that finds the music, and a `.lrc` never turns up
+   in the library as a song nobody can play.
+2. **The tag.** ID3 `USLT`, the MP4 `©lyr` atom, a Vorbis `LYRICS` comment.
+   Read on demand rather than stored: lyrics run to kilobytes and most tracks
+   have none, and the index is meant to be small enough to paint before the
+   disk is touched.
+3. **LRCLIB** — and only with **Settings → Online** switched on, behind the
+   same consent as the band lookups. With it off, this makes no requests at
+   all. With it on, what leaves the device is one track's artist, title, album
+   and length, at the moment you ask for its words. Nothing else.
+
+Timed `.lrc` files scroll themselves. Plain text is shown as plain text, which
+is what half the `.lrc` files in the world actually are.
+
+## How squashed is this master?
+
+Play counts lie, and so do loudness wars. **Track info** and the back of every
+sleeve now carry a **DR** figure: peak against RMS over a whole listen, which
+is the number people mean when they say a record is squashed. A well-cut master
+sits around 12–16 dB, a victim of the loudness war under 8.
+
+It is measured off the file rather than off the speakers — the meter is tapped
+before the rack, so the figure describes the master and not your equaliser —
+and it is measured *while you listen*, the same way the listening meter works,
+because decoding a whole library at import would turn a seven-second import
+into an afternoon. A track you have never played has no figure, and an album
+that has been half-heard says so: "DR11 · 4 of 9" is a partial reading, and
+saying so is the difference between a measurement and a claim.
 
 ## Making it yours
 
@@ -258,6 +297,7 @@ js/
   stats.js          the listening-time meter, rolled up by artist, genre, year
   circles.js        the Circle Analysis Center, packed by hand into one SVG
   band.js           the one module that talks to the internet, off by default
+  lyrics.js         the words: a sidecar, then the tag, then (only if asked) online
   tags.js           ID3v2/ID3v1, MP4, FLAC, Ogg, RIFF, AIFF, Matroska reader
   metadata.worker.js  the import pipeline, off the main thread
   db.js             IndexedDB persistence
@@ -325,11 +365,37 @@ can trigger layout — and every part of it is multiplied by the Look's own
 record stands on a floor at the centre of its own perspective, with a hairline
 where it meets the surface and its own reflection falling away underneath —
 a second draw of an image the browser has already decoded, dropped under a
-mask. On Home, each shelf arrives as you reach it, its records rising out of
-depth, held by an IntersectionObserver rather than a scroll handler so the
-crossing is computed off the main thread. If that observer never reports, the
-shelves show themselves anyway after two seconds: an entrance is a nicety, and
-a nicety is not allowed to hold the page shut.
+mask. Press **Back** and the sleeve turns over to a typeset back cover: the
+tracklist as it is printed on a record, a spec block for what the files
+actually are, and the album key set where a catalogue number goes. While the
+album is playing, a disc slides out from behind the cover and turns at 33⅓ —
+1.8 seconds a revolution, which is the real number — drawn in five stacked
+gradients rather than photographed, so it takes the album's own colour on its
+label. Pausing stops it turning rather than hiding it, because a stopped
+turntable still has a record on it.
+
+**A record has weight.** Thickness follows the track count, so a single is a
+card and a double LP is a slab; a release that came on more than one disc is
+drawn as more than one sleeve. And the rim light answers the cover it is
+edging — a near-black sleeve gets a strong arris so it does not dissolve into
+the ground, a near-white one almost none so it does not blow out into a halo.
+The number that decides it is the artwork's own luminance, which the import
+already extracted for the accent.
+
+**Albums can be a wall or a crate.** *Grid* is the wall. *Crate* stands the
+records up in perspective and lets you flip through them with the arrow keys
+or a wheel, one square to the viewer at a time. Eleven records exist in the
+DOM at once, recycled, so a crate of fifty thousand costs the same as a crate
+of eleven.
+
+**Navigation is a move through one space.** Click a cover and it flies into
+place as the record on the album page while the rest of the page cross-fades
+around it — a view transition with the sleeve named on both sides. On Home,
+each shelf arrives as you reach it and its records turn as you flip along the
+rail, computed by the compositor from the rail's own scroll position rather
+than by a handler on the main thread. If the observer that reveals a shelf
+never reports, the shelf shows itself anyway after two seconds: an entrance is
+a nicety, and a nicety is not allowed to hold the page shut.
 
 **Numbers are monospace, labels are small caps.** Times, counts, track indices,
 sort headers and section titles are set in the mono stack with wide tracking,
