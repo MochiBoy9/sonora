@@ -288,6 +288,92 @@ export function scramble(node, text, { duration = 640, settle = 0.55 } = {}) {
  *
  * Returns a teardown.
  */
+/* ------------------------------------------------------------------ device
+ *
+ * The other way to point at something.
+ *
+ * Every lit surface in this app is already driven by two numbers — `--tx` and
+ * `--ty`, where the light is coming from — and on a desk those come from the
+ * pointer. A phone has no pointer and has something better: it knows which way
+ * it is being held. Feeding the same two numbers from the accelerometer makes
+ * a sleeve on a phone behave the way a record held up to a window behaves, and
+ * it costs one listener shared by every tilting element on the page.
+ *
+ * Relative to where the device was when the listener started looking, not to
+ * absolute level: nobody holds a phone flat, and calibrating to "whatever you
+ * were doing when this started" is the difference between a control and a
+ * complaint.
+ */
+
+const orientation = { x: 0, y: 0, live: false };
+const orientationSubs = new Set();
+let orientationOn = false;
+let baseBeta = null, baseGamma = null;
+
+/** True where the platform can report orientation at all. */
+export const canDeviceTilt = () => typeof window.DeviceOrientationEvent === 'function';
+
+/** True where it also demands a gesture first — iOS, and only iOS. */
+export const deviceTiltNeedsPermission = () =>
+  canDeviceTilt() && typeof window.DeviceOrientationEvent.requestPermission === 'function';
+
+function onOrientation(e) {
+  // beta is front-to-back, gamma is left-to-right, both in degrees.
+  if (e.beta == null || e.gamma == null) return;
+  if (baseBeta === null) { baseBeta = e.beta; baseGamma = e.gamma; }
+  // ±26° covers a comfortable wrist movement; past that it saturates rather
+  // than letting the sleeve spin off when somebody stands up.
+  const RANGE = 26;
+  const nx = Math.max(-1, Math.min(1, (e.gamma - baseGamma) / RANGE));
+  const ny = Math.max(-1, Math.min(1, (e.beta - baseBeta) / RANGE));
+  orientation.x = nx;
+  orientation.y = ny;
+  orientation.live = true;
+  for (const fn of orientationSubs) fn(orientation);
+}
+
+/** Starts listening, once, however many elements ask. */
+export function startDeviceTilt() {
+  if (orientationOn || !canDeviceTilt() || reduceMotion.matches) return false;
+  orientationOn = true;
+  baseBeta = null; baseGamma = null;
+  window.addEventListener('deviceorientation', onOrientation);
+  return true;
+}
+
+export function stopDeviceTilt() {
+  if (!orientationOn) return;
+  orientationOn = false;
+  window.removeEventListener('deviceorientation', onOrientation);
+  orientation.live = false;
+  for (const fn of orientationSubs) fn(orientation);
+}
+
+export const deviceTiltRunning = () => orientationOn;
+
+/** Puts the device back to level, so "flat" means however it is held now. */
+export function recentreDeviceTilt() { baseBeta = null; baseGamma = null; }
+
+/**
+ * Asks for permission where the platform demands it, then starts.
+ * Must be called from inside a real user gesture or iOS refuses outright.
+ */
+export async function requestDeviceTilt() {
+  if (!canDeviceTilt()) return false;
+  if (deviceTiltNeedsPermission()) {
+    try {
+      const res = await window.DeviceOrientationEvent.requestPermission();
+      if (res !== 'granted') return false;
+    } catch { return false; }
+  }
+  return startDeviceTilt();
+}
+
+function subscribeOrientation(fn) {
+  orientationSubs.add(fn);
+  return () => orientationSubs.delete(fn);
+}
+
 export function tilt3d(node, { max = 9, lift = 14, scale = 1.02 } = {}) {
   if (!node || reduceMotion.matches) return () => {};
 
@@ -330,18 +416,46 @@ export function tilt3d(node, { max = 9, lift = 14, scale = 1.02 } = {}) {
     node.style.setProperty('--tx', (px * 2).toFixed(3));
     node.style.setProperty('--ty', (py * 2).toFixed(3));
   };
-  const onLeave = () => { box = null; sx.to = 0; sy.to = 0; sz.to = 0; node.style.setProperty('--lit', '0'); };
+  let pointerIn = false;
+  const onLeave = () => {
+    pointerIn = false;
+    box = null; sx.to = 0; sy.to = 0; sz.to = 0;
+    node.style.setProperty('--lit', '0');
+    // Handing back to the device, if it is the one holding the light.
+    if (orientation.live) applyOrientation(orientation);
+  };
 
-  node.addEventListener('pointerenter', onEnter);
+  /* The accelerometer drives the same two numbers the pointer does, and the
+     pointer wins while it is over the element: a finger on a phone is a
+     pointer, and a sleeve that keeps tilting to the device while being dragged
+     is fighting the person holding it. */
+  function applyOrientation(o) {
+    if (pointerIn || !o.live) return;
+    if (!gain) measure();
+    if (!gain) return;
+    sy.to = o.x * max * gain;
+    sx.to = -o.y * max * gain;
+    sz.to = lift * 0.45 * gain;
+    node.style.setProperty('--lit', (0.55 * Math.min(1, Math.hypot(o.x, o.y) + 0.35)).toFixed(3));
+    node.style.setProperty('--tx', o.x.toFixed(3));
+    node.style.setProperty('--ty', o.y.toFixed(3));
+  }
+  const offOrientation = subscribeOrientation(applyOrientation);
+  if (orientation.live) applyOrientation(orientation);
+
+  const enterWithPointer = (e) => { pointerIn = true; onEnter(e); };
+
+  node.addEventListener('pointerenter', enterWithPointer);
   node.addEventListener('pointermove', onMove);
   node.addEventListener('pointerleave', onLeave);
   node.addEventListener('pointercancel', onLeave);
 
   return () => {
-    node.removeEventListener('pointerenter', onEnter);
+    node.removeEventListener('pointerenter', enterWithPointer);
     node.removeEventListener('pointermove', onMove);
     node.removeEventListener('pointerleave', onLeave);
     node.removeEventListener('pointercancel', onLeave);
+    offOrientation();
     sx.stop(); sy.stop(); sz.stop();
     node.style.transform = '';
     node.style.removeProperty('--tx');

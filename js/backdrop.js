@@ -43,7 +43,7 @@ const FRAG_SKY = `
 precision highp float;
 varying mediump vec2 v_uv;
 uniform vec2 u_res;
-uniform float u_time, u_level, u_bass, u_alpha, u_ink;
+uniform float u_time, u_level, u_bass, u_alpha, u_ink, u_room;
 uniform vec3 u_accent, u_art;
 
 void main() {
@@ -62,14 +62,34 @@ void main() {
   // A wash climbing from the floor, tinted by the album that is playing.
   float floorWash = smoothstep(0.44, -0.05, uv.y) * (0.16 + u_bass * 0.3);
 
-  vec3 col = u_accent * glow + u_art * floorWash;
+  /* The room answering the record.
+   *
+   * u_room is 0 behind the interface and 1 on the immersive stage, and the
+   * difference is deliberate rather than a matter of taste. The album colour
+   * belongs beside its own artwork; behind a library of four hundred other
+   * covers it is just a tint on somebody else's record, so out there the room
+   * stays the instrument's own cyan and only the floor picks up the album. On
+   * the stage there is one record on screen and the whole room is allowed to
+   * be about it.
+   *
+   * Two things happen at once: a second wash comes down from above in the
+   * album's colour, and the light on the horizon bends from the accent towards
+   * it. Both breathe with the level, so the room is lit by the music rather
+   * than merely coloured by it. */
+  float ceiling = smoothstep(0.52, 1.06, uv.y) * (0.10 + u_level * 0.34) * u_room;
+  float sides = (1.0 - smoothstep(0.0, 0.62, abs(p.x))) * 0.0
+              + smoothstep(0.52, 1.15, abs(p.x)) * (0.06 + u_bass * 0.20) * u_room;
+  vec3 lightCol = mix(u_accent, u_art, 0.55 * u_room);
+
+  vec3 col = lightCol * glow + u_art * (floorWash + ceiling + sides);
 
   // Scanlines: one pixel in three, at the edge of perception.
   float scan = 0.965 + 0.035 * sin(gl_FragCoord.y * 1.6);
   col *= scan;
 
   float vignette = smoothstep(1.35, 0.15, length(p));
-  float a = clamp((glow * 0.5 + floorWash * 0.7) * vignette * u_alpha, 0.0, mix(0.92, 0.2, u_ink));
+  float a = clamp((glow * 0.5 + (floorWash + ceiling + sides) * 0.7) * vignette * u_alpha,
+                  0.0, mix(0.92, 0.2, u_ink));
   vec3 shade = mix(col, col * 0.24, u_ink);
   gl_FragColor = vec4(shade * a, a);
 }`;
@@ -184,7 +204,7 @@ export function mountBackdrop(host, { enabled = true } = {}) {
   const bubbles = program(gl, VERT_LINES, FRAG_BUBBLE);
   if (!sky || !lines || !bubbles) { canvas.remove(); return dead; }
 
-  const uSky = uniforms(gl, sky, ['u_res', 'u_time', 'u_level', 'u_bass', 'u_alpha', 'u_ink', 'u_accent', 'u_art']);
+  const uSky = uniforms(gl, sky, ['u_res', 'u_time', 'u_level', 'u_bass', 'u_alpha', 'u_ink', 'u_accent', 'u_art', 'u_room']);
   const LINE_UNIFORMS = ['u_mvp', 'u_time', 'u_bass', 'u_level', 'u_mode', 'u_span',
                          'u_pulse', 'u_color', 'u_color2', 'u_alpha'];
   const uLin = uniforms(gl, lines, LINE_UNIFORMS);
@@ -230,6 +250,10 @@ export function mountBackdrop(host, { enabled = true } = {}) {
   const mvp = mat4.create();
 
   let dpr = 1, w = 0, h = 0;
+  /* How much the room belongs to the album rather than to the instrument.
+     Eased rather than switched: the stage opens over a third of a second and a
+     room that changed colour instantly would read as a bug. */
+  let room = 0, roomTarget = 0;
   let accent = DEFAULT_ACCENT.map((v) => v / 255);
   let art = DEFAULT_ART.map((v) => v / 255);
   let accentAt = 0;
@@ -315,6 +339,13 @@ export function mountBackdrop(host, { enabled = true } = {}) {
       accent = readVar('--accent-rgb', DEFAULT_ACCENT).map((v) => v / 255);
       art = readVar('--art-rgb', DEFAULT_ART).map((v) => v / 255);
     }
+    // Eased towards the target, so opening the stage brings the room up over
+    // about half a second rather than repainting it between two frames.
+    if (room !== roomTarget) {
+      room += (roomTarget - room) * Math.min(1, dt / 260);
+      if (Math.abs(roomTarget - room) < 0.002) room = roomTarget;
+      staticKey = '';
+    }
     resize();
     if (!w || !h) return;
 
@@ -347,6 +378,7 @@ export function mountBackdrop(host, { enabled = true } = {}) {
     gl.uniform1f(uSky.u_bass, a.bass);
     gl.uniform1f(uSky.u_alpha, alpha);
     gl.uniform1f(uSky.u_ink, ink);
+    gl.uniform1f(uSky.u_room, room);
     gl.uniform3fv(uSky.u_accent, accent);
     gl.uniform3fv(uSky.u_art, art);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -470,6 +502,19 @@ export function mountBackdrop(host, { enabled = true } = {}) {
     /** 1 in the app, higher on the immersive stage. */
     setIntensity(v) {
       intensity = Math.max(0, Math.min(2.4, v));
+      staticKey = '';
+    },
+    /**
+     * How much the room belongs to the album rather than to the instrument.
+     *
+     * 0 behind the interface and 1 on the immersive stage. The album colour
+     * belongs beside its own artwork: behind a library of four hundred other
+     * covers it is a tint on somebody else's record, and only on the stage —
+     * where there is one record on screen — is the whole room allowed to be
+     * about it.
+     */
+    setRoom(v) {
+      roomTarget = Math.max(0, Math.min(1, v));
       staticKey = '';
     },
     destroy() { stop(); ro.disconnect(); canvas.remove(); },

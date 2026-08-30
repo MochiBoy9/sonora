@@ -11,7 +11,7 @@ import * as session from './session.js';
 import * as stats from './stats.js';
 import * as looks from './looks.js';
 import * as rack from './audio.js';
-import { animate, ease, reduceMotion } from './motion.js';
+import { animate, ease, reduceMotion, startDeviceTilt, deviceTiltNeedsPermission } from './motion.js';
 import { startIntro } from './intro.js';
 import { mountBackdrop } from './backdrop.js';
 import { toggleStage, isOpen as stageOpen } from './stage.js';
@@ -786,6 +786,18 @@ async function boot() {
   session.restore(toast).then((outcome) => {
     if (outcome === 'resumed' || outcome === 'ready') applyAccent();
   });
+
+  /* Device tilt, where it was left switched on.
+   *
+   * Only restored where the platform hands orientation over without asking.
+   * iOS wants a real gesture for it, and a permission prompt fired at somebody
+   * who has just opened a music player is how that permission gets denied
+   * permanently — there, the switch in Settings is the gesture. */
+  try {
+    if (localStorage.getItem('sonora:tilt') === '1' && !deviceTiltNeedsPermission()) {
+      startDeviceTilt();
+    }
+  } catch { /* private mode */ }
 
   // Re-render list pages when the library changes underneath them. Deferred to
   // the next frame so we never rebuild the view from inside the emit that

@@ -450,7 +450,7 @@ export function openStage(backdrop) {
   paint();
   paintState();
 
-  if (backdrop) backdrop.setIntensity(1.9);
+  if (backdrop) { backdrop.setIntensity(1.9); backdrop.setRoom?.(1); }
   animate(host, { opacity: [0, 1] }, { duration: 360, easing: ease.out });
   animate(host.querySelector('.stage-body'),
     { opacity: [0, 1], transform: ['translate3d(0,26px,0) scale(.97)', 'none'] },
@@ -468,7 +468,7 @@ export function openStage(backdrop) {
     host.removeEventListener('pointermove', onMove);
     document.body.classList.remove('stage-open');
     if (bdCanvas) document.body.insertBefore(bdCanvas, document.body.firstChild);
-    if (backdrop) backdrop.setIntensity(1);
+    if (backdrop) { backdrop.setIntensity(1); backdrop.setRoom?.(0); }
     const out = animate(host, { opacity: [1, 0], transform: ['scale(1)', 'scale(1.03)'] },
       { duration: 260, easing: ease.inOut, commit: false });
     settled(out, 260).then(() => host.remove());

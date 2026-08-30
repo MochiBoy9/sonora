@@ -14,7 +14,7 @@ import {
   artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, Selection,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
-import { enter, reveal, scramble, countTo, tilt3d } from './motion.js';
+import { enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunning, requestDeviceTilt, stopDeviceTilt, startDeviceTilt } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
 import { mountCircles } from './circles.js';
 import { mountSound } from './sound.js';
@@ -1692,6 +1692,37 @@ function viewSettings(host) {
 
   /* --- appearance --- */
   const appearance = el('section', { class: 'block' }, sectionHead('Appearance'));
+
+  /* Device tilt. Only offered where the platform can actually report it —
+     a switch that does nothing on a desktop is worse than no switch. */
+  if (canDeviceTilt()) {
+    const tiltBtn = el('button', {
+      class: 'switch' + (deviceTiltRunning() ? ' is-on' : ''),
+      role: 'switch', 'aria-checked': String(deviceTiltRunning()),
+    }, el('span', { class: 'switch-knob' }));
+    tiltBtn.addEventListener('click', async () => {
+      if (deviceTiltRunning()) {
+        stopDeviceTilt();
+        try { localStorage.setItem('sonora:tilt', '0'); } catch { /* private mode */ }
+      } else {
+        // Must happen inside this click: iOS refuses the prompt otherwise.
+        const ok = await requestDeviceTilt();
+        try { localStorage.setItem('sonora:tilt', ok ? '1' : '0'); } catch { /* private mode */ }
+        if (!ok) toast('Your device would not share its orientation');
+      }
+      const on = deviceTiltRunning();
+      tiltBtn.classList.toggle('is-on', on);
+      tiltBtn.setAttribute('aria-checked', String(on));
+    });
+
+    appearance.appendChild(el('div', { class: 'rows' },
+      el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-ico', html: ico('cube') }),
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: 'Tilt with the device' }),
+          el('div', { class: 'settings-note', text: 'Artwork catches the light from however you are holding it, the way a record held up to a window does.' })),
+        el('div', { class: 'settings-actions' }, tiltBtn))));
+  }
 
   const accentRow = el('div', { class: 'settings-row' },
     el('div', { class: 'settings-ico', html: ico('palette') }),
