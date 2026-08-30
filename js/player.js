@@ -11,6 +11,7 @@
 import * as lib from './library.js';
 import * as db from './db.js';
 import * as rack from './audio.js';
+import * as peakmap from './peaks.js';
 import { Emitter, clamp, canDecode } from './util.js';
 import { tick } from './motion.js';
 
@@ -67,17 +68,19 @@ let bassAt = 0, lastBeat = 0, frameAt = 0, silentFor = 0;
 /**
  * Crest factor, measured off the file while you listen to it.
  *
- * The honest way to get this would be to decode every track at import — and it
- * is not available: `OfflineAudioContext` exists on Window and not in a
- * worker, so decoding would land on the main thread and turn a 400-file-a-
- * second import into something you could time with a calendar.
+ * Peak against RMS over a whole listen is the crest factor, which is the
+ * number people mean when they say a master is squashed — a well-cut record
+ * sits around 12–16 dB, a loudness-war victim under 8. It costs one pass over
+ * 2048 floats a frame, on a task that only exists while something is playing.
  *
- * So it is measured the way the listening meter is measured: from what
- * actually played. Peak against RMS over a whole listen is the crest factor,
- * which is the number people mean when they say a master is squashed — a
- * well-cut record sits around 12–16 dB, a loudness-war victim under 8. It
- * costs one pass over 2048 floats a frame, on a task that only exists while
- * something is playing.
+ * `peaks.js` now decodes the same track in the background and could produce
+ * this figure exactly rather than from what happened to be played. This is
+ * kept anyway, and the reason is not inertia: the analysis there is of the
+ * file, and this is a measurement of the signal *leaving the file into this
+ * rack* — tapped before the equaliser but after the decoder, on the samples
+ * that actually played. When the two disagree, the disagreement is
+ * interesting. The scrubber's waveform and this meter answer different
+ * questions and are allowed to be two numbers.
  *
  * The cost of doing it this way is honest and worth stating: a track you have
  * never played has no figure, and one you skipped through has no figure worth
@@ -377,6 +380,10 @@ async function load(track, autoplay, { count = true } = {}) {
   }
   updateMediaSession(track);
   if (count) lib.notePlay(track);
+  /* The scrubber wants a waveform and the rack wants a loudness figure, and
+     both come out of the same decode. Asked for on idle so it never competes
+     with the decode that is actually making sound. */
+  peakmap.warm(track, 'wave');
   warmNext();
 }
 

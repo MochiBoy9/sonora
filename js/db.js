@@ -7,11 +7,12 @@
  */
 
 const NAME = 'sonora';
-/* v2 adds the `band` store for cached online lookups. The upgrade is additive
-   and guarded, so a v1 database opens, gains one store and keeps every track,
-   cover and playlist it already had — there is no migration to run and nothing
-   to lose if the feature is never switched on. */
-const VERSION = 2;
+/* v2 adds the `band` store for cached online lookups. v3 adds `peaks`, the
+   per-track waveform and spectrogram computed on first listen. Both upgrades
+   are additive and guarded, so a v1 database opens, gains two stores and keeps
+   every track, cover and playlist it already had — there is no migration to
+   run and nothing to lose if either feature is never used. */
+const VERSION = 3;
 
 let dbp = null;
 
@@ -31,6 +32,7 @@ function open() {
       if (!db.objectStoreNames.contains('playlists')) db.createObjectStore('playlists', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('kv'))        db.createObjectStore('kv');
       if (!db.objectStoreNames.contains('band'))      db.createObjectStore('band', { keyPath: 'key' });
+      if (!db.objectStoreNames.contains('peaks'))     db.createObjectStore('peaks', { keyPath: 'id' });
       void e;
     };
     req.onsuccess = () => {
@@ -102,6 +104,19 @@ export const getBand   = (key) => tx('band', 'readonly',  (s) => wrap(s.get(key)
 export const putBand   = (rec) => tx('band', 'readwrite', (s) => s.put(rec));
 export const clearBands = () => tx('band', 'readwrite', (s) => s.clear());
 export const bandCount = () => tx('band', 'readonly', (s) => wrap(s.count()));
+
+/* ------------------------------------------------------------------ peaks */
+
+/* One waveform and one coarse spectrogram per track, computed the first time
+   the track is played and kept for good. Typed arrays go into IndexedDB as
+   themselves — the structured clone keeps them typed — so what comes back out
+   can be drawn without a parse. */
+export const getPeaks    = (id) => tx('peaks', 'readonly',  (s) => wrap(s.get(id)));
+export const putPeaks    = (rec) => tx('peaks', 'readwrite', (s) => s.put(rec));
+export const peaksKeys   = () => tx('peaks', 'readonly', (s) => wrap(s.getAllKeys()));
+export const deletePeaks = (ids) => tx('peaks', 'readwrite', (s) => { for (const id of ids) s.delete(id); });
+export const clearPeaks  = () => tx('peaks', 'readwrite', (s) => s.clear());
+export const peaksCount  = () => tx('peaks', 'readonly', (s) => wrap(s.count()));
 
 /* ------------------------------------------------------------------ kv */
 
