@@ -214,6 +214,52 @@
 .stage-scrub .stage-time:last-child { text-align: right; }
 .stage-seek .seek-track { height: 4px; }
 
+/* ---------------------------------------------------------------- spectrogram
+
+   The whole song in the scrubber. The bars along the bottom of this view show
+   the last 23 ms of the music; this shows all of it, so a track nobody has
+   heard before can still be navigated — the verses, the chorus, the drop and
+   the outro are all visible as shapes.
+
+   Only present once the analysis exists, and the strip collapses back to the
+   plain 4 px track when it does not. */
+.stage.has-spec .stage-seek .seek-track {
+  height: 56px;
+  background: rgb(var(--bg-rgb) / .30);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+}
+.stage.has-spec .stage-seek:hover .seek-track,
+.stage.has-spec .stage-seek.is-active .seek-track { height: 56px; }
+
+.stage-spec, .stage-spec-ahead {
+  position: absolute;
+  inset: 0;
+  display: none;
+  pointer-events: none;
+}
+.stage.has-spec .stage-spec,
+.stage.has-spec .stage-spec-ahead { display: block; }
+
+.stage-spec { width: 100%; height: 100%; }
+
+/* What has not played yet, held back. Clipped from the left so the boundary
+   sits exactly on the playhead. */
+.stage-spec-ahead {
+  background: rgb(var(--bg-rgb) / .55);
+  clip-path: inset(0 0 0 100%);
+}
+
+/* With a spectrogram behind it the gradient fill would only cover the picture;
+   the playhead line carries the position instead, and it is always visible
+   rather than only on hover. */
+.stage.has-spec .stage-seek .seek-fill { opacity: 0; }
+.stage.has-spec .stage-seek .seek-knob {
+  opacity: 1;
+  height: 56px;
+  margin-top: -28px;
+  transform: scaleY(1);
+}
+
 .stage-transport { display: flex; align-items: center; gap: 12px; }
 .stage-play {
   width: 60px; height: 60px;

@@ -88,14 +88,26 @@ function ensureCtx() {
   return decodeCtx;
 }
 
-const resolvers = new Map();          // id -> [fn]
+/* id -> [{ fn, want }].
+ *
+ * Keyed by id because that is all the worker echoes back, but each waiter
+ * remembers what it asked for. A caller that wanted the spectrogram is not
+ * satisfied by a wave-only result that happened to land first — it stays
+ * pending for its own job rather than being resolved with the wrong shape. */
+const resolvers = new Map();
+
+/** Does this record answer a request for `want`? */
+const satisfies = (rec, want) => !rec || want === 'wave' || !!rec.spec;
 
 function resolveWaiters(id, value) {
   const list = resolvers.get(id);
   if (!list) return;
-  resolvers.delete(id);
-  inflight.delete(id);
-  for (const fn of list) fn(value);
+  const keep = [];
+  for (const w of list) {
+    if (satisfies(value, w.want)) w.fn(value);
+    else keep.push(w);
+  }
+  if (keep.length) resolvers.set(id, keep); else resolvers.delete(id);
 }
 
 function next() {
@@ -163,27 +175,36 @@ export function forTrack(track, want = 'all') {
   if (memo.has(id)) {
     const hit = memo.get(id);
     // A cached wave-only record does not answer a later request for the spectrogram.
-    if (!hit || want === 'wave' || hit.spec) return Promise.resolve(hit);
+    if (satisfies(hit, want)) return Promise.resolve(hit);
   }
-  if (inflight.has(id)) return inflight.get(id);
+  /* Keyed by what was asked for as well as by which track. Sharing on the id
+     alone hands a caller that wanted the spectrogram the wave-only promise
+     somebody else started, and it resolves without one. */
+  const key = id + '|' + want;
+  if (inflight.has(key)) return inflight.get(key);
 
   const p = (async () => {
     const stored = await db.getPeaks(id).catch(() => null);
-    if (stored && stored.v === 1 && (want === 'wave' || stored.spec)) {
+    if (stored && stored.v === 1 && satisfies(stored, want)) {
       memo.set(id, stored);
       return stored;
     }
 
     return new Promise((resolve) => {
       const list = resolvers.get(id) || [];
-      list.push(resolve);
+      list.push({ fn: resolve, want });
       resolvers.set(id, list);
       const job = { track, want };
       if (busy) waiting.push(job); else run(job);
     });
   })();
 
-  inflight.set(id, p);
+  inflight.set(key, p);
+  /* Cleared however it ends. The early returns above never reach the worker,
+     so leaving this to `resolveWaiters` would strand the entry and every
+     later request for the same thing would get this same settled promise. */
+  p.then(() => { if (inflight.get(key) === p) inflight.delete(key); },
+         () => { if (inflight.get(key) === p) inflight.delete(key); });
   return p;
 }
 
