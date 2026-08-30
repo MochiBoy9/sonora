@@ -192,6 +192,9 @@ export function reindex() {
   events.emit('change');
 }
 
+/** Albums folded together since the current import began: key -> title. */
+const mergedThisScan = new Map();
+
 /**
  * Folds albums that are the same album back together.
  *
@@ -260,7 +263,13 @@ function mergeAlbums(albumBy) {
           keep.artistKey = other.artistKey;
           keep.named = other.named;
         }
-        keep.merged = (keep.merged || 1) + 1;    // for the import readout
+        keep.merged = (keep.merged || 1) + 1;
+        // Noted here, where it happens, rather than read back off the index
+        // afterwards. A merge rewrites `albumKey` on the tracks it moves, so by
+        // the second pass over the same library there is nothing left to find —
+        // and whether `finishScan` saw the pass that did the folding used to
+        // depend on which side of a requestAnimationFrame the worker finished.
+        mergedThisScan.set(keep.key, keep.title);
         merged.push(keep);
         albumBy.delete(other.key);
       }
@@ -626,6 +635,9 @@ const serialiseRoot = (r) => ({ id: r.id, name: r.name, kind: r.kind, handle: r.
 function startScan() {
   if (state.scanning) return;
   state.scanning = true;
+  // Folds from before this import — the ones the launch reindex did — are the
+  // library's history, not this import's news.
+  mergedThisScan.clear();
   state.progress = { done: 0, total: 0 };
   events.emit('scan', true);
 }
@@ -638,7 +650,8 @@ function finishScan() {
   // What the import actually did, in the terms the person cares about: how
   // many tracks arrived, and which albums got put back together.
   const added = state.progress.total || 0;
-  const merged = [...state.albumBy.values()].filter((a) => a.merged > 1);
+  const merged = [...mergedThisScan].map(([key, title]) => ({ key, title }));
+  mergedThisScan.clear();
   events.emit('scan', false, { added, merged });
   state.progress = { done: 0, total: 0 };
 }
@@ -759,21 +772,66 @@ export function recentAlbums(limit = 12) {
   return out;
 }
 
+/* ------------------------------------------------------------------ favourites */
+
+/**
+ * The tracks worth keeping to hand.
+ *
+ * Held as an ordered list of ids beside the library rather than as a flag on
+ * each record, for two reasons. A favourite is a fact about the listener, not
+ * about the file, so it has to survive a re-import that rewrites every row it
+ * would otherwise be stored on. And the order they were marked in is the order
+ * the page wants them in — newest first, the same way `recent` works.
+ *
+ * An id whose track is not in the library right now is kept, not swept: a
+ * folder that is disconnected today is reconnected tomorrow, and throwing the
+ * mark away because the file is momentarily out of reach would be the one
+ * thing the listener cannot undo.
+ */
+export const favourites = { ids: [], set: new Set() };
+
+export const isFavourite = (id) => favourites.set.has(id);
+
+/** Marks or unmarks a track. Returns the state it landed in. */
+export function toggleFavourite(id, force) {
+  if (!id) return false;
+  const on = force === undefined ? !favourites.set.has(id) : !!force;
+  if (on === favourites.set.has(id)) return on;
+  if (on) {
+    favourites.set.add(id);
+    favourites.ids.unshift(id);
+  } else {
+    favourites.set.delete(id);
+    const i = favourites.ids.indexOf(id);
+    if (i >= 0) favourites.ids.splice(i, 1);
+  }
+  db.setKV('favourites', favourites.ids).catch(() => {});
+  events.emit('favourites', id, on);
+  return on;
+}
+
+/** Only the ones the library can actually reach, newest mark first. */
+export const favouriteTracks = () =>
+  favourites.ids.map((id) => state.tracks.get(id)).filter(Boolean);
+
 /* ------------------------------------------------------------------ boot */
 
 /** Paints the stored library first, then reconnects to disk in the background. */
 export async function init() {
-  const [tracks, roots, playlists, recent] = await Promise.all([
+  const [tracks, roots, playlists, recent, faves] = await Promise.all([
     db.getAllTracks().catch(() => []),
     db.getRoots().catch(() => []),
     db.getPlaylists().catch(() => []),
     db.getKV('recent').catch(() => null),
+    db.getKV('favourites').catch(() => null),
   ]);
 
   for (const t of tracks) { decorate(t); state.tracks.set(t.id, t); }
   state.roots = roots;
   state.playlists = playlists.sort((a, b) => a.createdAt - b.createdAt);
   history.recent = Array.isArray(recent) ? recent : [];
+  favourites.ids = Array.isArray(faves) ? faves.filter((id) => typeof id === 'string') : [];
+  favourites.set = new Set(favourites.ids);
   reindex();
   events.emit('ready');
 

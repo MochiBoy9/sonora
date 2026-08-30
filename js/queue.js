@@ -71,7 +71,7 @@ function buildNowPlaying(host, visible) {
   host.innerHTML = `
     <div class="np">
       <div class="np-stage">
-        <div class="np-art art"><img class="art-img" alt="" decoding="async"></div>
+        <div class="np-art art art-3d"><img class="art-img" alt="" decoding="async"></div>
         <canvas class="np-viz" aria-hidden="true"></canvas>
       </div>
       <div class="np-meta">

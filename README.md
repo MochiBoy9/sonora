@@ -25,7 +25,15 @@ cd sonora
 python3 -m http.server 8000      # or: npx serve .
 ```
 
-Then open <http://localhost:8000> and click **Add music**.
+On a Windows machine with neither Python nor Node — which is most of them —
+the runtime is already there:
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/serve.ps1
+```
+
+Then open <http://localhost:8000> (or `:8123` for the PowerShell one) and click
+**Add music**.
 
 ## Adding your music
 
@@ -87,14 +95,21 @@ When an import merges something, the summary says so by name.
 | `N` / `P` | next / previous |
 | `S` / `R` | shuffle / repeat |
 | `M` | mute |
+| `F` | favourite what is playing |
 | `Q` | queue panel |
 | `V` | immersive visualiser |
 | `B` | bypass the rack (A/B what it is doing) |
 | `E` | open the Sound page |
 | `/` or `⌘K` | search |
+| `?` | the whole list, on screen |
 
-Right-click any track, album or artist for play-next, add-to-queue, add-to-playlist
-and go-to-album. Drag rows in the queue to reorder. Drag the sidebar edge to resize it.
+That table is not maintained by hand in two places: `?` opens the same array
+`bindKeys` reads, so a shortcut cannot exist undocumented and cannot be
+documented without existing.
+
+Right-click any track, album or artist for play-next, add-to-queue, favourite,
+add-to-playlist and go-to-album. Drag rows in the queue to reorder. Drag the
+sidebar edge to resize it.
 
 ## The Rack
 
@@ -122,6 +137,23 @@ same edit. Double-click a handle to flatten that band, or use the arrow keys.
 
 Eleven presets, and you can save your own. **`B` bypasses the whole rack from
 anywhere**, which is the only honest way to tell whether any of it is helping.
+
+## The ones you keep
+
+A star on every row, on the transport, and on `F`. **Favourites** in the
+sidebar collects them.
+
+The order is the order you starred them in, newest first — not alphabetical,
+not by album. It is a record of decisions rather than of music, and sorting it
+would throw the only information it has away, so that list is the one track
+table in the app with no sortable header.
+
+The mark is kept beside the library rather than on the track record, which
+matters more than it sounds. A re-import rewrites every row it finds on disk;
+a star has to survive that, because it is a fact about you and not about the
+file. And a star whose track is currently out of reach — a folder you have not
+reconnected — is kept, not swept: the folder comes back tomorrow and so does
+the mark.
 
 ## Making it yours
 
@@ -215,7 +247,8 @@ css/
   aero.css          the material: atmosphere, glass, sheen, specular edges
 js/
   app.js            routing, navigation, search, shortcuts, theming, ingestion
-  library.js        the collection: scanning, indexes, album merging, playlists
+  library.js        the collection: scanning, indexes, album merging, playlists,
+                    favourites
   player.js         playback, queue, Web Audio graph, spectrum analysis
   audio.js          the rack: EQ, dynamics, space, stereo, pitch, speed
   pitch-worklet.js  pitch without tempo, on the audio thread
@@ -244,6 +277,7 @@ docs/
   SPEC.md           the full specification: features, flows, data model, budgets
 tools/
   make-testlib.py   a synthetic library with real containers and real tags
+  serve.ps1         a static server for Windows machines without Python or Node
   smoke.mjs         interactions.mjs   perf.mjs
   layout.mjs        eight widths × eight routes: overflow, overlap, centring
   audio.mjs         does the rack change the sound, measured after the rack
@@ -270,6 +304,32 @@ cannot learn. `--art-rgb` is the colour of the album currently playing, and it
 is only ever used beside that album's artwork — the hero wash, the sleeve glow,
 the far end of a spectrum gradient. One loud cover can tint its own corner of
 the app; it cannot repaint the controls.
+
+**A cover is an object, not a picture.** Artwork is drawn the way a record is
+photographed: lit from the upper left like every other raised surface in the
+app, falling into shade at the lower right, with a bright arris along the top
+edge and a dark one along the bottom. That shading is there when nobody is
+touching it — which is the half most "3D card" effects leave out, and the
+reason they look dead until you hover them. Point at one and it turns toward
+you on a spring, a specular pool follows the cursor across the face, the rim
+lights on the side facing the light, and the shadow swings the other way. There
+is a second plane behind the face at a negative Z, so the turn reveals a real
+edge rather than a shear.
+
+The pointer is measured once, by the tilt, and published as three custom
+properties; the stylesheet reads those. One listener, no filters, nothing that
+can trigger layout — and every part of it is multiplied by the Look's own
+`Gloss` and `Parallax`, so **Plain** really does hand back a flat picture.
+
+**The album page is a showcase.** It is a page about a single object, so the
+record stands on a floor at the centre of its own perspective, with a hairline
+where it meets the surface and its own reflection falling away underneath —
+a second draw of an image the browser has already decoded, dropped under a
+mask. On Home, each shelf arrives as you reach it, its records rising out of
+depth, held by an IntersectionObserver rather than a scroll handler so the
+crossing is computed off the main thread. If that observer never reports, the
+shelves show themselves anyway after two seconds: an entrance is a nicety, and
+a nicety is not allowed to hold the page shut.
 
 **Numbers are monospace, labels are small caps.** Times, counts, track indices,
 sort headers and section titles are set in the mono stack with wide tracking,

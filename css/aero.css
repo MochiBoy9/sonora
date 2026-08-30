@@ -111,6 +111,154 @@ body::after { z-index: 0; }
    only part of the screen that belongs to the listener rather than to us. */
 .art, .art-img { backdrop-filter: none; -webkit-backdrop-filter: none; }
 
+/* ------------------------------------------------------------------ sleeves */
+
+/* A record is an object, so its artwork is drawn as one.
+ *
+ * A sleeve has a face that catches the light, a thickness you can see when it
+ * turns, and a shadow that swings the other way when it does. Three layers do
+ * all of that and not one of them is a filter:
+ *
+ *   .art-edge   a second plane pushed back in Z, so a tilt reveals the side
+ *   ::before    the specular sweep, aimed by --tx/--ty from tilt3d
+ *   ::after     the hairline it already had, plus a rim that brightens
+ *               toward wherever the light currently is
+ *
+ * The split between the two sliders is deliberate. The *light* is `--gloss`,
+ * because it is the same wet highlight the panels wear. The *depth* is
+ * `--parallax`, because it is the same question as how far a panel lifts off
+ * the world. Turn both down and a sleeve is a flat picture again, which is
+ * what Plain is for.
+ *
+ * `--tx`, `--ty` and `--lit` are written by tilt3d and default to zero, so an
+ * `.art-3d` nobody is pointing at — or one on a machine that asked for reduced
+ * motion — is lit from straight ahead and costs nothing.
+ */
+/* How solid the object is, declared on the wrapper because the face and the
+   edge are siblings: put it on the face and the edge inherits nothing, falls
+   back to zero, and the slab silently loses its thickness. */
+.sleeve { --sleeve: calc(var(--parallax) * (0.35 + 0.65 * var(--gloss))); }
+
+/* The face.
+ *
+ * Two different things, and the distinction is the whole reason this looks
+ * like an object rather than a picture with a gloss filter on it:
+ *
+ *   form shading — always there. A wash of light down the upper left and a
+ *     fall into shade at the lower right, in the same direction as the light
+ *     every other raised surface in the app is lit from. This is what makes a
+ *     flat square read as a lit surface while nobody is touching it, and it is
+ *     the half that most "3D card" effects leave out — which is why they look
+ *     dead until you hover them.
+ *
+ *   specular — the moving one. A pool of light where the pointer is, scaled by
+ *     `--lit` so it grows in as the surface engages and is worth nothing at
+ *     rest.
+ *
+ * One pseudo-element, three gradients, no filter. Both halves are multiplied
+ * by `--gloss`, so Plain gets a flat picture back. */
+.art-3d::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: var(--gloss);
+  background:
+    radial-gradient(56% 56% at calc(50% + var(--tx, 0) * 40%) calc(50% + var(--ty, 0) * 40%),
+      rgb(255 255 255 / calc(.42 * var(--lit, 0))),
+      rgb(255 255 255 / calc(.10 * var(--lit, 0))) 44%, transparent 70%),
+    linear-gradient(calc(148deg + var(--tx, 0) * 20deg),
+      rgb(255 255 255 / .19), rgb(255 255 255 / .05) 26%, transparent 46%),
+    linear-gradient(calc(148deg + var(--tx, 0) * 20deg),
+      transparent 54%, rgb(0 0 0 / .10) 78%, rgb(0 0 0 / .22));
+}
+
+/* The side of the slab. Invisible face-on, which is correct — you do not see
+   the edge of a sleeve you are looking straight at — and it slides out from
+   behind the face as the card turns.
+
+   Ordered by depth rather than by `z-index`: inside a preserve-3d parent the
+   browser paints by transformed position, so a negative Z is behind the face
+   without a stacking index that would also put it behind the card's own
+   background. */
+.art-edge {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform: translateZ(calc(-24px * var(--sleeve, 0)));
+  background:
+    linear-gradient(150deg, rgb(var(--art-rgb) / .34), rgb(0 0 0 / .68) 62%);
+  box-shadow: 0 0 0 var(--hair) rgb(0 0 0 / .55);
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+}
+
+/* The rim.
+ *
+ * A lit top-left arris and a dark bottom-right one — the two hairlines that
+ * separate a slab from a hole — plus, on top of those, a soft glow along
+ * whichever edge is currently facing the pointer. The first pair is what makes
+ * the sleeve look raised; the second is the cue that tells you it has turned
+ * rather than merely grown. */
+.art-3d::after {
+  box-shadow:
+    inset 1px 1px 0 0 rgb(255 255 255 / calc(.24 * var(--gloss))),
+    inset -1px -1px 0 0 rgb(0 0 0 / calc(.34 * var(--gloss))),
+    inset 0 0 0 var(--hair) rgb(160 220 255 / .16),
+    inset calc(var(--tx, 0) * -4px) calc(var(--ty, 0) * -4px) 18px -8px
+      rgb(255 255 255 / calc(.40 * var(--gloss) * var(--lit, 0)));
+}
+
+/* And the shadow it throws, which swings opposite the light. Offsets scale
+   with the tilt, so a sleeve at rest sits flat on its own shadow.
+ *
+ * One declaration, not three: hover moves `--art-bloom` from 0 to 1 and the
+ * cover's own colour comes up underneath it. Overriding the whole `box-shadow`
+ * on hover instead would mean re-stating the drop shadow in every state, and
+ * the first thing to fall out of sync would be the one that follows the
+ * pointer. */
+.art-3d {
+  --art-bloom: 0;
+  box-shadow:
+    calc(var(--tx, 0) * -10px * var(--sleeve, 0))
+    calc(14px + var(--ty, 0) * -10px * var(--sleeve, 0))
+    calc(30px + 20px * var(--lit, 0)) -18px var(--sleeve-shadow),
+    0 0 36px -12px rgb(var(--art-rgb) / calc(.62 * var(--art-bloom)));
+  transition: box-shadow var(--dur-3) var(--ease);
+}
+
+/* A sleeve needs two elements, and which is which matters.
+ *
+ * `.sleeve-stage` owns the vanishing point; `.sleeve` is the thing that turns.
+ * They cannot be the same element — nothing supplies the perspective for its
+ * own rotation — and the stage has to be the artwork's own box rather than the
+ * card around it. Put the perspective on the card and its centre sits below
+ * the artwork, among the title and the artist; the edge plane then projects
+ * *downward* out of the bottom of the sleeve and reads as a black bar under
+ * every album. That is exactly what a misplaced vanishing point looks like,
+ * and it is worth naming because it is invisible until there is something at a
+ * negative Z to reveal it.
+ *
+ * `sleeve-stage`, not `stage`: the immersive visualiser already owns `.stage`,
+ * this file loads last, and a bare `.stage { position: relative }` here would
+ * quietly beat the `position: fixed` that makes the full-screen view
+ * full-screen. Same trap as the note about the queue panel above.
+ *
+ * 640px against a ~150px sleeve is a wide-normal lens: enough depth to see the
+ * edge, not so much that a 10° turn shears the cover. */
+.sleeve-stage { position: relative; perspective: 640px; }
+.sleeve { position: relative; transform-style: preserve-3d; }
+
+:root { --sleeve-shadow: rgb(0 0 0 / .82); }
+/* Ink, not soot: a black drop shadow on an ice-white ground reads as dirt,
+   and the drafting table wants the same blue its hairlines are drawn in. */
+:root[data-theme="light"] { --sleeve-shadow: rgb(12 40 70 / .34); }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --sleeve-shadow: rgb(12 40 70 / .34); }
+}
+
 /* ------------------------------------------------------------------ sheen */
 
 /* A single soft highlight across the top of a raised control, brightest at

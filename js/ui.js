@@ -57,9 +57,85 @@ export function artBox(key, size, cls = '') {
   return box;
 }
 
+/**
+ * Artwork as an object: a stage that holds the vanishing point, and inside it
+ * the sleeve — the face, and the edge plane behind it that gives the thing
+ * thickness when it turns.
+ *
+ * Returns the **stage**. Tilt the `.sleeve` inside it, never the stage itself:
+ * an element cannot supply the perspective for its own rotation, and a sleeve
+ * that turns without one is a picture being sheared.
+ *
+ * The edge is `<i aria-hidden>` because it is a side of a box rather than a
+ * picture; there is nothing there to describe.
+ */
+export function sleeve(key, cls = '', { reflect = false } = {}) {
+  const art = artBox(key, null, 'art-3d ' + cls);
+  const inner = el('div', { class: 'sleeve' },
+    el('i', { class: 'art-edge', 'aria-hidden': 'true' }), art);
+  const stage = el('div', { class: 'sleeve-stage' }, inner);
+  if (reflect) {
+    // The floor. A second <img> pointed at the object URL the cache already
+    // holds — the browser decodes it once and draws it twice, which is cheaper
+    // than any filter that could fake it — dropped away under a mask rather
+    // than a fade, so nothing composites a gradient over live pixels.
+    //
+    // It carries the placeholder gradient as well as the image, because an
+    // album with no embedded cover is still an object standing on a floor, and
+    // a record that casts no reflection while its neighbours do looks broken
+    // rather than untagged.
+    //
+    // It hangs off the stage, not the sleeve: a reflection that tilts with the
+    // record is a record standing on a mirror that tilts with it.
+    const img = el('img', { class: 'art-echo-img', alt: '', decoding: 'async' });
+    const echo = el('div', {
+      class: 'art-echo',
+      style: key ? { background: placeholderStyle(key) } : null,
+    }, img);
+    const sync = () => {
+      const src = art.querySelector('.art-img').getAttribute('src');
+      if (src) img.setAttribute('src', src); else img.removeAttribute('src');
+    };
+    sync();
+    lib.loadArt(key).then(sync);
+    stage.appendChild(el('div', { class: 'art-floor', 'aria-hidden': 'true' }, echo));
+  }
+  return stage;
+}
+
 /* ------------------------------------------------------------------ eq bars */
 
 export const eqMarkup = '<span class="eq"><i></i><i></i><i></i><i></i></span>';
+
+/* ------------------------------------------------------------------ favourites */
+
+/** Paints one row's star from the library, without touching anything else. */
+function paintFavourite(row, id) {
+  const btn = row.querySelector('.trow-fav');
+  if (!btn) return;
+  const on = lib.isFavourite(id);
+  row.classList.toggle('is-fav', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.setAttribute('aria-label', on ? 'Remove from favourites' : 'Add to favourites');
+  btn.title = on ? 'Favourited (F)' : 'Favourite (F)';
+}
+
+/**
+ * The star is its own edit, so it repaints its own row immediately rather than
+ * waiting for the list to be rebuilt — the mark has to land under the pointer
+ * that asked for it, not one frame later.
+ */
+function toggleRowFavourite(row) {
+  const id = row.dataset.id;
+  if (!id) return;
+  const on = lib.toggleFavourite(id);
+  paintFavourite(row, id);
+  if (on) {
+    const btn = row.querySelector('.trow-fav');
+    spring({ from: 0.7, to: 1, stiffness: 620, damping: 16,
+             onUpdate: (v) => (btn.style.transform = `scale(${v})`) });
+  }
+}
 
 /* ------------------------------------------------------------------ rows */
 
@@ -78,12 +154,18 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
       '<div class="trow-text"><div class="trow-title"></div><div class="trow-sub"></div></div></div>';
     if (columns.includes('album')) html += '<div class="trow-album"></div>';
     if (columns.includes('duration')) html += '<div class="trow-time"></div>';
-    html += `<div class="trow-actions"><button class="icon-btn ghost trow-more" aria-label="More">${ico('more')}</button></div>`;
+    html += '<div class="trow-actions">' +
+      `<button class="icon-btn ghost trow-fav" aria-label="Favourite" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>` +
+      `<button class="icon-btn ghost trow-more" aria-label="More">${ico('more')}</button></div>`;
     row.innerHTML = html;
 
-    row.addEventListener('dblclick', () => onPlay?.(parseInt(row.dataset.index, 10)));
+    row.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.trow-actions')) return;
+      onPlay?.(parseInt(row.dataset.index, 10));
+    });
     row.addEventListener('click', (e) => {
       if (e.target.closest('.trow-play')) onPlay?.(parseInt(row.dataset.index, 10));
+      else if (e.target.closest('.trow-fav')) toggleRowFavourite(row);
       else if (e.target.closest('.trow-more')) onMenu?.(parseInt(row.dataset.index, 10), e.target.closest('.trow-more'));
     });
     row.addEventListener('contextmenu', (e) => {
@@ -95,6 +177,10 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
 
   const render = (row, track, index) => {
     if (!track) return;
+    // The id, not just the index: a recycled row can be asked to toggle a
+    // favourite after the list underneath it has been re-sorted.
+    row.dataset.id = track.id;
+    paintFavourite(row, track.id);
     const playing = player.state.current && player.state.current.id === track.id;
     row.classList.toggle('is-playing', !!playing);
     row.classList.toggle('is-missing', !lib.isAvailable(track.id));
@@ -198,11 +284,25 @@ addEventListener('resize', closeMenu);
 /** Standard menu for a set of tracks. */
 export function trackMenu(tracks, opts = {}) {
   const first = tracks[0];
+  // A menu over several tracks offers the edit that changes something: if any
+  // of them is unmarked, the useful action is to mark the lot.
+  const anyUnmarked = tracks.some((t) => !lib.isFavourite(t.id));
   return [
     { label: 'Play', icon: 'play', onSelect: () => player.playTracks(tracks, 0, opts.origin) },
     { label: 'Play next', icon: 'next', onSelect: () => { player.playNext(tracks); toast('Playing next'); } },
     { label: 'Add to queue', icon: 'queue', onSelect: () => { player.enqueue(tracks); toast(`Added ${tracks.length} to queue`); } },
     { separator: true },
+    {
+      label: anyUnmarked
+        ? (tracks.length > 1 ? `Favourite ${tracks.length} tracks` : 'Add to favourites')
+        : 'Remove from favourites',
+      icon: anyUnmarked ? 'star' : 'star-fill',
+      onSelect: () => {
+        for (const t of tracks) lib.toggleFavourite(t.id, anyUnmarked);
+        if (tracks.length === 1) toast(anyUnmarked ? 'Added to favourites' : 'Removed from favourites');
+        else toast(`${anyUnmarked ? 'Favourited' : 'Unfavourited'} ${tracks.length} tracks`);
+      },
+    },
     { label: 'Add to playlist…', icon: 'plus', onSelect: () => addToPlaylistDialog(tracks) },
     first && { label: 'Go to album', icon: 'album', onSelect: () => (location.hash = '#/album/' + first.albumKey) },
     first && { label: 'Go to artist', icon: 'artist', onSelect: () => (location.hash = '#/artist/' + first.artistKey) },
@@ -215,22 +315,45 @@ export function trackMenu(tracks, opts = {}) {
 
 /* ------------------------------------------------------------------ dialogs */
 
-export function dialog({ title, body, actions = [], width = 420 }) {
-  const panel = el('div', { class: 'dialog', style: { maxWidth: width + 'px' } });
+export function dialog({ title, body, actions = [], width = 420, onClose }) {
+  const panel = el('div', {
+    class: 'dialog', style: { maxWidth: width + 'px' },
+    role: 'dialog', 'aria-modal': 'true', 'aria-label': title,
+  });
   panel.appendChild(el('h2', { class: 'dialog-title', text: title }));
   if (body) panel.appendChild(el('div', { class: 'dialog-body' }, body));
 
   const bar = el('div', { class: 'dialog-actions' });
   const scrim = el('div', { class: 'scrim', onclick: (e) => { if (e.target === scrim) close(); } }, panel);
+  // Where to put the caret back. A dialog opened from a menu item has already
+  // lost it to <body>, in which case there is nothing to restore and nothing
+  // to be gained by pretending otherwise.
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
+  let closed = false;
   function close() {
+    if (closed) return;
+    closed = true;
     animate(panel, { opacity: [1, 0], transform: ['scale(1)', 'scale(.97)'] }, { duration: 130, commit: false });
     settled(animate(scrim, { opacity: [1, 0] }, { duration: 150, commit: false }), 150)
       .then(() => scrim.remove());
     document.removeEventListener('keydown', onKey, true);
+    if (opener && document.contains(opener)) opener.focus();
+    onClose?.();
   }
+
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+
   function onKey(e) {
-    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    if (e.key === 'Escape') { e.stopPropagation(); close(); return; }
+    // A modal that lets Tab walk out onto the page behind it is not modal.
+    if (e.key !== 'Tab') return;
+    const stops = [...panel.querySelectorAll(FOCUSABLE)].filter((n) => n.offsetParent !== null);
+    if (!stops.length) return;
+    const first = stops[0], last = stops[stops.length - 1];
+    const at = document.activeElement;
+    if (e.shiftKey && (at === first || !panel.contains(at))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
   }
 
   for (const a of actions) {

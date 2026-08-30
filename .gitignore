@@ -6,3 +6,7 @@ package-lock.json
 
 # test artefacts
 shots/
+
+# Windows shell metadata
+desktop.ini
+Thumbs.db

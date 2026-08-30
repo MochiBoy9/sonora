@@ -6,7 +6,7 @@ import * as player from './player.js';
 import { renderView } from './views.js';
 import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
-import { toast, closeMenu, promptDialog, menu } from './ui.js';
+import { toast, closeMenu, promptDialog, menu, dialog } from './ui.js';
 import * as session from './session.js';
 import * as stats from './stats.js';
 import * as looks from './looks.js';
@@ -23,6 +23,7 @@ const NAV = [
   { route: 'songs', label: 'Songs', icon: 'music' },
   { route: 'albums', label: 'Albums', icon: 'album' },
   { route: 'artists', label: 'Artists', icon: 'artist' },
+  { route: 'favourites', label: 'Favourites', icon: 'star' },
   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
   { route: 'circles', label: 'Analysis', icon: 'circles' },
   { route: 'sound', label: 'Sound', icon: 'sliders' },
@@ -81,9 +82,12 @@ function titleFor(route) {
   const base = 'Sonora';
   if (route.name === 'album') return (lib.state.albumBy.get(route.arg)?.title || 'Album') + ' · ' + base;
   if (route.name === 'artist') return (lib.state.artistBy.get(route.arg)?.name || 'Artist') + ' · ' + base;
+  if (route.name === 'playlist') return (lib.state.playlists.find((p) => p.id === route.arg)?.name || 'Playlist') + ' · ' + base;
   if (route.name === 'search') return route.arg ? `“${route.arg}” · ${base}` : base;
-  const nav = NAV.find((n) => n.route === route.name);
-  return nav ? `${nav.label} · ${base}` : base;
+  if (route.name === 'home') return base;
+  // Everything else the top-bar readout can already name — Settings included,
+  // which is not in NAV and used to fall through to a bare "Sonora".
+  return `${routeLabel(route)} · ${base}`;
 }
 
 /* ------------------------------------------------------------------ sidebar */
@@ -500,12 +504,77 @@ function applyAccent() {
 
 /* ------------------------------------------------------------------ shortcuts */
 
+/**
+ * Every key the app answers to, written down once.
+ *
+ * `bindKeys` and the sheet that `?` opens read the same table, so a shortcut
+ * cannot exist without being documented and cannot be documented without
+ * existing — which is the failure mode of every keyboard list ever written in
+ * a settings page by hand.
+ */
+const SHORTCUTS = [
+  ['Playback', [
+    [['Space'], 'Play or pause'],
+    [['←', '→'], 'Seek 5 seconds'],
+    [['⇧', '←/→'], 'Seek 30 seconds'],
+    [['↑', '↓'], 'Volume'],
+    [['N'], 'Next track'],
+    [['P'], 'Previous, or restart the track'],
+    [['M'], 'Mute'],
+    [['S'], 'Shuffle'],
+    [['R'], 'Repeat: off, all, one'],
+    [['F'], 'Favourite what is playing'],
+  ]],
+  ['Getting around', [
+    [['/'], 'Search'],
+    [['⌘', 'K'], 'Search'],
+    [['Q'], 'Queue panel'],
+    [['V'], 'Immersive visualiser'],
+    [['E'], 'The Sound page'],
+    [['?'], 'This list'],
+    [['Esc'], 'Close whatever is open'],
+  ]],
+  ['Sound', [
+    [['B'], 'Bypass the rack — A/B it'],
+  ]],
+];
+
+let shortcutSheet = null;
+
+function showShortcuts() {
+  if (shortcutSheet) { shortcutSheet.close(); shortcutSheet = null; return; }
+  const body = el('div', { class: 'keys' });
+  for (const [group, rows] of SHORTCUTS) {
+    const table = el('dl', { class: 'keys-list' });
+    for (const [keys, what] of rows) {
+      table.appendChild(el('dt', {}, keys.map((k) => el('kbd', { text: k }))));
+      table.appendChild(el('dd', { text: what }));
+    }
+    body.appendChild(el('section', { class: 'keys-col' },
+      el('h3', { class: 'keys-group', text: group }), table));
+  }
+  shortcutSheet = dialog({
+    title: 'Keyboard',
+    body,
+    width: 640,
+    actions: [{ label: 'Close', primary: true }],
+    onClose: () => { shortcutSheet = null; },
+  });
+}
+
 function bindKeys() {
   addEventListener('keydown', (e) => {
     const t = e.target;
     const typing = t instanceof HTMLElement &&
       (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
 
+    // "?" first, and before the modifier gate below: Shift is held to type it
+    // on most layouts, and on the ones that report the unshifted key instead
+    // it arrives as Shift+"/" — which is the same physical key as search, so
+    // this has to be settled before "/" claims it.
+    if (!typing && (e.key === '?' || (e.key === '/' && e.shiftKey))) {
+      e.preventDefault(); showShortcuts(); return;
+    }
     if (e.key === '/' && !typing) { e.preventDefault(); $('#search')?.focus(); return; }
     if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $('#search')?.focus(); return; }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -521,6 +590,14 @@ function bindKeys() {
       case 's': case 'S': player.setShuffle(); toast(player.state.shuffle ? 'Shuffle on' : 'Shuffle off'); break;
       case 'r': case 'R': player.cycleRepeat(); toast('Repeat: ' + player.state.repeat); break;
       case 'm': case 'M': player.toggleMute(); break;
+      case 'f': case 'F': {
+        const track = player.state.current;
+        if (!track) { toast('Nothing playing to favourite'); break; }
+        toast(lib.toggleFavourite(track.id)
+          ? `Favourited “${track.title}”`
+          : `Removed “${track.title}” from favourites`);
+        break;
+      }
       case 'q': case 'Q': toggleQueuePane(); break;
       case 'v': case 'V': toggleStage(backdrop); break;
       // A/B the whole rack from anywhere: the only way to hear what an
@@ -575,6 +652,7 @@ async function boot() {
   if (localStorage.getItem('sonora:pane') === '1') $('#app').classList.add('pane-open');
 
   document.addEventListener('sonora:add', addMusic);
+  document.addEventListener('sonora:shortcuts', showShortcuts);
   document.addEventListener('sonora:toggle-queue', () => toggleQueuePane());
   document.addEventListener('sonora:theme', (e) => applyTheme(e.detail));
   document.addEventListener('sonora:stage', () => toggleStage(backdrop));

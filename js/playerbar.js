@@ -17,11 +17,12 @@ export function mountPlayerBar(host) {
   host.innerHTML = `
     <canvas class="pb-viz" aria-hidden="true"></canvas>
     <div class="pb-now">
-      <div class="art art-pb"><img class="art-img" alt="" decoding="async"></div>
+      <div class="art art-3d art-pb"><img class="art-img" alt="" decoding="async"></div>
       <div class="pb-text">
         <a class="pb-title" href="#"></a>
         <a class="pb-artist" href="#"></a>
       </div>
+      <button class="icon-btn ghost pb-fav" title="Favourite (F)" aria-label="Add to favourites" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>
       <button class="icon-btn ghost pb-more" title="More" aria-label="More">${ico('more')}</button>
     </div>
 
@@ -98,6 +99,26 @@ export function mountPlayerBar(host) {
     const t = player.state.current;
     if (t) menu(trackMenu([t]), { anchor: e.currentTarget });
   });
+
+  const favBtn = q('.pb-fav');
+  favBtn.addEventListener('click', () => {
+    const t = player.state.current;
+    if (!t) return;
+    const on = lib.toggleFavourite(t.id);
+    if (on) {
+      spring({ from: 0.7, to: 1, stiffness: 620, damping: 16,
+               onUpdate: (v) => (favBtn.style.transform = `scale(${v})`) });
+    }
+  });
+
+  function paintFav() {
+    const t = player.state.current;
+    const on = !!t && lib.isFavourite(t.id);
+    host.classList.toggle('is-fav', on);
+    favBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    favBtn.setAttribute('aria-label', on ? 'Remove from favourites' : 'Add to favourites');
+    favBtn.title = on ? 'Favourited (F)' : 'Favourite (F)';
+  }
 
   /* ------------------------------------------------------------ ribbon */
 
@@ -255,14 +276,16 @@ export function mountPlayerBar(host) {
     if (d) durationEl.textContent = fmtTime(d);
   }
 
-  player.events.on('track', () => { paintTrack(); ribbon.kick(); });
+  player.events.on('track', () => { paintTrack(); paintFav(); ribbon.kick(); });
   player.events.on('state', () => { paintState(); paintTrack(); syncTicker(); });
   player.events.on('queue', paintState);
   player.events.on('volume', paintVolume);
   lib.events.on('art', () => { if (player.state.current) paintArt(art, player.state.current.albumKey); });
+  lib.events.on('favourites', paintFav);
 
   paintTrack();
   paintState();
   paintVolume();
+  paintFav();
   syncTicker();
 }
