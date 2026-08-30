@@ -231,21 +231,30 @@ const dr = { track: null, peak: 0, sumSq: 0, samples: 0, seconds: 0, at: -1 };
 function resetMeter(track) {
   dr.track = track || null;
   dr.peak = 0; dr.sumSq = 0; dr.samples = 0; dr.seconds = 0; dr.at = -1;
+  // The worklet keeps its own running totals and would otherwise carry the
+  // previous track's peak into the next one's figure.
+  if (meterNode) meterNode.port.postMessage({ type: 'reset' });
 }
 
 function meterFrame() {
   if (!meter || !state.playing) return;
-  meter.getFloatTimeDomainData(meterData);
-  let peak = dr.peak, sum = 0;
-  for (let i = 0; i < meterData.length; i++) {
-    const v = meterData[i];
-    const a = v < 0 ? -v : v;
-    if (a > peak) peak = a;
-    sum += v * v;
+  /* When the worklet is running it owns the peak and the sum — it has seen
+     every sample and this has seen one window per frame, so adding this on top
+     would be mixing an exact measurement with a partial one and calling the
+     result exact. The elapsed-seconds tally below still runs either way. */
+  if (!meterExact) {
+    meter.getFloatTimeDomainData(meterData);
+    let peak = dr.peak, sum = 0;
+    for (let i = 0; i < meterData.length; i++) {
+      const v = meterData[i];
+      const a = v < 0 ? -v : v;
+      if (a > peak) peak = a;
+      sum += v * v;
+    }
+    dr.peak = peak;
+    dr.sumSq += sum;
+    dr.samples += meterData.length;
   }
-  dr.peak = peak;
-  dr.sumSq += sum;
-  dr.samples += meterData.length;
 
   /* How much of the track went past, taken from the audio clock rather than
      from frame deltas.
@@ -260,6 +269,9 @@ function meterFrame() {
      The sampling goes sparse when frames do, which costs precision in the RMS
      and nothing in its correctness — a thinner random sample of a waveform is
      still an unbiased sample of it. */
+  // The worklet reports its own elapsed time from the samples it measured;
+  // this is the fallback's version of the same tally.
+  if (meterExact) return;
   const now = audio.currentTime;
   if (dr.at >= 0 && now > dr.at && now - dr.at < SEEK_GAP) dr.seconds += now - dr.at;
   dr.at = now;
@@ -291,12 +303,111 @@ function commitMeter() {
   resetMeter(null);
 }
 
+/* ---- the worklet, where there is one -------------------------------------
+ *
+ * `process` runs on the audio thread once per 128-frame block, so it sees
+ * every sample: the peak is a true peak and the RMS is over the whole listen
+ * rather than over whatever the frame loop managed to catch. The frame-based
+ * meter above stays as the fallback and is not dead code — an engine without
+ * AudioWorklet, or one where the module fails to load, still gets a figure.
+ *
+ * The two agree on what they are computing, so nothing downstream has to know
+ * which produced a given number. What differs is only how complete the sample
+ * behind it is, and `meterExact` records which was used.
+ */
+let meterNode = null;
+let meterExact = false;
+let meterModule = null;
+let meterFault = null;
+
+async function ensureMeterWorklet() {
+  if (!ctx || !ctx.audioWorklet || meterNode) return;
+  try {
+    if (!meterModule) {
+      meterModule = ctx.audioWorklet.addModule(new URL('./meter-worklet.js', import.meta.url));
+    }
+    await meterModule;
+    if (meterNode || !ctx) return;
+    const node = new AudioWorkletNode(ctx, 'sonora-meter', {
+      numberOfInputs: 1, numberOfOutputs: 0,
+    });
+    node.port.onmessage = (e) => {
+      const d = e.data;
+      if (!d) return;
+      dr.peak = d.peak;
+      dr.sumSq = d.sumSq;
+      dr.samples = d.samples;
+      /* How long the listen was, taken from the samples that were actually
+         measured rather than from elapsed frames.
+
+         This used to be counted off the audio clock in the frame loop, and
+         that made writing a figure at all depend on frames being drawn: in a
+         background tab, or in any host that throttles rAF, the audio played
+         perfectly and the tally never reached the threshold, so nothing was
+         ever written down. Observed, not theorised.
+
+         The worklet's own count has none of that exposure. It is also a better
+         definition of the thing: gated samples over the sample rate is the
+         duration of the audio that was measured, so a seek adds nothing and
+         silence between tracks adds nothing, which is exactly what "how much
+         of this did you actually listen to" should mean. */
+      const chans = Math.max(1, node.channelCount || 2);
+      dr.seconds = d.samples / chans / (ctx ? ctx.sampleRate : 48000);
+    };
+    /* Tapped on the decoders themselves, ahead of every gain this app owns.
+     *
+     * The analyser version tapped the volume node, and that was wrong in a way
+     * only a real measurement exposes: turning the volume down mid-track
+     * changes the figure. The peak is set by the loud part before the change
+     * and the RMS is dragged down by the quiet part after it, so the crest
+     * factor climbs — measured at 11.9 dB on a sine whose true value is 3.01,
+     * purely because a slider moved.
+     *
+     * Here the tap is before volume, before the crossfade and before
+     * ReplayGain, which is what "what is leaving the file" has always claimed
+     * to mean. Both decks feed it: the idle one is paused, so it contributes
+     * silence, which the worklet's gate drops.
+     *
+     * No output — it is a leaf that costs an analysis and no audio.
+     */
+    deckA.src.connect(node);
+    deckB.src.connect(node);
+    meterNode = node;
+    meterExact = true;
+  } catch (err) {
+    // Not fatal in any way: the frame-based meter is still running. Kept
+    // rather than swallowed, because "the exact meter quietly did not start"
+    // is otherwise indistinguishable from "this engine has no worklets".
+    meterExact = false;
+    meterFault = String(err && err.message || err);
+  }
+}
+
 let stopMeter = null;
 function syncMeter() {
+  /* Both are only ever wanted while something is playing. The frame loop is
+     kept running even when the worklet exists — not to measure, but because
+     it is what advances `dr.seconds` off the audio clock, and that is the test
+     for whether the listen was long enough to write down at all. */
   const wanted = !!(meter && state.playing);
   if (wanted && !stopMeter) stopMeter = tick(meterFrame);
   else if (!wanted && stopMeter) { stopMeter(); stopMeter = null; }
+  if (wanted) ensureMeterWorklet();
 }
+
+/** Which meter produced the last figure, for the tests and the readout. */
+export const __meterExact = () => ({ exact: meterExact, node: !!meterNode, fault: meterFault, ctx: !!ctx, worklet: !!(ctx && ctx.audioWorklet) });
+
+/** The tally as it stands, for the tests. */
+export const __meterState = () => ({
+  peak: +dr.peak.toFixed(5),
+  rms: dr.samples ? +Math.sqrt(dr.sumSq / dr.samples).toFixed(5) : 0,
+  crestDb: dr.samples && dr.peak > 0
+    ? +(20 * Math.log10(dr.peak / Math.sqrt(dr.sumSq / dr.samples))).toFixed(3) : null,
+  samples: dr.samples,
+  seconds: +dr.seconds.toFixed(2),
+  track: dr.track ? dr.track.title : null,
+});
 
 function ensureGraph() {
   if (ctx) return true;
@@ -380,11 +491,34 @@ function buildEdges() {
   }
 }
 
-/** Loudness is perceived roughly logarithmically, so square the slider. */
+/**
+ * Loudness is perceived roughly logarithmically, so square the slider.
+ *
+ * Both decks, always, and that is not tidiness. Before the graph exists there
+ * is no gain node and volume has to be the element's own property — and this
+ * used to write it to `audio`, meaning whichever deck happened to be active.
+ * The other kept `volume = 1`, and once the graph came up this function
+ * stopped touching element volume at all, so the difference was frozen in for
+ * the session.
+ *
+ * The result was a level jump at every gapless handover: the two decks were
+ * playing the same music at different volumes, which is precisely the seam the
+ * two-deck design exists to remove. Found by measuring one file twice through
+ * the new meter and getting two different peaks — 0.640 on one deck and 0.807
+ * on the other.
+ *
+ * Once the gain node owns volume the elements go back to unity, so there is
+ * exactly one thing in the path deciding how loud this is.
+ */
 function applyVolume() {
   const v = state.muted ? 0 : state.volume * state.volume;
-  if (gain) gain.gain.value = v;
-  else audio.volume = state.muted ? 0 : state.volume;
+  if (gain) {
+    gain.gain.value = v;
+    for (const d of [deckA, deckB]) if (d.el.volume !== 1) d.el.volume = 1;
+  } else {
+    const ev = state.muted ? 0 : state.volume;
+    for (const d of [deckA, deckB]) d.el.volume = ev;
+  }
 }
 
 /**
