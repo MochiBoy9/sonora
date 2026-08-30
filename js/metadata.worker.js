@@ -151,6 +151,13 @@ async function handle(job) {
    * file is available to divide, so it includes the tags and the cover — on a
    * three-minute track that is a rounding error, and it is honest about being
    * an average either way. */
+  /* ReplayGain, when whoever made the file bothered. Kept as the decibels the
+     tag actually says rather than converted here: the player decides whether
+     to use the track figure or the album one, and that choice belongs to the
+     listener, not to the importer. */
+  if (typeof tags.gain === 'number') track.gain = tags.gain;
+  if (typeof tags.gainAlbum === 'number') track.gainAlbum = tags.gainAlbum;
+
   if (tags.sampleRate > 0) track.sampleRate = tags.sampleRate | 0;
   if (tags.channels > 0) track.channels = tags.channels | 0;
   if (tags.bitDepth > 0) track.bitDepth = tags.bitDepth | 0;

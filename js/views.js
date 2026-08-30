@@ -1463,6 +1463,35 @@ function viewSettings(host) {
       el('div', { class: 'settings-note', text: 'How long the two overlap. At zero the next track starts the instant the last one ends — what a live album needs.' })),
     el('div', { class: 'settings-actions settings-slider' }, fadeSlider, fadeValue)));
 
+  const levelPick = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Loudness levelling' });
+  for (const [mode, label, hint] of [
+    ['off', 'Off', 'Play every file at the level it was mastered'],
+    ['track', 'Track', 'Even out every song against every other'],
+    ['album', 'Album', 'Move each record as a whole, keeping its internal balance'],
+  ]) {
+    const b = el('button', {
+      class: 'seg' + (player.state.levelling === mode ? ' is-on' : ''),
+      role: 'radio', 'aria-checked': String(player.state.levelling === mode),
+      text: label, title: hint,
+    });
+    b.addEventListener('click', () => {
+      player.setLevelling(mode);
+      for (const x of levelPick.children) {
+        const on = x === b;
+        x.classList.toggle('is-on', on);
+        x.setAttribute('aria-checked', String(on));
+      }
+    });
+    levelPick.appendChild(b);
+  }
+
+  pbRows.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('volume') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Even out the volume' }),
+      el('div', { class: 'settings-note', text: 'Uses the ReplayGain tag where a file has one, and what Sonora measured on the first listen where it does not.' })),
+    el('div', { class: 'settings-actions' }, levelPick)));
+
   playback.appendChild(pbRows);
   host.appendChild(playback);
 

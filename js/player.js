@@ -45,6 +45,10 @@ export const state = {
      silence between tracks is entitled to it, and because an album with real
      silence at the end of a track sounds wrong crossfaded. */
   seamless: true,
+  /* Loudness levelling: 'off', 'track' or 'album'. Album keeps the balance a
+     record was mastered with and only moves the record; track evens out every
+     song, which is right for a shuffle and wrong for a concept album. */
+  levelling: 'track',
 };
 
 /** The longest overlap on offer. Past this it stops being a crossfade. */
@@ -73,7 +77,54 @@ function makeDeck(name) {
   const el = new Audio();
   el.preload = 'auto';
   el.crossOrigin = 'anonymous';
-  return { name, el, url: null, trackId: null, src: null, gain: null };
+  return { name, el, url: null, trackId: null, src: null, gain: null, level: null };
+}
+
+/* ------------------------------------------------------------------ levelling
+ *
+ * ReplayGain, and a fallback for the vast majority of files that have none.
+ *
+ * The tag is preferred wherever it exists, because somebody computed it
+ * properly with a K-weighted, gated measurement and this app has not. Where
+ * there is no tag, the RMS figure that `peaks.js` produced on the first listen
+ * stands in — it is cruder, and it is written down as such, but it is enough
+ * to stop a 1974 master and a 2011 remaster of the same song differing by
+ * twelve decibels.
+ *
+ * -14 dBFS is the reference. It is what the streaming services settled on and
+ * it leaves headroom above a typical modern master rather than turning
+ * everything down to meet the quietest thing in the library.
+ */
+const LEVEL_TARGET = -14;
+/* Nothing is moved by more than this. A correction bigger than 12 dB is
+   describing a broken measurement or a field recording, and either way an
+   automatic system should decline rather than commit. */
+const LEVEL_LIMIT = 12;
+
+/** The correction for one track in dB, or 0 if levelling is off or unknown. */
+function levelDbFor(track) {
+  if (!track || state.levelling === 'off') return 0;
+  let db = null;
+  // Album mode prefers the album figure and falls back to the track's own, so
+  // a record with only per-track tags still gets levelled rather than nothing.
+  if (state.levelling === 'album' && typeof track.gainAlbum === 'number') db = track.gainAlbum;
+  if (db == null && typeof track.gain === 'number') db = track.gain;
+  if (db == null) {
+    // No tag: fall back to what was measured off the file, if anything has been.
+    const rec = peakmap.peek(track);
+    if (rec && typeof rec.rms === 'number' && isFinite(rec.rms)) db = LEVEL_TARGET - rec.rms;
+  }
+  if (db == null || !isFinite(db)) return 0;
+  return clamp(db, -LEVEL_LIMIT, LEVEL_LIMIT);
+}
+
+/** Writes the correction onto a deck, ramped so it is never a click. */
+function applyLevel(d, track) {
+  if (!d || !d.level || !ctx) return;
+  const db = levelDbFor(track);
+  const value = Math.pow(10, db / 20);
+  d.level.gain.cancelScheduledValues(ctx.currentTime);
+  d.level.gain.setTargetAtTime(value, ctx.currentTime, 0.02);
 }
 
 const deckA = makeDeck('a');
@@ -108,6 +159,7 @@ export const __decks = () => [deckA, deckB].map((d) => ({
   time: +(d.el.currentTime || 0).toFixed(3),
   duration: isFinite(d.el.duration) ? +d.el.duration.toFixed(3) : null,
   gain: d.gain ? +d.gain.gain.value.toFixed(3) : null,
+  level: d.level ? +d.level.gain.value.toFixed(3) : null,
   err: d.el.error ? d.el.error.code : null,
 }));
 
@@ -255,9 +307,16 @@ function ensureGraph() {
        once for a moment. */
     for (const d of [deckA, deckB]) {
       d.src = ctx.createMediaElementSource(d.el);
+      /* Two gains per deck, and they are not the same job. `level` carries
+         this track's own loudness correction and holds still; `gain` is the
+         crossfade and moves between 0 and 1. Folding them into one node would
+         mean the fade had to know each track's ReplayGain to compute its
+         endpoints, and a fade between two differently-corrected tracks would
+         stop being equal-power. */
+      d.level = ctx.createGain();
       d.gain = ctx.createGain();
       d.gain.gain.value = d === deck ? 1 : 0;
-      d.src.connect(d.gain);
+      d.src.connect(d.level).connect(d.gain);
     }
     gain = ctx.createGain();
     deckA.gain.connect(gain);
@@ -504,6 +563,7 @@ async function load(track, autoplay, { count = true } = {}) {
     const incoming = idleDeck;
     try { incoming.el.currentTime = 0; } catch { /* not seekable yet */ }
     cutTo(incoming);
+    applyLevel(incoming, track);
   } else {
     const ok = await cueDeck(deck, track);
     if (token !== loadToken) return;
@@ -515,6 +575,7 @@ async function load(track, autoplay, { count = true } = {}) {
     }
     cutTo(deck);
   }
+  applyLevel(deck, track);
 
   try {
     if (autoplay) await play();
@@ -546,12 +607,23 @@ async function warmNext() {
   if (!canDecode(nextTrack.name || nextTrack.path || '')) return;
   const target = idleDeck;
   await cueDeck(target, nextTrack);
-  // Held at the start, silent, until the handover wants it.
+  // Held at the start, silent, until the handover wants it — and already at
+  // its own level, so the crossfade never has to move two things at once.
   if (target.trackId === nextTrack.id) {
     try { target.el.currentTime = 0; } catch { /* not seekable yet */ }
     target.el.pause();
+    applyLevel(target, nextTrack);
   }
 }
+
+/* The fallback figure only exists once a track has been analysed, and that
+   finishes a second or two after playback starts. Re-apply when it lands, so
+   the first track of a session is levelled too rather than being the one that
+   is always wrong. */
+peakmap.events.on('peaks', (id) => {
+  if (state.current && state.current.id === id) applyLevel(deck, state.current);
+  else if (idleDeck.trackId === id) applyLevel(idleDeck, lib.getTrack(id));
+});
 
 /* ------------------------------------------------------------------ handover
  *
@@ -811,6 +883,26 @@ export function setCrossfade(seconds) {
   db.setKV('crossfade', state.crossfade).catch(() => {});
   events.emit('state');
 }
+
+/**
+ * Loudness levelling: 'off', 'track' or 'album'.
+ *
+ * Album is not just a different number, it is a different intention: it keeps
+ * the balance the record was mastered with — the quiet interlude stays quiet
+ * against the song after it — and only moves the record as a whole. Track
+ * evens out every song against every other, which is what a shuffle across
+ * four decades needs and what a concept album does not.
+ */
+export function setLevelling(mode) {
+  state.levelling = mode === 'off' || mode === 'album' ? mode : 'track';
+  applyLevel(deck, state.current);
+  if (idleDeck.trackId) applyLevel(idleDeck, lib.getTrack(idleDeck.trackId));
+  db.setKV('levelling', state.levelling).catch(() => {});
+  events.emit('state');
+}
+
+/** The correction in dB currently applied to a track, for the readouts. */
+export const levelFor = (track) => levelDbFor(track);
 
 /** Whether tracks run into each other at all. Off restores the plain gap. */
 export function setSeamless(on) {
@@ -1163,18 +1255,20 @@ if ('mediaSession' in navigator) {
 /* ------------------------------------------------------------------ restore */
 
 export async function init() {
-  const [vol, shuffle, repeat, crossfade, seamless] = await Promise.all([
+  const [vol, shuffle, repeat, crossfade, seamless, levelling] = await Promise.all([
     db.getKV('volume').catch(() => null),
     db.getKV('shuffle').catch(() => null),
     db.getKV('repeat').catch(() => null),
     db.getKV('crossfade').catch(() => null),
     db.getKV('seamless').catch(() => null),
+    db.getKV('levelling').catch(() => null),
   ]);
   if (typeof vol === 'number') state.volume = clamp(vol, 0, 1);
   if (typeof shuffle === 'boolean') state.shuffle = shuffle;
   if (repeat === 'all' || repeat === 'one') state.repeat = repeat;
   if (typeof crossfade === 'number') state.crossfade = clamp(crossfade, 0, MAX_CROSSFADE);
   if (typeof seamless === 'boolean') state.seamless = seamless;
+  if (levelling === 'off' || levelling === 'album' || levelling === 'track') state.levelling = levelling;
   applyVolume();
   // The rack owns playback speed, which is a property of the element and works
   // with or without a Web Audio graph — and the graph does not exist until the
