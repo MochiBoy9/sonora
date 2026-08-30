@@ -8,6 +8,7 @@
 import { el, ico, fmtTime, clamp } from './util.js';
 import * as player from './player.js';
 import * as lib from './library.js';
+import * as peakmap from './peaks.js';
 import { paintArt, menu, trackMenu, toast } from './ui.js';
 import { createVisualizer } from './visualizer.js';
 import { storedMode } from './stage.js';
@@ -39,6 +40,8 @@ export function mountPlayerBar(host) {
         <div class="seek" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100">
           <div class="seek-track">
             <div class="seek-buffer"></div>
+            <canvas class="seek-wave seek-wave-dim" aria-hidden="true"></canvas>
+            <canvas class="seek-wave seek-wave-lit" aria-hidden="true"></canvas>
             <div class="seek-fill"></div>
           </div>
           <div class="seek-knob"></div>
@@ -140,6 +143,86 @@ export function mountPlayerBar(host) {
   });
   if (storedMode() === 'wave') ribbon.setMode('wave');
 
+  /* ------------------------------------------------------------ waveform */
+
+  /*
+   * The shape of the song, in the scrubber.
+   *
+   * A progress bar tells you where you are. A waveform tells you where to go —
+   * you can see the quiet intro, the drop, the outro, and put the playhead on
+   * one instead of hunting for it. It costs nothing at rest: the drawing
+   * happens once per track, and the per-frame work is one `clip-path` write
+   * beside the `scaleX` the fill was already doing.
+   *
+   * Two canvases rather than one, both holding the same 2048 bars. The lit one
+   * is clipped to the playhead and the dim one shows through behind it, which
+   * is how the played part of a waveform gets its own colour without either
+   * redrawing every frame or squashing the shape with a transform.
+   *
+   * Drawn at a fixed size and stretched by CSS, because the track is 3 px tall
+   * until the pointer arrives and 28 px after — one drawing serves both.
+   */
+  const waveDim = q('.seek-wave-dim');
+  const waveLit = q('.seek-wave-lit');
+  const WAVE_W = 1024, WAVE_H = 56;      // device pixels, stretched to fit
+  let waveFor = null;                    // track id the canvases currently hold
+
+  function drawWave(rec) {
+    const amp = peakmap.amplitude(rec);
+    const cs = getComputedStyle(host);
+    const lit = cs.getPropertyValue('--accent').trim() || '#00d1ff';
+    const dim = cs.getPropertyValue('--text-3').trim() || '#7b8b9a';
+
+    for (const [canvas, colour, alpha] of [[waveDim, dim, 0.55], [waveLit, lit, 1]]) {
+      canvas.width = WAVE_W; canvas.height = WAVE_H;
+      const g = canvas.getContext('2d');
+      g.clearRect(0, 0, WAVE_W, WAVE_H);
+      g.fillStyle = colour;
+      g.globalAlpha = alpha;
+
+      const n = rec.max.length;
+      const mid = WAVE_H / 2;
+      const step = WAVE_W / n;
+      // A bar per bucket, at least a pixel wide, with a hairline gap so the
+      // shape reads as a waveform rather than a filled blob.
+      const w = Math.max(1, step - (step > 2 ? 0.5 : 0));
+      for (let i = 0; i < n; i++) {
+        const hi = (rec.max[i] / 127) / amp;
+        const lo = (rec.min[i] / 127) / amp;
+        const top = mid - hi * mid;
+        const bottom = mid - lo * mid;
+        // Always at least one pixel, or silence draws as nothing at all and
+        // the bar looks broken rather than quiet.
+        g.fillRect(i * step, top, w, Math.max(1, bottom - top));
+      }
+    }
+  }
+
+  function clearWave() {
+    waveFor = null;
+    seek.classList.remove('has-wave');
+  }
+
+  async function loadWave() {
+    const t = player.state.current;
+    if (!t) return clearWave();
+    if (waveFor === t.id) return;
+    // Whatever is on the canvas belongs to the previous track: take it down
+    // before the await, or it sits under the new title until the decode lands.
+    clearWave();
+    const rec = await peakmap.forTrack(t, 'wave').catch(() => null);
+    // The track may have moved on while that was decoding.
+    if (!rec || !player.state.current || player.state.current.id !== t.id) return;
+    drawWave(rec);
+    waveFor = t.id;
+    seek.classList.add('has-wave');
+  }
+
+  // A waveform that arrives after the track started still belongs to it.
+  peakmap.events.on('peaks', (id) => {
+    if (player.state.current && player.state.current.id === id) loadWave();
+  });
+
   /* ------------------------------------------------------------ seeking */
 
   let scrubbing = false;
@@ -198,6 +281,9 @@ export function mountPlayerBar(host) {
   function paintProgress(ratio, force) {
     fill.style.transform = `scaleX(${ratio})`;
     knob.style.left = (ratio * 100).toFixed(3) + '%';
+    // Reveal the lit waveform up to the playhead. `inset()` from the right so
+    // the canvas keeps its own width and the shape does not stretch with it.
+    if (waveFor) waveLit.style.clipPath = `inset(0 ${((1 - ratio) * 100).toFixed(3)}% 0 0)`;
     if (force || !scrubbing) {
       const d = player.state.duration || 0;
       elapsed.textContent = fmtTime(ratio * d);
@@ -308,7 +394,7 @@ export function mountPlayerBar(host) {
     if (d) durationEl.textContent = fmtTime(d);
   }
 
-  player.events.on('track', () => { paintTrack(); paintFav(); ribbon.kick(); });
+  player.events.on('track', () => { paintTrack(); paintFav(); ribbon.kick(); loadWave(); });
   player.events.on('state', () => { paintState(); paintTrack(); syncTicker(); });
   player.events.on('queue', paintState);
   player.events.on('volume', paintVolume);
@@ -320,4 +406,5 @@ export function mountPlayerBar(host) {
   paintVolume();
   paintFav();
   syncTicker();
+  loadWave();
 }

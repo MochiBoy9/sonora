@@ -467,6 +467,39 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .seek:hover .seek-track, .seek.is-active .seek-track { height: 7px; }
 .vol:hover .vol-track { height: 5px; }
 
+/* ---------------------------------------------------------------- waveform
+
+   The scrubber knows the shape of the song, and shows it when you reach for
+   it. At rest the track is the same hairline it has always been and the
+   waveform is a texture inside it; on hover it opens to something you can
+   actually read and aim at.
+
+   Both canvases are drawn once per track at a fixed size and stretched to
+   whichever height the track currently has, so opening it costs no redraw —
+   only the height transition, which is on a 28-pixel element and cannot
+   reflow anything around it because the bar's row height does not change. */
+.seek.has-wave:hover .seek-track,
+.seek.has-wave.is-active .seek-track { height: 28px; }
+
+.seek-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  display: none;
+  pointer-events: none;
+}
+.seek.has-wave .seek-wave { display: block; }
+.seek-wave-lit { clip-path: inset(0 100% 0 0); }
+
+/* Open, the lit waveform *is* the progress fill, so the plain gradient would
+   only sit on top of it. The buffer bar goes too — a local file has nothing
+   worth reporting about how much of it has arrived. */
+.seek.has-wave:hover .seek-fill,
+.seek.has-wave.is-active .seek-fill,
+.seek.has-wave:hover .seek-buffer,
+.seek.has-wave.is-active .seek-buffer { opacity: 0; }
+.seek-fill, .seek-buffer { transition: opacity var(--dur-1) linear; }
+
 .seek-fill, .vol-fill, .seek-buffer {
   position: absolute;
   inset: 0;
