@@ -5,7 +5,7 @@
  * rendered directly, because 12 nodes are cheaper than the machinery.
  */
 
-import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText, formatName } from './util.js';
+import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText, formatName, norm } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import * as db from './db.js';
@@ -2073,8 +2073,335 @@ function notFound(host, message) {
   return () => {};
 }
 
+/* ------------------------------------------------------------------ FILES */
+
+/*
+ * The library as it actually sits on the disk, which is not the same thing as
+ * the library as music.
+ *
+ * Two questions live here because they are the same question asked twice: what
+ * is actually in these folders, and how much of it is the same thing twice.
+ * Both are about files rather than songs, and neither belongs on a page that
+ * is trying to be about albums.
+ */
+
+/** Builds a nested folder tree out of the flat path on every track. */
+function folderTree() {
+  const roots = [];
+  const byRoot = new Map();
+
+  for (const root of lib.state.roots) {
+    const node = { name: root.name, path: '', kind: 'root', children: new Map(), tracks: [] };
+    byRoot.set(root.id, node);
+    roots.push(node);
+  }
+  // Anything whose root has gone is still on the disk somewhere; it gets a
+  // home rather than vanishing from a view whose whole job is to show files.
+  const orphan = { name: 'Elsewhere', path: '', kind: 'root', children: new Map(), tracks: [] };
+
+  for (const t of lib.allTracks()) {
+    let node = byRoot.get(t.rootId) || orphan;
+    const parts = String(t.path || t.name || '').split('/').filter(Boolean);
+    // The last part is the file itself.
+    for (let i = 0; i < parts.length - 1; i++) {
+      const seg = parts[i];
+      let next = node.children.get(seg);
+      if (!next) {
+        next = { name: seg, path: node.path ? node.path + '/' + seg : seg,
+                 kind: 'dir', children: new Map(), tracks: [] };
+        node.children.set(seg, next);
+      }
+      node = next;
+    }
+    node.tracks.push(t);
+  }
+
+  if (orphan.tracks.length || orphan.children.size) roots.push(orphan);
+  return roots;
+}
+
+/** Every track at or below a node, in folder order. */
+function tracksUnder(node) {
+  const out = node.tracks.slice().sort((a, b) => cmpText(a.name, b.name));
+  for (const child of [...node.children.values()].sort((a, b) => cmpText(a.name, b.name))) {
+    out.push(...tracksUnder(child));
+  }
+  return out;
+}
+
+/**
+ * A short, strong fingerprint of a file's actual contents.
+ *
+ * The head and the tail rather than the whole thing: a hash of a 40 MB FLAC is
+ * 40 MB of reading, and doing that across a library to answer a question
+ * nobody asked yet is not a reasonable thing to do to somebody's disk. The
+ * first and last 64 KB plus the exact byte length is enough — two audio files
+ * that agree on all three and are not the same file do not occur outside a
+ * deliberate attempt to make one.
+ */
+async function contentKey(track) {
+  const file = await lib.fileFor(track.id);
+  if (!file) return null;
+  const CHUNK = 65536;
+  const size = file.size;
+  const parts = [file.slice(0, Math.min(CHUNK, size))];
+  if (size > CHUNK * 2) parts.push(file.slice(size - CHUNK, size));
+  const bufs = await Promise.all(parts.map((p) => p.arrayBuffer()));
+  const total = bufs.reduce((n, b) => n + b.byteLength, 0);
+  const joined = new Uint8Array(total);
+  let at = 0;
+  for (const b of bufs) { joined.set(new Uint8Array(b), at); at += b.byteLength; }
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', joined);
+    return size + ':' + [...new Uint8Array(digest).slice(0, 12)]
+      .map((n) => n.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Copies of the same thing.
+ *
+ * Two passes, because "duplicate" means two different things and conflating
+ * them produces a list nobody trusts.
+ *
+ * The first is a *file* duplicate, and it is checked rather than guessed.
+ * Matching byte length and duration is only the cheap filter that decides what
+ * is worth reading; the claim itself is made on a hash of the bytes. That
+ * distinction is not pedantry — an uncompressed WAV of a given length is
+ * *always* the same size, so on a library of WAVs the cheap filter alone
+ * reports every track of the same duration as a copy of every other. It did
+ * exactly that here before this was written.
+ *
+ * The second is the same *recording* in two files: the artist and title match
+ * once punctuation and case are taken out, and the lengths agree to within two
+ * seconds. That catches the FLAC and the MP3 of the same song, and the album
+ * track that is also on a greatest-hits — which is a real duplicate to some
+ * people and not to others, so it is labelled rather than assumed.
+ *
+ * A group is only reported once, under the stronger reason.
+ */
+async function findDuplicates() {
+  const all = lib.allTracks();
+  const groups = [];
+  const claimed = new Set();
+
+  const bySize = new Map();
+  for (const t of all) {
+    if (!t.size || !t.duration) continue;
+    const key = t.size + ':' + Math.round(t.duration);
+    if (!bySize.has(key)) bySize.set(key, []);
+    bySize.get(key).push(t);
+  }
+  for (const list of bySize.values()) {
+    if (list.length < 2) continue;
+    // Same size and length: worth reading. Now find out whether they really
+    // are the same bytes.
+    const byContent = new Map();
+    for (const t of list) {
+      const key = await contentKey(t);
+      // Unreadable, or no crypto: it cannot be claimed as identical, so it
+      // falls through to the tag-based pass like anything else.
+      if (!key) continue;
+      if (!byContent.has(key)) byContent.set(key, []);
+      byContent.get(key).push(t);
+    }
+    for (const same of byContent.values()) {
+      if (same.length < 2) continue;
+      groups.push({ kind: 'file', reason: 'Identical files', tracks: same });
+      for (const t of same) claimed.add(t.id);
+    }
+  }
+
+  const byWork = new Map();
+  for (const t of all) {
+    if (claimed.has(t.id) || !t.duration) continue;
+    // Bucketed to the nearest two seconds, and each track also checked against
+    // the neighbouring bucket, so a pair straddling a boundary still meets.
+    const stem = norm(t.artist) + '|' + norm(t.title);
+    const bucket = Math.round(t.duration / 2);
+    for (const b of [bucket - 1, bucket, bucket + 1]) {
+      const key = stem + '|' + b;
+      if (!byWork.has(key)) byWork.set(key, new Set());
+      byWork.get(key).add(t);
+    }
+  }
+  const seenPair = new Set();
+  for (const set of byWork.values()) {
+    if (set.size < 2) continue;
+    const list = [...set].sort((a, b) => cmpText(a.name, b.name));
+    // The bucket overlap means the same group is built three times over.
+    const sig = list.map((t) => t.id).join(' ');
+    if (seenPair.has(sig)) continue;
+    seenPair.add(sig);
+    if (list.some((t) => claimed.has(t.id))) continue;
+    groups.push({ kind: 'work', reason: 'Same recording', tracks: list });
+    for (const t of list) claimed.add(t.id);
+  }
+
+  // Biggest waste first: that is the order somebody clearing space wants.
+  const waste = (g) => g.tracks.slice(1).reduce((s, t) => s + (t.size || 0), 0);
+  groups.sort((a, b) => waste(b) - waste(a));
+  return groups;
+}
+
+function viewFiles(host) {
+  const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
+    el('h1', { class: 'page-title', text: 'Files' }),
+    el('p', { class: 'page-sub', text: 'The folders on disk, and what is in them twice' }));
+  host.appendChild(head);
+  decode(head.querySelector('.page-title'), 'Files');
+
+  let mode = 'folders';
+  const bar = el('div', { class: 'toolbar' });
+  const seg = el('div', { class: 'segmented', role: 'tablist' });
+  for (const [id, label] of [['folders', 'Folders'], ['dupes', 'Duplicates']]) {
+    seg.appendChild(el('button', {
+      class: 'seg' + (id === mode ? ' is-on' : ''), role: 'tab', text: label,
+      onclick: () => {
+        mode = id;
+        for (const b of seg.children) b.classList.toggle('is-on', b.textContent === label);
+        paint();
+      },
+    }));
+  }
+  bar.appendChild(seg);
+  host.appendChild(bar);
+
+  const body = el('div', { class: 'files-body' });
+  host.appendChild(body);
+
+  /* ---- folders ---- */
+
+  const open = new Set();          // paths currently expanded
+
+  function folderRow(node, depth) {
+    const under = tracksUnder(node);
+    const isOpen = open.has(node.kind + ':' + node.name + ':' + node.path);
+    const key = node.kind + ':' + node.name + ':' + node.path;
+
+    const row = el('div', { class: 'file-row' + (isOpen ? ' is-open' : ''), style: `--depth:${depth}` },
+      el('button', { class: 'file-twist', 'aria-expanded': String(isOpen),
+        'aria-label': isOpen ? 'Collapse' : 'Expand', html: ico('chev-right') }),
+      el('span', { class: 'file-ico', html: ico('folder') }),
+      el('span', { class: 'file-name', text: node.name }),
+      el('span', { class: 'file-count', text: fmtCount(under.length, 'track', 'tracks') }),
+      el('button', { class: 'icon-btn ghost sm', title: 'Play this folder', 'aria-label': `Play ${node.name}`,
+        html: ico('play'), onclick: (e) => {
+          e.stopPropagation();
+          if (under.length) playAll(under, 0, { type: 'folder', label: node.name });
+        } }));
+
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.icon-btn') && !e.target.closest('.file-twist')) return;
+      if (open.has(key)) open.delete(key); else open.add(key);
+      paint();
+    });
+    return row;
+  }
+
+  function paintFolders() {
+    const tree = folderTree();
+    if (!tree.length) {
+      body.appendChild(emptyState({ icon: 'folder', title: 'No folders yet',
+        note: 'Add music and the folders it came from will appear here.' }));
+      return;
+    }
+
+    const walk = (node, depth) => {
+      body.appendChild(folderRow(node, depth));
+      const key = node.kind + ':' + node.name + ':' + node.path;
+      if (!open.has(key)) return;
+      for (const child of [...node.children.values()].sort((a, b) => cmpText(a.name, b.name))) {
+        walk(child, depth + 1);
+      }
+      for (const t of node.tracks.slice().sort((a, b) => cmpText(a.name, b.name))) {
+        body.appendChild(el('div', { class: 'file-row is-track', style: `--depth:${depth + 1}` },
+          el('span', { class: 'file-twist' }),
+          el('span', { class: 'file-ico', html: ico('music') }),
+          el('span', { class: 'file-name', text: t.name }),
+          el('span', { class: 'file-count', text: t.duration ? fmtTime(t.duration) : '--:--' }),
+          el('button', { class: 'icon-btn ghost sm', title: 'Play', 'aria-label': `Play ${t.title}`,
+            html: ico('play'), onclick: () => player.playTracks([t], 0, { type: 'folder', label: node.name }) })));
+      }
+    };
+
+    // One root opens itself: a tree that starts entirely shut is a page of
+    // nothing, and most people have one folder anyway.
+    if (!open.size && tree.length) open.add(tree[0].kind + ':' + tree[0].name + ':' + tree[0].path);
+    for (const root of tree) walk(root, 0);
+  }
+
+  /* ---- duplicates ---- */
+
+  let dupeToken = 0;
+
+  async function paintDupes() {
+    const token = ++dupeToken;
+    // Reading the head and tail of every candidate takes a moment on a real
+    // library, and a page that sits blank while it happens looks broken.
+    const busy = el('p', { class: 'muted dupe-summary', text: 'Comparing files…' });
+    body.appendChild(busy);
+    const groups = await findDuplicates();
+    if (token !== dupeToken || !body.isConnected) return;
+    busy.remove();
+    if (!groups.length) {
+      body.appendChild(emptyState({ icon: 'database', title: 'Nothing duplicated',
+        note: 'No two files in the library look like the same recording.' }));
+      return;
+    }
+
+    const wasted = groups.reduce((s, g) => s + g.tracks.slice(1).reduce((n, t) => n + (t.size || 0), 0), 0);
+    body.appendChild(el('p', { class: 'muted dupe-summary',
+      text: `${fmtCount(groups.length, 'group', 'groups')} · about ${fmtBytes(wasted)} held twice` }));
+
+    for (const g of groups) {
+      const box = el('section', { class: 'dupe-group' });
+      box.appendChild(el('div', { class: 'dupe-head' },
+        el('span', { class: 'dupe-reason' + (g.kind === 'file' ? ' is-hard' : ''), text: g.reason }),
+        el('span', { class: 'dupe-title', text: `${g.tracks[0].artist} — ${g.tracks[0].title}` }),
+        el('span', { class: 'dupe-size', text: fmtBytes(g.tracks.slice(1).reduce((n, t) => n + (t.size || 0), 0)) })));
+
+      for (const t of g.tracks) {
+        box.appendChild(el('div', { class: 'dupe-row' },
+          el('span', { class: 'dupe-path', text: (lib.state.roots.find((r) => r.id === t.rootId)?.name || '?') + ' / ' + (t.path || t.name) }),
+          el('span', { class: 'dupe-spec', text: [formatName(t.name || ''), t.bitrate ? t.bitrate + ' kbps' : null,
+            t.duration ? fmtTime(t.duration) : null, fmtBytes(t.size || 0)].filter(Boolean).join(' · ') }),
+          el('button', { class: 'icon-btn ghost sm', title: 'Play', 'aria-label': `Play ${t.title}`,
+            html: ico('play'), onclick: () => player.playTracks([t], 0, { type: 'dupes', label: 'Duplicates' }) }),
+          el('button', { class: 'icon-btn ghost sm', title: 'Show in library', 'aria-label': 'Show in library',
+            html: ico('album'), onclick: () => { location.hash = '#/album/' + t.albumKey; } })));
+      }
+      body.appendChild(box);
+    }
+
+    /* Deliberately no delete button.
+     *
+     * Sonora reads the disk and does not write to it — nothing in this app has
+     * ever removed one of the listener's files and this page is not where that
+     * should start. Finding the copies is the hard part and is the part worth
+     * doing; deciding which to keep, and doing it, belongs to whoever owns the
+     * files. */
+    body.appendChild(el('p', { class: 'muted dupe-note',
+      text: 'Sonora only reads your files — nothing here deletes anything. Use these paths in your file manager.' }));
+  }
+
+  function paint() {
+    body.textContent = '';
+    if (mode === 'folders') paintFolders(); else paintDupes();
+  }
+
+  paint();
+  enter([head, bar], { y: 10 });
+  const off = lib.events.on('change', paint);
+  return () => off();
+}
+
 const ROUTES = {
   home: viewHome,
+  files: viewFiles,
   songs: viewSongs,
   albums: viewAlbums,
   album: viewAlbum,

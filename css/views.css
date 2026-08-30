@@ -1184,3 +1184,134 @@
   font-variant-numeric: tabular-nums;
 }
 .settings-range:disabled + .settings-value { color: var(--text-3); }
+
+/* ------------------------------------------------------------------ files
+
+   The library as it sits on the disk. Two questions on one page, because they
+   are the same question asked twice: what is actually in these folders, and
+   how much of it is here twice. */
+
+.files-body { display: flex; flex-direction: column; gap: 1px; margin-top: 6px; }
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 12px 0 calc(12px + var(--depth, 0) * 20px);
+  color: var(--text-2);
+  background: rgb(var(--surface-rgb) / .34);
+  cursor: pointer;
+  transition: background var(--dur-1) linear, color var(--dur-1) linear;
+}
+.file-row:hover { background: rgb(var(--accent-rgb) / .08); color: var(--text); }
+.file-row.is-track { cursor: default; background: transparent; }
+.file-row.is-track:hover { background: rgb(var(--accent-rgb) / .06); }
+
+.file-twist {
+  width: 18px; height: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  transition: transform var(--dur-2) var(--ease);
+}
+.file-twist .ico { width: 13px; height: 13px; }
+.file-row.is-open > .file-twist { transform: rotate(90deg); }
+
+.file-ico { flex: none; display: grid; place-items: center; color: var(--text-3); }
+.file-ico .ico { width: 15px; height: 15px; }
+.file-row.is-open > .file-ico { color: var(--accent); }
+
+.file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(13.5px * var(--scale));
+}
+.file-row.is-track .file-name { color: var(--text-3); font-family: var(--mono); font-size: calc(12px * var(--scale)); }
+
+.file-count {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  letter-spacing: .08em;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- duplicates ---- */
+
+.dupe-summary { margin: 4px 0 14px; }
+.dupe-note { margin-top: 18px; font-size: calc(12.5px * var(--scale)); }
+
+.dupe-group {
+  margin-bottom: 12px;
+  background: rgb(var(--surface-rgb) / .4);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.dupe-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: var(--hair) solid var(--line);
+  flex-wrap: wrap;
+}
+.dupe-reason {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 3px 8px;
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+}
+/* An identical file is a fact; the same recording in two files is a judgement.
+   Only the fact gets the accent. */
+.dupe-reason.is-hard { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+
+.dupe-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.dupe-size { flex: none; font-family: var(--mono); font-size: calc(11px * var(--scale)); color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+.dupe-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: var(--hair) solid rgb(120 200 255 / .06);
+}
+.dupe-row:last-child { border-bottom: 0; }
+.dupe-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(11.5px * var(--scale));
+  color: var(--text-2);
+  direction: rtl;            /* keep the filename visible when the path is long */
+  text-align: left;
+}
+.dupe-spec {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  color: var(--text-3);
+  letter-spacing: .04em;
+}
+
+@media (max-width: 620px) {
+  .dupe-spec { display: none; }
+  .file-count { display: none; }
+}

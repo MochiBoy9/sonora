@@ -25,6 +25,7 @@ const NAV = [
   { route: 'artists', label: 'Artists', icon: 'artist' },
   { route: 'favourites', label: 'Favourites', icon: 'star' },
   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
+  { route: 'files', label: 'Files', icon: 'folder' },
   { route: 'circles', label: 'Analysis', icon: 'circles' },
   { route: 'sound', label: 'Sound', icon: 'sliders' },
 ];
