@@ -578,12 +578,16 @@ function viewAlbums(host) {
   /* Two ways to look at a wall of records: as a wall, or as a crate you flip
      through. The choice is remembered, because it is a way of working rather
      than a novelty to be re-chosen every visit. */
+  const MODES = ['grid', 'crate', 'shelf', 'floor'];
   let mode = 'grid';
-  try { mode = localStorage.getItem(ALBUM_VIEW) === 'crate' ? 'crate' : 'grid'; } catch { /* private */ }
+  try {
+    const saved = localStorage.getItem(ALBUM_VIEW);
+    if (MODES.includes(saved)) mode = saved;
+  } catch { /* private */ }
 
   const bar = el('div', { class: 'toolbar' }, el('div', { class: 'segmented', role: 'tablist' }));
   const seg = bar.firstChild;
-  for (const [id, label] of [['grid', 'Grid'], ['crate', 'Crate']]) {
+  for (const [id, label] of [['grid', 'Grid'], ['crate', 'Crate'], ['shelf', 'Shelf'], ['floor', 'Floor']]) {
     seg.appendChild(el('button', {
       class: 'seg' + (id === mode ? ' is-on' : ''), role: 'tab', text: label,
       'aria-selected': id === mode ? 'true' : 'false',
@@ -607,7 +611,11 @@ function viewAlbums(host) {
     }
     try { teardown(); } catch (err) { console.warn(err); }
     slot.textContent = '';
-    teardown = mode === 'crate' ? mountCrate(slot) : mountGrid(slot);
+    host.classList.toggle('albums-floor', mode === 'floor');
+    teardown = mode === 'crate' ? mountCrate(slot)
+             : mode === 'shelf' ? mountShelf(slot)
+             : mode === 'floor' ? mountFloor(slot, host)
+             : mountGrid(slot);
   }
 
   function mountGrid(into) {
@@ -629,6 +637,189 @@ function viewAlbums(host) {
 }
 
 const ALBUM_VIEW = 'sonora:albumview';
+
+/* ------------------------------------------------------------------ shelf */
+
+/**
+ * Records on a shelf, seen edge-on.
+ *
+ * The one way of storing records that every other view here refuses to
+ * consider, and the way almost everybody actually stores them. A wall of
+ * covers is a shop; a shelf of spines is a collection, and reading along it is
+ * a different and older kind of browsing.
+ *
+ * The width of each spine is the album's own thickness — the same `--thick`
+ * the sleeve has been using to decide how far its edge plane sits behind its
+ * face, derived from how many tracks are on the record. Nothing new is
+ * computed; a value that was being used for a shadow is used for a width, and
+ * a double album is visibly fatter than a single.
+ *
+ * The spine turns to face you as you point at it, which is what a hand does to
+ * a record it is considering.
+ */
+function mountShelf(host) {
+  const shelf = el('div', { class: 'shelf-run', role: 'list', 'aria-label': 'Albums by spine' });
+
+  function paint() {
+    shelf.textContent = '';
+    for (const album of lib.state.albums) {
+      const thick = thicknessOf(album);
+      const spine = el('a', {
+        class: 'spine', role: 'listitem', href: '#/album/' + album.key,
+        style: `--thick:${thick.toFixed(3)}`,
+        'aria-label': `${album.title} by ${album.artist}`,
+      },
+        el('span', { class: 'spine-face', style: { background: placeholderStyle(album.key) } }),
+        el('span', { class: 'spine-text' },
+          el('b', { class: 'spine-title', text: album.title }),
+          el('span', { class: 'spine-artist', text: album.artist })),
+        el('span', { class: 'spine-edge', 'aria-hidden': 'true' }));
+
+      // The colour the importer pulled out of the cover, so a shelf of spines
+      // is still recognisably a shelf of *these* records.
+      const rgb = lib.accentFor(album.key);
+      if (rgb) spine.style.setProperty('--spine-rgb', rgb.join(' '));
+      shelf.appendChild(spine);
+    }
+  }
+
+  paint();
+  host.appendChild(shelf);
+  const off = lib.events.on('change', paint);
+  const offArt = lib.events.on('art', paint);
+  return () => { off(); offArt(); };
+}
+
+/* ------------------------------------------------------------------ floor */
+
+/**
+ * The library standing on the world behind it.
+ *
+ * Sonora draws a real 3D room and then floats a flat interface in front of it,
+ * and the two have never touched. Every depth effect so far — the sleeve, the
+ * rack, the crate — happens on the flat layer in its own pocket of perspective.
+ * This puts the records on the backdrop's own ground plane, so the world is a
+ * place the library is standing in rather than wallpaper behind it.
+ *
+ * Three things had to be answered, and each answer is also a design decision:
+ *
+ *   Legibility. Titles at the far plane are unreadable, so titles do not
+ *   recede at all — they fade out past the third row. Distant rows become
+ *   covers only, which is what a room full of records actually looks like.
+ *
+ *   Scroll length. Perspective compresses, so a three-hundred-album library
+ *   would become a corridor nobody reaches the end of. The Z range is bounded:
+ *   past the far plane rows stop receding and the list scrolls linearly.
+ *
+ *   Hit testing. The browser inverts the transform for clicks, so those still
+ *   land — but keyboard order and drag-selection stop matching what the eye
+ *   sees. That is why this is a fourth mode beside Grid, Crate and Shelf and
+ *   never the only way to see the library.
+ */
+function mountFloor(host, viewport) {
+  const PER_ROW = 4;                  // albums across
+  const ROW_DEPTH = 210;              // px of Z between rows
+  const FAR = 6;                      // rows past which nothing recedes further
+  const NEAR_ROWS = 3;                // rows that still get a readable title
+
+  const stage = el('div', { class: 'floor', 'aria-label': 'Albums on the floor' });
+  const camera = el('div', { class: 'floor-camera' });
+  stage.appendChild(camera);
+
+  let rows = [];
+  let items = [];
+
+  function build() {
+    items = lib.state.albums;
+    camera.textContent = '';
+    rows = [];
+    for (let i = 0; i < items.length; i += PER_ROW) {
+      const row = el('div', { class: 'floor-row' });
+      for (const album of items.slice(i, i + PER_ROW)) {
+        const card = el('a', {
+          class: 'floor-card', href: '#/album/' + album.key,
+          'aria-label': `${album.title} by ${album.artist}`,
+        },
+          el('span', { class: 'floor-art', style: { background: placeholderStyle(album.key) } },
+            el('img', { class: 'art-img', alt: '', decoding: 'async', loading: 'lazy' })),
+          el('span', { class: 'floor-text' },
+            el('b', { text: album.title }),
+            el('span', { text: album.artist })));
+        paintArt(card.querySelector('.art-img'), album.key);
+        row.appendChild(card);
+      }
+      camera.appendChild(row);
+      rows.push(row);
+    }
+    place();
+  }
+
+  /* Where each row sits, written once per scroll rather than per frame.
+   *
+   * The camera moves forward through a fixed arrangement instead of the rows
+   * moving past a fixed camera — the same thing to look at, and much cheaper
+   * to think about: a row's Z is a function of its index and the scroll
+   * position, and nothing has to be animated. */
+  let raf = 0;
+  function place() {
+    raf = 0;
+    if (!rows.length) return;
+    const scrolled = viewport.scrollTop;
+    // One row per this many pixels of scroll.
+    const advance = scrolled / ROW_DEPTH;
+
+    for (let i = 0; i < rows.length; i++) {
+      const d = i - advance;                       // rows ahead of the camera
+      // Bounded: past the far plane rows stop receding, so a long library is a
+      // long list rather than an infinitely compressed corridor.
+      const z = -Math.min(d, FAR) * ROW_DEPTH;
+      const near = d < NEAR_ROWS;
+      const row = rows[i];
+
+      // Rows well behind the camera are not drawn at all.
+      if (d < -1.2 || d > FAR + 3) {
+        if (row.style.visibility !== 'hidden') row.style.visibility = 'hidden';
+        continue;
+      }
+      if (row.style.visibility) row.style.removeProperty('visibility');
+
+      row.style.transform = `translate3d(-50%, 0, ${z.toFixed(1)}px)`;
+      // Depth fade, so the far end goes into the room rather than stopping.
+      row.style.opacity = String(Math.max(0, Math.min(1, 1 - Math.max(0, d) / (FAR + 2.5))).toFixed(3));
+      row.classList.toggle('is-near', near);
+    }
+  }
+
+  const onScroll = () => { if (!raf) raf = requestAnimationFrame(place); };
+  viewport.addEventListener('scroll', onScroll, { passive: true });
+
+  // The stage has to be tall enough to scroll through every row.
+  function resize() {
+    stage.style.height = `${Math.max(1, Math.ceil(items.length / PER_ROW)) * ROW_DEPTH + viewport.clientHeight * 0.4}px`;
+  }
+  const ro = new ResizeObserver(() => { resize(); place(); });
+  ro.observe(viewport);
+
+  build();
+  resize();
+  host.appendChild(stage);
+  place();
+
+  const off = lib.events.on('change', () => { build(); resize(); });
+  const offArt = lib.events.on('art', () => {
+    for (const row of rows) {
+      for (const img of row.querySelectorAll('.art-img')) {
+        if (img.dataset.key) paintArt(img, img.dataset.key);
+      }
+    }
+  });
+
+  return () => {
+    off(); offArt(); ro.disconnect();
+    viewport.removeEventListener('scroll', onScroll);
+    if (raf) cancelAnimationFrame(raf);
+  };
+}
 
 /* ------------------------------------------------------------------ crate */
 
