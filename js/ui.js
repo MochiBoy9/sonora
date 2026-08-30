@@ -422,8 +422,104 @@ export function trackMenu(tracks, opts = {}) {
     opts.onRemove && { separator: true },
     opts.onRemove && { label: opts.removeLabel || 'Remove', icon: 'trash', danger: true, onSelect: opts.onRemove },
     { separator: true },
+    tracks.length && {
+      label: tracks.length > 1 ? `Edit details for ${tracks.length} tracks…` : 'Edit details…',
+      icon: 'edit',
+      onSelect: () => editDialog(tracks),
+    },
     first && { label: 'Track info', icon: 'info', onSelect: () => infoDialog(first) },
   ].filter(Boolean);
+}
+
+/* ------------------------------------------------------------------ editing */
+
+const EDIT_FIELDS = [
+  ['title', 'Title', 'text'],
+  ['artist', 'Artist', 'text'],
+  ['albumArtist', 'Album artist', 'text'],
+  ['album', 'Album', 'text'],
+  ['genre', 'Genre', 'text'],
+  ['track', 'Track no.', 'number'],
+  ['disc', 'Disc', 'number'],
+  ['year', 'Year', 'number'],
+];
+
+/**
+ * Correct what a track says about itself.
+ *
+ * Edits go into Sonora's index and never into the file — see the note in
+ * library.js for why that is a decision rather than an omission. The dialog
+ * says so, because a listener is entitled to know whether the thing they just
+ * typed has been written to their disk.
+ *
+ * Over several tracks, a field where they already agree shows the shared value
+ * and a field where they differ shows nothing and is left alone unless typed
+ * into. That is the only behaviour that lets somebody fix the album name on
+ * forty tracks without flattening forty different titles into one.
+ */
+export function editDialog(tracks) {
+  if (!tracks || !tracks.length) return;
+  const many = tracks.length > 1;
+  const body = el('div', { class: 'edit-form' });
+  const inputs = new Map();
+  const mixed = new Set();
+
+  for (const [key, label, type] of EDIT_FIELDS) {
+    const values = new Set(tracks.map((t) => String(t[key] ?? '')));
+    const shared = values.size === 1 ? [...values][0] : '';
+    if (values.size > 1) mixed.add(key);
+
+    const input = el('input', {
+      type, class: 'input', value: shared === '0' && type === 'number' ? '' : shared,
+      placeholder: values.size > 1 ? '— several —' : '',
+      'aria-label': label,
+    });
+    inputs.set(key, input);
+
+    const edited = tracks.some((t) => t.edits && t.edits[key] !== undefined);
+    body.appendChild(el('label', { class: 'edit-field' + (edited ? ' is-edited' : '') },
+      el('span', { class: 'edit-label', text: label },
+        edited ? el('button', {
+          class: 'edit-revert', type: 'button', title: 'Use what the file says',
+          text: 'revert',
+          onclick: async (e) => {
+            e.preventDefault();
+            await lib.editTracks(tracks, { [key]: null });
+            const back = new Set(tracks.map((t) => String(t[key] ?? '')));
+            input.value = back.size === 1 ? [...back][0] : '';
+            e.currentTarget.closest('.edit-field').classList.remove('is-edited');
+            toast('Reverted to the file');
+          },
+        }) : null),
+      input));
+  }
+
+  body.appendChild(el('p', { class: 'edit-note',
+    text: 'Saved in Sonora only. Your files are never modified — a rescan keeps these corrections.' }));
+
+  dialog({
+    title: many ? `Edit ${tracks.length} tracks` : 'Edit details',
+    body,
+    width: 460,
+    actions: [
+      { label: 'Cancel' },
+      {
+        label: 'Save', primary: true,
+        onSelect: async () => {
+          const patch = {};
+          for (const [key, , type] of EDIT_FIELDS) {
+            const raw = inputs.get(key).value.trim();
+            // A field that was blank because the tracks disagreed, and was not
+            // typed into, must not overwrite forty different values with "".
+            if (mixed.has(key) && raw === '') continue;
+            patch[key] = type === 'number' ? (parseInt(raw, 10) || null) : raw;
+          }
+          const n = await lib.editTracks(tracks, patch);
+          toast(n ? `Updated ${n === 1 ? 'track' : n + ' tracks'}` : 'Nothing changed');
+        },
+      },
+    ],
+  });
 }
 
 /* ------------------------------------------------------------------ dialogs */

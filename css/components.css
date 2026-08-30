@@ -1139,3 +1139,56 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 @media (max-width: 560px) {
   .selbar { bottom: calc(var(--player-h) + 58px + 14px); }
 }
+
+/* ---------------------------------------------------------------- edit form
+
+   Correcting what a track says about itself. The note at the bottom is not
+   decoration: a listener is entitled to know whether what they just typed has
+   been written to their disk. */
+.edit-form { display: grid; gap: 12px; }
+
+.edit-field { display: grid; gap: 5px; }
+.edit-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+/* A field carrying an override is marked, so it is obvious which values came
+   from the file and which came from you. */
+.edit-field.is-edited .edit-label { color: var(--accent); }
+.edit-field.is-edited .input { box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+
+.edit-revert {
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  border-bottom: var(--hair) solid transparent;
+  transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
+}
+.edit-revert:hover { color: var(--accent); border-bottom-color: var(--accent-line); }
+
+.edit-note {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: calc(12px * var(--scale));
+  line-height: 1.5;
+}
+
+@media (min-width: 520px) {
+  /* The short numeric fields sit three to a row rather than each taking a
+     line of their own. */
+  .edit-form {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .edit-field:nth-child(-n+5) { grid-column: 1 / -1; }
+  .edit-note { grid-column: 1 / -1; }
+}
