@@ -1161,3 +1161,26 @@
 @media (prefers-reduced-motion: reduce) {
   .crate-item { transition: none; }
 }
+
+/* ------------------------------------------------------------------ playback
+
+   The crossfade slider. Wide enough to aim with, and the readout beside it is
+   tabular so the number does not shuffle sideways as it changes. */
+.settings-slider { gap: 12px; }
+
+.settings-range {
+  width: clamp(120px, 22vw, 220px);
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.settings-range:disabled { opacity: .4; cursor: default; }
+
+.settings-value {
+  min-width: 6ch;
+  font-family: var(--mono);
+  font-size: calc(11.5px * var(--scale));
+  letter-spacing: .06em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.settings-range:disabled + .settings-value { color: var(--text-3); }

@@ -1,11 +1,17 @@
 /* player.js — playback, queue, and the Web Audio graph.
  *
- * One <audio> element does the decoding; a second, silent one warms the next
- * track's object URL so track changes are instant. Volume runs through a
- * GainNode on a perceptual curve rather than the element's linear property,
- * and an AnalyserNode feeds the visualiser — banded onto a logarithmic scale
- * once per frame, because that is how hearing is arranged and how a spectrum
- * has to be drawn for the bars to line up with what you can hear.
+ * Two <audio> elements do the decoding, wired in parallel into one volume
+ * control. One of them is the one you are hearing; the other is already
+ * holding the next track, decoded and paused at zero. That is what makes the
+ * handover between tracks cost milliseconds instead of however long the next
+ * file takes to open, and it is the whole of both gapless and crossfade — see
+ * the deck section below.
+ *
+ * Volume runs through a GainNode on a perceptual curve rather than the
+ * element's linear property, and an AnalyserNode feeds the visualiser — banded
+ * onto a logarithmic scale once per frame, because that is how hearing is
+ * arranged and how a spectrum has to be drawn for the bars to line up with
+ * what you can hear.
  */
 
 import * as lib from './library.js';
@@ -30,24 +36,87 @@ export const state = {
   queue: [],              // track ids in play order
   index: -1,
   origin: null,           // { type, key, label } — where the queue came from
+  /* Seconds of overlap between tracks. Zero is gapless: the next deck starts
+     the instant the last one ends, which is what a live album or a beat-mixed
+     record needs. Above zero they overlap on an equal-power curve. */
+  crossfade: 0,
+  /* Whether to run the handover at all. Off means the old behaviour: wait for
+     `ended`, then load the next file. Kept because a listener who wants the
+     silence between tracks is entitled to it, and because an album with real
+     silence at the end of a track sounds wrong crossfaded. */
+  seamless: true,
 };
 
-const audio = new Audio();
-audio.preload = 'auto';
-audio.crossOrigin = 'anonymous';
+/** The longest overlap on offer. Past this it stops being a crossfade. */
+export const MAX_CROSSFADE = 12;
 
-const preloader = new Audio();
-preloader.preload = 'auto';
-preloader.muted = true;
+/* ------------------------------------------------------------------ decks
+ *
+ * Two decoders, not one, and everything about gapless and crossfade follows
+ * from that. A single <audio> element cannot hand over to itself: setting
+ * `src` tears down the decode, and whatever it was doing stops for as long as
+ * the next file takes to open. That gap is why a live album has holes in it.
+ *
+ * So there are two, wired in parallel into the same volume control, and one of
+ * them is the one you are hearing. The other spends its time already holding
+ * the next track, decoded and paused at zero — which is the whole trick: at
+ * the handover there is nothing left to load, only a `play()` and a gain.
+ *
+ * Gapless and crossfade are the same mechanism with one number changed. At
+ * zero seconds the outgoing deck is cut and the incoming one started at the
+ * boundary; above zero they overlap and trade places on an equal-power curve.
+ * There is no separate code path, which is why turning crossfade down to zero
+ * gives you gapless rather than something subtly different.
+ */
 
-let currentURL = null;
-let preloadURL = null;
-let preloadId = null;
+function makeDeck(name) {
+  const el = new Audio();
+  el.preload = 'auto';
+  el.crossOrigin = 'anonymous';
+  return { name, el, url: null, trackId: null, src: null, gain: null };
+}
+
+const deckA = makeDeck('a');
+const deckB = makeDeck('b');
+
+/** The deck being heard, and the one holding what comes next. */
+let deck = deckA;
+let idleDeck = deckB;
+
+/* Every existing reference in this file reads `audio`, and it keeps meaning
+   "the element that is playing" — it is reassigned when the decks swap. */
+let audio = deck.el;
+
 let loadToken = 0;
+/* Set while a handover is in progress, so the ticker does not start a second
+   one and `ended` does not fire a redundant `next()`. */
+let handover = null;
+
+/**
+ * What the two decks are doing, for the tests and for a bad afternoon.
+ *
+ * The same idea as `rack.__debug()`: a handover is three things happening at
+ * once on two elements and a pair of gains, and none of it is visible from the
+ * outside once it has gone right or wrong.
+ */
+export const __decks = () => [deckA, deckB].map((d) => ({
+  name: d.name,
+  active: d === deck,
+  trackId: d.trackId,
+  ready: d.el.readyState,
+  paused: d.el.paused,
+  time: +(d.el.currentTime || 0).toFixed(3),
+  duration: isFinite(d.el.duration) ? +d.el.duration.toFixed(3) : null,
+  gain: d.gain ? +d.gain.gain.value.toFixed(3) : null,
+  err: d.el.error ? d.el.error.code : null,
+}));
+
+/** Whether a handover is in flight, and to what. */
+export const __handover = () => (handover ? { id: handover.id, from: handover.from.name, to: handover.to.name } : null);
 
 /* ------------------------------------------------------------------ graph */
 
-let ctx = null, gain = null, analyser = null, source = null;
+let ctx = null, gain = null, analyser = null;
 let freqData = null, timeData = null;
 
 /** How many bands the analysis is folded into, and the range they cover. */
@@ -179,8 +248,20 @@ function ensureGraph() {
   if (!AC) return false;
   try {
     ctx = new AC();
-    source = ctx.createMediaElementSource(audio);
+    /* One source per deck, each behind its own gain, both summed into the
+       shared volume control. The crossfade happens on those two deck gains and
+       nowhere else, so it cannot be heard by the equaliser, the meter or the
+       visualiser as anything other than what it is: two records playing at
+       once for a moment. */
+    for (const d of [deckA, deckB]) {
+      d.src = ctx.createMediaElementSource(d.el);
+      d.gain = ctx.createGain();
+      d.gain.gain.value = d === deck ? 1 : 0;
+      d.src.connect(d.gain);
+    }
     gain = ctx.createGain();
+    deckA.gain.connect(gain);
+    deckB.gain.connect(gain);
     analyser = ctx.createAnalyser();
     // 2048 buys ~23 Hz of resolution at 48 kHz: enough to separate the bass
     // bands, cheap enough to read every frame.
@@ -195,7 +276,7 @@ function ensureGraph() {
     // spectrum on screen is the sound leaving the speakers rather than the
     // sound leaving the file: turn the bass up and the bars agree with you.
     const fx = rack.attach(ctx, audio);
-    source.connect(gain).connect(fx.input);
+    gain.connect(fx.input);
     fx.output.connect(analyser).connect(ctx.destination);
 
     /* The meter is tapped *before* the rack, and that is the whole point of it
@@ -326,6 +407,66 @@ const view = {
 
 function revoke(url) { if (url) URL.revokeObjectURL(url); }
 
+/** Puts a track's file on a deck and waits until it can actually play. */
+async function cueDeck(d, track) {
+  const file = await lib.fileFor(track.id);
+  if (!file) return false;
+  const url = URL.createObjectURL(file);
+  releaseDeck(d);
+  d.url = url;
+  d.trackId = track.id;
+  d.el.src = url;
+  d.el.load();
+  // Ready enough to start without stalling. A deck that is merely `src`-set
+  // still has to open the file, and starting one at the handover is the whole
+  // reason there are two.
+  if (d.el.readyState < 3) {
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        d.el.removeEventListener('canplay', finish);
+        d.el.removeEventListener('error', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, 4000);
+      d.el.addEventListener('canplay', finish);
+      d.el.addEventListener('error', finish);
+    });
+  }
+  return d.trackId === track.id;
+}
+
+/** Frees whatever a deck was holding. */
+function releaseDeck(d) {
+  revoke(d.url);
+  d.url = null;
+  d.trackId = null;
+}
+
+/** Immediately, with no fade: used for manual track changes. */
+function cutTo(d) {
+  const t = ctx ? ctx.currentTime : 0;
+  for (const x of [deckA, deckB]) {
+    if (!x.gain) continue;
+    x.gain.gain.cancelScheduledValues(t);
+    x.gain.gain.setValueAtTime(x === d ? 1 : 0, t);
+  }
+  if (d !== deck) {
+    const old = deck;
+    deck = d;
+    idleDeck = old;
+    audio = deck.el;
+    old.el.pause();
+    // The rack drives speed and pitch preservation through the element, and it
+    // is a different element now.
+    rack.bindElement(audio);
+    rack.apply();
+  }
+}
+
 async function load(track, autoplay, { count = true } = {}) {
   // A container this browser has no decoder for is a dead end, and saying so is
   // better than a silent skip the listener has to work out for themselves.
@@ -352,28 +493,30 @@ async function load(track, autoplay, { count = true } = {}) {
   events.emit('track', track);
   events.emit('state');
 
-  let url = null;
-  if (preloadId === track.id && preloadURL) {         // already warmed
-    url = preloadURL;
-    preloadURL = null; preloadId = null;
+  /* A manual change cancels any handover in flight — pressing next during a
+     crossfade should land on what was asked for, not on whatever the fade was
+     already heading towards. */
+  cancelHandover();
+
+  /* The idle deck may already be holding exactly this track, because the
+     previous one warmed it. Then there is nothing to load: swap and go. */
+  if (idleDeck.trackId === track.id && idleDeck.el.readyState >= 2) {
+    const incoming = idleDeck;
+    try { incoming.el.currentTime = 0; } catch { /* not seekable yet */ }
+    cutTo(incoming);
   } else {
-    const file = await lib.fileFor(track.id);
+    const ok = await cueDeck(deck, track);
     if (token !== loadToken) return;
-    if (!file) {
+    if (!ok) {
       state.loading = false;
       events.emit('unavailable', track);
       events.emit('state');
       return skipForward();
     }
-    url = URL.createObjectURL(file);
+    cutTo(deck);
   }
 
-  revoke(currentURL);
-  currentURL = url;
-  audio.src = url;
-
   try {
-    audio.load();
     if (autoplay) await play();
   } catch (err) {
     if (token === loadToken) { state.loading = false; events.emit('state'); }
@@ -387,17 +530,207 @@ async function load(track, autoplay, { count = true } = {}) {
   warmNext();
 }
 
-/** Pre-opens the next file so pressing "next" doesn't wait on the disk. */
+/**
+ * Puts the next track on the idle deck, decoded and paused at zero.
+ *
+ * This used to be a hint to the disk cache — an object URL on a muted element
+ * nobody listened to. It is now the thing that makes the handover possible:
+ * the deck is genuinely loaded and one `play()` away, which is why a gapless
+ * transition costs milliseconds rather than however long the file takes to
+ * open.
+ */
 async function warmNext() {
   const nextTrack = peek(1);
-  if (!nextTrack || nextTrack.id === preloadId) return;
-  revoke(preloadURL);
-  preloadURL = null; preloadId = null;
-  const file = await lib.fileFor(nextTrack.id);
-  if (!file) return;
-  preloadURL = URL.createObjectURL(file);
-  preloadId = nextTrack.id;
-  preloader.src = preloadURL;                          // nudges the disk cache
+  if (!nextTrack) return;
+  if (idleDeck.trackId === nextTrack.id) return;
+  if (!canDecode(nextTrack.name || nextTrack.path || '')) return;
+  const target = idleDeck;
+  await cueDeck(target, nextTrack);
+  // Held at the start, silent, until the handover wants it.
+  if (target.trackId === nextTrack.id) {
+    try { target.el.currentTime = 0; } catch { /* not seekable yet */ }
+    target.el.pause();
+  }
+}
+
+/* ------------------------------------------------------------------ handover
+ *
+ * Where gapless and crossfade actually happen.
+ *
+ * Checked once a frame off the shared ticker, against the audio clock rather
+ * than a timer: `setTimeout` in a background tab is clamped to a second or
+ * more, which is an eternity when the whole point is to be seamless.
+ *
+ * At zero crossfade the incoming deck is started as the outgoing one runs out
+ * and the gains are swapped at the boundary — the residual gap is one frame,
+ * against the several hundred milliseconds a re-`src` costs. Above zero the
+ * two overlap for the requested time on an equal-power curve, so the sum holds
+ * its loudness through the middle instead of dipping.
+ */
+
+function cancelHandover() {
+  if (!handover) return;
+  const { from, to, timer } = handover;
+  handover = null;
+  clearTimeout(timer);
+  /* Whatever the fade was doing to either gain, stop it and put the decks back
+     where they belong: the one being heard at full, the other silent. Leaving
+     a scheduled ramp behind is how a cancelled crossfade turns into a track
+     that fades itself out thirty seconds later. */
+  if (ctx) {
+    const t = ctx.currentTime;
+    for (const d of [from, to]) {
+      if (!d || !d.gain) continue;
+      d.gain.gain.cancelScheduledValues(t);
+      d.gain.gain.setValueAtTime(d === deck ? 1 : 0, t);
+    }
+  }
+}
+
+/** Seconds of overlap actually usable for this pair of tracks. */
+function fadeFor(remaining, nextDuration) {
+  if (!state.seamless) return -1;
+  const want = clamp(state.crossfade, 0, MAX_CROSSFADE);
+  if (!want) return 0;
+  // Never fade for longer than either track can afford. A ten-second overlap
+  // on a nine-second interlude would start it before the previous track's
+  // chorus had finished.
+  return Math.max(0, Math.min(want, nextDuration ? nextDuration * 0.4 : want));
+}
+
+/* How far out the handover is armed. The poll only has to land somewhere in
+   this second and a half; a timer does the actual timing. */
+const ARM_WINDOW = 1.5;
+
+/**
+ * Polled once a frame. Arms the handover; it does not perform it.
+ *
+ * The obvious version fires the swap directly from the poll, and it is too
+ * fragile to ship: gapless has to start the next deck within a few tens of
+ * milliseconds of the last one ending, and a poll that misses that window —
+ * one dropped frame, a busy machine, a throttled tab — misses the handover
+ * entirely and the track ends in silence. Observed, not theorised.
+ *
+ * So the poll only has to notice that the end is *approaching*, anywhere in a
+ * second and a half, and then a single timer does the timing. A timeout in a
+ * foreground tab lands within a few milliseconds, and it does not care whether
+ * frames are being drawn.
+ */
+function maybeHandover() {
+  if (!state.seamless || handover || !state.playing) return;
+  if (state.repeat === 'one') return;
+  const d = state.duration || audio.duration || 0;
+  if (!d || !isFinite(d)) return;
+
+  const nextTrack = peek(1);
+  if (!nextTrack) return;
+  // The deck has to be holding the right track and be ready to play it.
+  if (idleDeck.trackId !== nextTrack.id || idleDeck.el.readyState < 3) return;
+
+  const remaining = d - audio.currentTime;
+  if (remaining <= 0 || remaining > MAX_CROSSFADE + ARM_WINDOW) return;
+
+  const fade = fadeFor(remaining, nextTrack.duration || 0);
+  if (fade < 0) return;
+  if (remaining > fade + ARM_WINDOW) return;
+
+  armHandover(nextTrack, fade, Math.max(0, remaining - fade));
+}
+
+function armHandover(nextTrack, fade, delaySeconds) {
+  const from = deck;
+  const to = idleDeck;
+  const timer = setTimeout(() => beginHandover(nextTrack, fade, from, to),
+                           Math.round(delaySeconds * 1000));
+  handover = { from, to, id: nextTrack.id, timer, armed: true };
+}
+
+function beginHandover(nextTrack, fade, from, to) {
+  // Everything may have moved since the timer was set: a seek backwards, a
+  // manual skip, a pause. Re-check rather than trusting a 1.5-second-old plan.
+  if (!handover || handover.to !== to || handover.from !== from) return;
+  if (!state.playing || deck !== from || idleDeck.trackId !== nextTrack.id) {
+    cancelHandover();
+    return;
+  }
+  handover.armed = false;
+
+  {
+    const t = ctx ? ctx.currentTime : 0;
+
+    if (ctx && from.gain && to.gain) {
+      from.gain.gain.cancelScheduledValues(t);
+      to.gain.gain.cancelScheduledValues(t);
+      if (fade > 0) {
+        /* Equal power, in eight steps. `setValueCurveAtTime` would be the
+           tidier call and it cannot be used here: it refuses to overlap an
+           earlier curve on the same param, and a listener who presses next
+           mid-fade produces exactly that. */
+        const steps = 8;
+        const upCurve = [], downCurve = [];
+        for (let i = 0; i <= steps; i++) {
+          const x = i / steps;
+          upCurve.push(Math.sin(x * Math.PI / 2));
+          downCurve.push(Math.cos(x * Math.PI / 2));
+        }
+        to.gain.gain.setValueAtTime(0, t);
+        from.gain.gain.setValueAtTime(from.gain.gain.value, t);
+        for (let i = 0; i <= steps; i++) {
+          const at = t + (fade * i) / steps;
+          to.gain.gain.linearRampToValueAtTime(upCurve[i], at);
+          from.gain.gain.linearRampToValueAtTime(downCurve[i], at);
+        }
+      } else {
+        to.gain.gain.setValueAtTime(1, t);
+        from.gain.gain.setValueAtTime(0, t);
+      }
+    }
+
+    to.el.play().catch(() => {});
+    finishHandover(nextTrack, from, to, fade);
+  }
+}
+
+/**
+ * Moves the app's idea of "current" onto the incoming deck.
+ *
+ * Done as the fade starts rather than when it ends, deliberately: the track
+ * you can hear coming up is the one the transport, the title and the media
+ * session should already be describing. The outgoing deck is left running
+ * until its own fade is over and is then parked.
+ */
+function finishHandover(track, from, to, fade) {
+  const token = ++loadToken;
+  commitMeter();
+
+  deck = to;
+  idleDeck = from;
+  audio = to.el;
+  rack.bindElement(audio);
+  rack.apply();
+
+  state.index = Math.min(state.index + 1, state.queue.length - 1);
+  state.current = track;
+  state.time = to.el.currentTime || 0;
+  state.duration = track.duration || to.el.duration || 0;
+  resetMeter(track);
+  events.emit('track', track);
+  events.emit('queue');
+  events.emit('state');
+  updateMediaSession(track);
+  lib.notePlay(track);
+  peakmap.warm(track, 'wave');
+
+  // Park the outgoing deck once its fade has finished, then warm what's next.
+  const parkIn = Math.max(60, fade * 1000 + 120);
+  setTimeout(() => {
+    if (token !== loadToken) return;
+    from.el.pause();
+    try { from.el.currentTime = 0; } catch { /* fine */ }
+    releaseDeck(from);
+    handover = null;
+    warmNext();
+  }, parkIn);
 }
 
 /* ------------------------------------------------------------------ control */
@@ -419,7 +752,12 @@ export async function play() {
 }
 
 export function pause() {
-  audio.pause();
+  /* Both of them. Mid-crossfade there are two decks making sound, and pausing
+     only the one the transport calls "current" leaves the other playing to
+     the end of the fade with nothing on screen to explain it. */
+  cancelHandover();
+  deckA.el.pause();
+  deckB.el.pause();
   state.playing = false;
   events.emit('state');
 }
@@ -428,6 +766,9 @@ export function toggle() { state.playing ? pause() : play(); }
 
 export function seek(seconds) {
   if (!state.current) return;
+  /* An armed handover was timed against where the playhead used to be. Seeking
+     backwards would leave it to fire mid-track and change the record on you. */
+  if (handover && handover.armed) cancelHandover();
   const d = state.duration || audio.duration || 0;
   audio.currentTime = clamp(seconds, 0, Math.max(0, d - 0.05));
   state.time = audio.currentTime;
@@ -455,6 +796,29 @@ export function setShuffle(on) {
   if (state.shuffle) buildShuffle(); else restoreOrder();
   db.setKV('shuffle', state.shuffle).catch(() => {});
   events.emit('queue');
+}
+
+/**
+ * Seconds of overlap between tracks. Zero is gapless.
+ *
+ * One control for both, because they are one mechanism: at zero the next deck
+ * starts as the last one ends, and above zero they overlap. Anyone reaching
+ * for "gapless" and anyone reaching for "crossfade" is reaching for the same
+ * knob at two of its positions.
+ */
+export function setCrossfade(seconds) {
+  state.crossfade = clamp(Number(seconds) || 0, 0, MAX_CROSSFADE);
+  db.setKV('crossfade', state.crossfade).catch(() => {});
+  events.emit('state');
+}
+
+/** Whether tracks run into each other at all. Off restores the plain gap. */
+export function setSeamless(on) {
+  state.seamless = on === undefined ? !state.seamless : !!on;
+  if (!state.seamless) cancelHandover();
+  db.setKV('seamless', state.seamless).catch(() => {});
+  syncHandoverWatch();
+  events.emit('state');
 }
 
 export function cycleRepeat() {
@@ -675,52 +1039,90 @@ export function playTracks(tracks, startIndex = 0, origin = null) {
 
 /* ------------------------------------------------------------------ element */
 
-audio.addEventListener('loadedmetadata', () => {
-  const real = audio.duration;
-  state.loading = false;
-  // `preservesPitch` is reset by some engines when a new source loads, and a
-  // speed setting that silently stops preserving pitch between tracks is worse
-  // than one that never worked.
-  rack.apply();
-  if (isFinite(real) && real > 0) {
-    state.duration = real;
-    const t = state.current;
-    // Container-derived durations can be estimates; trust the decoder instead.
-    if (t && Math.abs((t.duration || 0) - real) > 1.2) {
-      t.duration = Math.round(real * 10) / 10;
-      db.putTracks([t]).catch(() => {});
-      lib.events.emit('change');
+/* Both decks are wired identically and every handler asks the same first
+   question: are you the deck being heard? The idle deck loads, buffers, ends
+   and errors all the time, and none of that is the transport's business —
+   before the decks existed there was one element and the question did not need
+   asking, which is exactly why forgetting it here would be so quiet. */
+for (const d of [deckA, deckB]) {
+  const mine = () => d === deck;
+
+  d.el.addEventListener('loadedmetadata', () => {
+    if (!mine()) return;
+    const real = d.el.duration;
+    state.loading = false;
+    // `preservesPitch` is reset by some engines when a new source loads, and a
+    // speed setting that silently stops preserving pitch between tracks is worse
+    // than one that never worked.
+    rack.apply();
+    if (isFinite(real) && real > 0) {
+      state.duration = real;
+      const t = state.current;
+      // Container-derived durations can be estimates; trust the decoder instead.
+      if (t && Math.abs((t.duration || 0) - real) > 1.2) {
+        t.duration = Math.round(real * 10) / 10;
+        db.putTracks([t]).catch(() => {});
+        lib.events.emit('change');
+      }
     }
-  }
-  events.emit('state');
-});
+    events.emit('state');
+  });
 
-audio.addEventListener('timeupdate', () => {
-  state.time = audio.currentTime;
-  events.emit('time', state.time);
-});
+  d.el.addEventListener('timeupdate', () => {
+    if (!mine()) return;
+    state.time = d.el.currentTime;
+    events.emit('time', state.time);
+  });
 
-audio.addEventListener('ended', () => next(true));
-audio.addEventListener('play', () => { state.playing = true; syncMeter(); events.emit('state'); });
-audio.addEventListener('pause', () => { state.playing = false; syncMeter(); events.emit('state'); });
-audio.addEventListener('waiting', () => { state.loading = true; events.emit('state'); });
-audio.addEventListener('playing', () => { state.loading = false; events.emit('state'); });
-audio.addEventListener('error', () => {
-  state.loading = false;
-  if (!state.current) return;
-  // The decoder is the authority on what it can decode, so a failure here is
-  // what teaches the library that this format is out of reach; the row picks
-  // the flag up the next time it renders.
-  const err = audio.error;
-  if (err && (err.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
-              err.code === MediaError.MEDIA_ERR_DECODE)) {
-    state.current.undecodable = true;
-  }
-  events.emit('error', state.current);
-  // next(true) would honour repeat-one and retry the same unreadable file for
-  // as long as anyone was willing to watch it.
-  skipForward();
-});
+  d.el.addEventListener('ended', () => {
+    if (!mine()) return;
+    // A handover already moved everything onto the other deck; this is just
+    // the old one running out behind the fade.
+    if (handover) return;
+    next(true);
+  });
+
+  d.el.addEventListener('play', () => { if (mine()) { state.playing = true; syncMeter(); events.emit('state'); } });
+  d.el.addEventListener('pause', () => {
+    // A deck paused *by* a handover is not the transport stopping.
+    if (!mine() || handover) return;
+    state.playing = false; syncMeter(); events.emit('state');
+  });
+  d.el.addEventListener('waiting', () => { if (mine()) { state.loading = true; events.emit('state'); } });
+  d.el.addEventListener('playing', () => { if (mine()) { state.loading = false; events.emit('state'); } });
+
+  d.el.addEventListener('error', () => {
+    // An idle deck that cannot open the next file simply is not offered for a
+    // handover; the ordinary path will report it when it gets there.
+    if (!mine()) { releaseDeck(d); return; }
+    state.loading = false;
+    if (!state.current) return;
+    // The decoder is the authority on what it can decode, so a failure here is
+    // what teaches the library that this format is out of reach; the row picks
+    // the flag up the next time it renders.
+    const err = d.el.error;
+    if (err && (err.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+                err.code === MediaError.MEDIA_ERR_DECODE)) {
+      state.current.undecodable = true;
+    }
+    events.emit('error', state.current);
+    // next(true) would honour repeat-one and retry the same unreadable file for
+    // as long as anyone was willing to watch it.
+    skipForward();
+  });
+}
+
+/* The handover is checked against the audio clock once a frame, and only while
+   something is playing. A timer would be wrong: `setTimeout` is clamped to a
+   second or more in a background tab, which is an eternity for something whose
+   whole job is to be seamless. */
+let stopHandoverWatch = null;
+function syncHandoverWatch() {
+  const wanted = state.playing && state.seamless;
+  if (wanted && !stopHandoverWatch) stopHandoverWatch = tick(maybeHandover);
+  else if (!wanted && stopHandoverWatch) { stopHandoverWatch(); stopHandoverWatch = null; }
+}
+events.on('state', syncHandoverWatch);
 
 /** Live playhead. audio's own timeupdate only fires ~4x/second. */
 export const currentTime = () => (state.playing ? audio.currentTime : state.time);
@@ -761,14 +1163,18 @@ if ('mediaSession' in navigator) {
 /* ------------------------------------------------------------------ restore */
 
 export async function init() {
-  const [vol, shuffle, repeat] = await Promise.all([
+  const [vol, shuffle, repeat, crossfade, seamless] = await Promise.all([
     db.getKV('volume').catch(() => null),
     db.getKV('shuffle').catch(() => null),
     db.getKV('repeat').catch(() => null),
+    db.getKV('crossfade').catch(() => null),
+    db.getKV('seamless').catch(() => null),
   ]);
   if (typeof vol === 'number') state.volume = clamp(vol, 0, 1);
   if (typeof shuffle === 'boolean') state.shuffle = shuffle;
   if (repeat === 'all' || repeat === 'one') state.repeat = repeat;
+  if (typeof crossfade === 'number') state.crossfade = clamp(crossfade, 0, MAX_CROSSFADE);
+  if (typeof seamless === 'boolean') state.seamless = seamless;
   applyVolume();
   // The rack owns playback speed, which is a property of the element and works
   // with or without a Web Audio graph — and the graph does not exist until the
@@ -782,5 +1188,5 @@ export async function init() {
 window.addEventListener('pagehide', () => {
   // A listen that ends because the tab did is still a listen.
   commitMeter();
-  revoke(currentURL); revoke(preloadURL);
+  releaseDeck(deckA); releaseDeck(deckB);
 });

@@ -1406,8 +1406,65 @@ function viewSettings(host) {
   const head = el('header', { class: 'page-head' },
     el('p', { class: 'eyebrow', text: 'System' }),
     el('h1', { class: 'page-title', text: 'Settings' }),
-    el('p', { class: 'page-sub', text: 'Folders · appearance · visualiser · storage' }));
+    el('p', { class: 'page-sub', text: 'Playback · folders · appearance · visualiser · storage' }));
   host.appendChild(head);
+
+  /* --- playback ---
+   *
+   * One slider for gapless and crossfade, because they are one mechanism: at
+   * zero the next track starts the instant the last one ends, and above zero
+   * they overlap. Splitting them into two controls would suggest they can
+   * disagree, and would leave a listener wondering which one wins. */
+  const playback = el('section', { class: 'block' }, sectionHead('Playback'));
+  const pbRows = el('div', { class: 'rows' });
+
+  const fadeValue = el('span', { class: 'settings-value' });
+  const fadeSlider = el('input', {
+    type: 'range', min: '0', max: String(player.MAX_CROSSFADE), step: '0.5',
+    class: 'settings-range', 'aria-label': 'Crossfade length in seconds',
+    value: String(player.state.crossfade),
+  });
+  const paintFade = () => {
+    const v = player.state.crossfade;
+    fadeValue.textContent = v === 0 ? 'Gapless' : v.toFixed(1).replace(/\.0$/, '') + 's';
+    fadeSlider.value = String(v);
+    fadeSlider.setAttribute('aria-valuetext', fadeValue.textContent);
+  };
+  fadeSlider.addEventListener('input', () => {
+    player.setCrossfade(parseFloat(fadeSlider.value));
+    paintFade();
+  });
+  paintFade();
+
+  const seamlessSwitch = el('button', {
+    class: 'switch' + (player.state.seamless ? ' is-on' : ''),
+    role: 'switch', 'aria-checked': String(player.state.seamless),
+  }, el('span', { class: 'switch-knob' }));
+  seamlessSwitch.addEventListener('click', () => {
+    player.setSeamless(!player.state.seamless);
+    const on = player.state.seamless;
+    seamlessSwitch.classList.toggle('is-on', on);
+    seamlessSwitch.setAttribute('aria-checked', String(on));
+    fadeSlider.disabled = !on;
+  });
+  fadeSlider.disabled = !player.state.seamless;
+
+  pbRows.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('next') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Run tracks together' }),
+      el('div', { class: 'settings-note', text: 'Hand over to the next track without stopping. Off leaves the gap between them.' })),
+    el('div', { class: 'settings-actions' }, seamlessSwitch)));
+
+  pbRows.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('shuffle') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Crossfade' }),
+      el('div', { class: 'settings-note', text: 'How long the two overlap. At zero the next track starts the instant the last one ends — what a live album needs.' })),
+    el('div', { class: 'settings-actions settings-slider' }, fadeSlider, fadeValue)));
+
+  playback.appendChild(pbRows);
+  host.appendChild(playback);
 
   /* --- folders --- */
   const folders = el('section', { class: 'block' }, sectionHead('Music folders'));
