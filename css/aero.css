@@ -198,7 +198,7 @@ body::after { z-index: 0; }
      the `background` shorthand, because the shorthand resets blend mode, size
      and repeat — and the grain is the only layer that wants any of them. */
   background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.34'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.26'/%3E%3C/svg%3E"),
     radial-gradient(56% 56% at calc(50% + var(--tx, 0) * 40%) calc(50% + var(--ty, 0) * 40%),
       rgb(255 255 255 / calc(.42 * var(--lit, 0))),
       rgb(255 255 255 / calc(.10 * var(--lit, 0))) 44%, transparent 70%),

@@ -13,7 +13,7 @@
  */
 
 import * as db from './db.js';
-import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, sortName, cmpText, idle } from './util.js';
+import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle } from './util.js';
 
 export const events = new Emitter();
 
@@ -33,6 +33,24 @@ export const state = {
 
 /** Live file references. Not persisted — rebuilt by rescanning on launch. */
 const handles = new Map();      // id -> FileSystemFileHandle | File
+
+/**
+ * Lyric files noticed beside the music, keyed by the track id with its
+ * extension taken off — so `d:1/Petra Vance/04 Ferry Road.lrc` is filed under
+ * `d:1/Petra Vance/04 Ferry Road` and found by the track of the same name.
+ *
+ * Not persisted, for the same reason handles are not: a File cannot be stored
+ * and a handle without permission cannot be read. They are found again by the
+ * same scan that finds the music.
+ */
+const sidecars = new Map();
+
+/** The file that would hold this track's words, if one came in beside it. */
+export function lyricFileFor(id) {
+  const hit = sidecars.get(String(id).replace(/\.[^./]+$/, ''));
+  if (!hit) return null;
+  return hit instanceof File ? Promise.resolve(hit) : hit.getFile().catch(() => null);
+}
 
 let worker = null;
 let workerReady = false;
@@ -418,6 +436,8 @@ async function* walkDirectory(dir, prefix = '', depth = 0) {
       yield* walkDirectory(entry, prefix + entry.name + '/', depth + 1);
     } else if (isAudio(entry.name)) {
       yield { handle: entry, path: prefix + entry.name, name: entry.name };
+    } else if (isLyric(entry.name)) {
+      yield { handle: entry, path: prefix + entry.name, name: entry.name, lyric: true };
     }
   }
 }
@@ -486,10 +506,17 @@ const LOOSE_ID = 'd:loose';
 
 /** Universal path: a folder chosen through <input webkitdirectory>. */
 export async function addFileList(fileList, label) {
+  const all = Array.from(fileList);
   // isAudioFile, not isAudio: a File knows its own type, so a container with an
   // unfamiliar suffix still counts if the OS calls it audio.
-  const files = Array.from(fileList).filter(isAudioFile);
+  const files = all.filter(isAudioFile);
   if (!files.length) return null;
+
+  // Lyric sidecars come in with the music or not at all. A folder handed over
+  // by an upload dialog cannot be reopened to look for them afterwards, so the
+  // one chance to notice `04 Ferry Road.lrc` sitting beside `04 Ferry Road.mp3`
+  // is right now, while the browser still has both.
+  const lyrics = all.filter((f) => isLyric(f.name));
 
   const first = files[0].webkitRelativePath || '';
   const name = label || first.split('/')[0] || 'Files';
@@ -502,11 +529,13 @@ export async function addFileList(fileList, label) {
     events.emit('roots');
   }
 
-  const entries = files.map((f) => {
+  const relative = (f) => {
     const rel = f.webkitRelativePath || f.name;
     const cut = rel.indexOf('/');
-    return { file: f, path: cut >= 0 ? rel.slice(cut + 1) : rel, name: f.name };
-  });
+    return cut >= 0 ? rel.slice(cut + 1) : rel;
+  };
+  const entries = files.map((f) => ({ file: f, path: relative(f), name: f.name }));
+  for (const f of lyrics) entries.push({ file: f, path: relative(f), name: f.name, lyric: true });
   await ingest(root, entries);
   return root;
 }
@@ -544,8 +573,11 @@ export async function addDataTransfer(dt) {
     }
   }
 
-  const files = Array.from(dt.files || []).filter(isAudioFile);
-  if (files.length) return addFileList(files, 'Dropped files');
+  // Handed over whole rather than pre-filtered: addFileList picks the audio out
+  // itself, and it also picks out the lyric sidecars — which a filter to
+  // `isAudioFile` here would have thrown away before it ever saw them.
+  const all = Array.from(dt.files || []);
+  if (all.some(isAudioFile)) return addFileList(all, 'Dropped files');
   return null;
 }
 
@@ -583,6 +615,15 @@ async function ingest(root, entries) {
   const seen = new Set();
 
   for (const e of entries) {
+    // A lyric file is not a track. It is filed under the audio file it sits
+    // beside, by the path they share up to the extension, and never given an
+    // id of its own — otherwise "04 Ferry Road.lrc" turns up in the library as
+    // a song nobody can play.
+    if (e.lyric) {
+      sidecars.set(root.id + '/' + e.path.replace(/\.[^./]+$/, ''), e.handle || e.file);
+      continue;
+    }
+
     const id = root.id + '/' + e.path;
     seen.add(id);
     let file = e.file;

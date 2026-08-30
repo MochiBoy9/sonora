@@ -183,6 +183,21 @@ async function readID3v2(reader, out, base = 0) {
       if (text && !out[field]) out[field] = text;
     } else if ((id === 'APIC' || id === 'PIC') && !out.picture && frame.length > 4) {
       out.picture = readAPIC(frame, id === 'PIC');
+    } else if ((id === 'USLT' || id === 'ULT') && !out.lyrics && frame.length > 5) {
+      // Unsynchronised lyrics: one encoding byte, three of language, then a
+      // short content descriptor terminated the same way the text is, then the
+      // lyrics themselves. The descriptor is nearly always empty and nearly
+      // always skipped by readers that assume so — this one actually walks it,
+      // because the writers that do fill it in are the ones that would
+      // otherwise put "eng" at the top of somebody's song.
+      const enc = frame[0];
+      const descStart = 4;
+      const descEnd = endOfString(frame, descStart, enc);
+      const from = descEnd + (enc === 1 || enc === 2 ? 2 : 1);
+      if (from < frame.length) {
+        const text = decodeText(frame.subarray(from), enc);
+        if (text && text.trim()) out.lyrics = text;
+      }
     }
     p += len;
   }
@@ -265,7 +280,7 @@ async function mp3Duration(reader, start, out) {
 
 const MP4_FIELD = {
   '©nam': 'title', '©ART': 'artist', 'aART': 'albumArtist', '©alb': 'album',
-  '©day': 'year', '©gen': 'genre', '©wrt': 'composer',
+  '©day': 'year', '©gen': 'genre', '©wrt': 'composer', '©lyr': 'lyrics',
 };
 
 async function readMP4(reader, out) {
@@ -421,6 +436,9 @@ const VORBIS_FIELD = {
   TITLE: 'title', ARTIST: 'artist', ALBUM: 'album', ALBUMARTIST: 'albumArtist',
   'ALBUM ARTIST': 'albumArtist', TRACKNUMBER: 'track', DISCNUMBER: 'disc',
   DATE: 'year', YEAR: 'year', GENRE: 'genre', COMPOSER: 'composer',
+  // Every writer picks a different one of these, so all of them map to the
+  // same field and the first to arrive wins.
+  LYRICS: 'lyrics', UNSYNCEDLYRICS: 'lyrics', 'UNSYNCED LYRICS': 'lyrics',
 };
 
 function readVorbisComment(b, out, p) {
