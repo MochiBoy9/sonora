@@ -113,6 +113,22 @@ body::after { z-index: 0; }
 
 /* ------------------------------------------------------------------ sleeves */
 
+/* The three numbers the pointer writes, declared as real numbers.
+ *
+ * Registering them buys two things. The browser can *interpolate* a custom
+ * property it knows the type of, so `--lit` fades in CSS and the spring that
+ * used to smooth it in JavaScript is deleted rather than replaced. And an
+ * unset sleeve is guaranteed to compute as 0 instead of as an empty token that
+ * makes every calc() containing it invalid — which is why the `var(--tx, 0)`
+ * fallbacks below stay: they are what holds this up on an engine without
+ * @property, where the properties remain untyped strings.
+ *
+ * `inherits: true` is the whole point: the face and the edge are siblings, and
+ * both read numbers written on the sleeve above them. */
+@property --tx  { syntax: "<number>"; inherits: true; initial-value: 0; }
+@property --ty  { syntax: "<number>"; inherits: true; initial-value: 0; }
+@property --lit { syntax: "<number>"; inherits: true; initial-value: 0; }
+
 /* A record is an object, so its artwork is drawn as one.
  *
  * A sleeve has a face that catches the light, a thickness you can see when it
@@ -137,7 +153,13 @@ body::after { z-index: 0; }
 /* How solid the object is, declared on the wrapper because the face and the
    edge are siblings: put it on the face and the edge inherits nothing, falls
    back to zero, and the slab silently loses its thickness. */
-.sleeve { --sleeve: calc(var(--parallax) * (0.35 + 0.65 * var(--gloss))); }
+.sleeve {
+  --sleeve: calc(var(--parallax) * (0.35 + 0.65 * var(--gloss)));
+  /* The light arrives and leaves on its own curve, a beat behind the surface
+     it sits on — which is what makes the surface read as heavy. Typed above,
+     so this is a real transition and not a step. */
+  transition: --lit 420ms cubic-bezier(.2, .9, .25, 1);
+}
 
 /* The face.
  *

@@ -55,7 +55,7 @@ function parseHash() {
   return { name, arg };
 }
 
-function navigate() {
+function swapView() {
   const host = $('#view');
   const route = parseHash();
 
@@ -76,6 +76,42 @@ function navigate() {
   if (remembered) requestAnimationFrame(() => { host.scrollTop = remembered; });
 
   document.title = titleFor(route);
+}
+
+/**
+ * Routes used to blank and rebuild. Wrapped in a view transition they cross-
+ * fade instead — and where a cover has been marked on the way out (see
+ * `markTransition` in views.js), the browser matches it to the record on the
+ * page being arrived at and flies one into the other.
+ *
+ * The swap itself is unchanged and still synchronous; `startViewTransition`
+ * only takes a snapshot either side of it. On an engine without it, or for
+ * someone who has asked for less motion, the callback runs directly and the
+ * app behaves exactly as it did before.
+ */
+function navigate() {
+  const paired = document.querySelector('[style*="view-transition-name"]');
+  if (!document.startViewTransition || reduceMotion.matches) {
+    clearTransitionMarks();
+    return swapView();
+  }
+  document.documentElement.classList.toggle('vt-paired', !!paired);
+  const vt = document.startViewTransition(() => swapView());
+  // Marks are per-navigation. Left in place they would collide with the next
+  // one, and two elements sharing a view-transition-name is a transition the
+  // browser refuses to run at all.
+  vt.finished.finally(() => {
+    clearTransitionMarks();
+    document.documentElement.classList.remove('vt-paired');
+  });
+}
+
+/** Removes every view-transition-name this app put on the page. */
+function clearTransitionMarks() {
+  for (const n of document.querySelectorAll('[data-vt]')) {
+    n.style.removeProperty('view-transition-name');
+    n.removeAttribute('data-vt');
+  }
 }
 
 function titleFor(route) {

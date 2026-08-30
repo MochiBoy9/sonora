@@ -53,6 +53,24 @@ function readout(node, value, opts) {
 const albumOf = (key) => lib.state.albumBy.get(key);
 const artistOf = (key) => lib.state.artistBy.get(key);
 
+/**
+ * Marks the one element that should fly between two routes rather than
+ * cross-fade with the rest of the page.
+ *
+ * Exactly one element may wear a given `view-transition-name` at a time — two
+ * of them and the browser declines to run the transition at all — so this is
+ * put on the cover being left behind, and again on the record being arrived
+ * at. The two never coexist, because the old view is torn down and the new one
+ * built inside the same callback.
+ *
+ * `data-vt` is the handle app.js uses to take the names off again afterwards.
+ */
+export function markTransition(node, name = 'vt-sleeve') {
+  if (!node || typeof document.startViewTransition !== 'function') return;
+  node.style.setProperty('view-transition-name', name);
+  node.setAttribute('data-vt', '');
+}
+
 function playAll(tracks, index = 0, origin) {
   if (!tracks.length) return;
   player.playTracks(tracks, index, origin);
@@ -156,7 +174,14 @@ export function albumCard(album, { onOpen } = {}) {
     const al = albumOf(key);
     if (al) playAll(al.tracks, 0, { type: 'album', key, label: al.title });
   });
-  const open = () => onOpen ? onOpen(card.dataset.key) : (location.hash = '#/album/' + card.dataset.key);
+  const open = () => {
+    if (onOpen) return onOpen(card.dataset.key);
+    // The cover you clicked is the thing that should arrive on the next page,
+    // so it is named on the way out and the album's record is named on the way
+    // in. Everything else about the two pages cross-fades around it.
+    markTransition(card.querySelector('.sleeve'));
+    location.hash = '#/album/' + card.dataset.key;
+  };
   card.addEventListener('click', open);
   card.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
   card.addEventListener('contextmenu', (e) => {
@@ -229,6 +254,10 @@ function shelf(title, items, makeCard, { seeAll } = {}) {
     const max = rail.scrollWidth - rail.clientWidth;
     prev.hidden = rail.scrollLeft < 4;
     next.hidden = max < 4 || rail.scrollLeft > max - 4;
+    // The rack only turns on a rail that can actually be flipped through. A
+    // view timeline on a scroller with nowhere to scroll never advances, and
+    // the cards would sit frozen on the first keyframe — permanently askew.
+    rail.classList.toggle('is-flippable', max > 4);
   };
   rail.addEventListener('scroll', sync, { passive: true });
   new ResizeObserver(sync).observe(rail);
@@ -369,9 +398,14 @@ function viewHome(host) {
   // depth rather than sliding in from the side. Observers, not a scroll
   // handler: the crossing is computed off the main thread, which is the only
   // version of this that a virtualised list further down the page can afford.
-  const offHeads = reveal(host.querySelectorAll('.shelf .section-head'), { y: 14, z: -40, rotate: 0, duration: 560, each: 0 });
-  const offCards = reveal(host.querySelectorAll('.shelf .rail > *'), { y: 26, z: -140, rotate: 5, each: 52 });
-  return () => { offHeads(); offCards(); };
+  // Each shelf arrives as one thing rather than as a stagger of cards, and the
+  // observer is pointed at the shelf itself. Both follow from
+  // `content-visibility: auto`: a skipped subtree has no boxes, so an observer
+  // watching the cards inside it would be watching nothing — while the shelf
+  // is exactly the element the browser is already deciding about. The cards
+  // get their own motion from the rack as you flip through them.
+  const offShelves = reveal(host.querySelectorAll('.shelf'), { y: 26, z: -110, rotate: 3, each: 0, duration: 700 });
+  return () => offShelves();
 }
 
 /* ------------------------------------------------------------------ SONGS */
@@ -469,6 +503,7 @@ function viewAlbum(host, key) {
   host.appendChild(hero);
   applyHeroTint(hero, key);
   decode(hero.querySelector('.hero-title'), album.title, { duration: 620 });
+  markTransition(art.querySelector('.sleeve'));
   const untilt = tilt3d(art.querySelector('.sleeve'), { max: 11, lift: 30, scale: 1.012 });
 
   const columns = ['index', 'title', 'duration'];

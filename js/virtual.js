@@ -7,6 +7,18 @@
 
 const OVERSCAN = 6;
 
+/**
+ * How strongly the grid hazes toward its edges, taken from the Look's own
+ * Parallax setting so "how far panels lift off the world" governs this too —
+ * and so Plain, which sets it to zero, switches the ramp off entirely along
+ * with everything else.
+ */
+function readDepth() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return 0;
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--parallax'));
+  return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
+}
+
 export class VirtualList {
   /**
    * @param viewport   scrolling element
@@ -173,6 +185,13 @@ export class VirtualGrid {
     this.rowHeight = rowHeight;
     if (changed) this.recycleAll();
 
+    // How much aerial perspective the grid gets, read here rather than per
+    // frame: a getComputedStyle inside update() would be a forced style read
+    // on every scroll frame, which is the exact cost this whole file exists to
+    // avoid. measure() runs on construction and on every resize, so a Look
+    // changed mid-session takes effect at the next route change or resize.
+    this.depth = readDepth();
+
     const rows = Math.ceil(this.items.length / cols);
     this.sizer.style.height = rows * rowHeight + 'px';
     this.update();
@@ -204,6 +223,41 @@ export class VirtualGrid {
       if (!node.parentNode) this.layer.appendChild(node);
       node.hidden = false;
       this.live.set(r, node);
+    }
+
+    if (this.depth) { this.paintDepth(scrollTop, height); this.hazed = true; }
+    else if (this.hazed) {
+      // Parallax was turned down. A recycled row would otherwise carry the
+      // opacity from its previous life forever.
+      for (const [, node] of this.live) node.style.removeProperty('opacity');
+      for (const node of this.pool) node.style.removeProperty('opacity');
+      this.hazed = false;
+    }
+  }
+
+  /**
+   * Aerial perspective: rows away from the middle of the viewport sit back a
+   * little, so a long grid has a focal plane instead of being a flat wall.
+   *
+   * Distance, not depth — the ramp is opacity only, and deliberately so.
+   * Scaling or translating the rows would be a second transform fighting the
+   * one that positions them, and a third fighting `.card:hover`; the row's
+   * transform channel is spoken for. Haze is how distance reads in the real
+   * world anyway, and opacity is a compositor property, so a write per live
+   * row costs a fraction of what re-laying one out would.
+   *
+   * The curve is squared, which keeps the middle of the screen flat and puts
+   * all of the falloff in the last stretch — a library is for reading, and a
+   * grid that dims everything you are not looking straight at is a grid you
+   * cannot scan.
+   */
+  paintDepth(scrollTop, height) {
+    const centre = scrollTop + height / 2;
+    const half = height / 2 || 1;
+    for (const [r, node] of this.live) {
+      const mid = r * this.rowHeight + this.rowHeight / 2;
+      const d = Math.min(1, Math.abs(mid - centre) / half);
+      node.style.opacity = (1 - d * d * 0.34 * this.depth).toFixed(3);
     }
   }
 

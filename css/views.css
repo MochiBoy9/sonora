@@ -345,14 +345,59 @@
   gap: 12px;
 }
 
-.shelf { padding-bottom: 24px; }
+/* A shelf below the fold is not laid out at all until it is approached, which
+   is the one part of the library that is not virtualised and therefore the one
+   place this is worth asking for. The intrinsic size keeps the scrollbar
+   honest while the content is skipped. */
+.shelf {
+  padding-bottom: 24px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 340px;
+}
 
 .rail-wrap { position: relative; margin: 0 calc(var(--gutter) * -1); }
 
-/* The camera the shelf's arrival is seen through. Without it `rotateX` is not
-   a rotation at all — it is a vertical squash, which is what a card tilting
-   "in 3D" looks like when nothing has told the browser where the eye is. */
+/* The camera the shelf is seen through. Without it `rotateY` is not a rotation
+   at all — it is a horizontal squash, which is what a card turning "in 3D"
+   looks like when nothing has told the browser where the eye is. */
 .rail, .grid { perspective: 1200px; }
+
+/* ------------------------------------------------------------------ rack */
+
+/*
+ * A shelf is a rack of records you flip through, so the record in the middle
+ * faces you and the ones to either side turn away from it.
+ *
+ * This is a scroll-driven animation, which means the browser runs it on the
+ * compositor from the rail's own scroll position — no listener, no per-frame
+ * JavaScript, and none of the main-thread cost that ruled this effect out
+ * before. `view(inline)` gives each card its progress across the rail.
+ *
+ * Two guards, both load-bearing:
+ *
+ *   `.is-flippable` is added by shelf() only when the rail actually overflows.
+ *   A view timeline on a scroller that cannot scroll never advances, and the
+ *   animation would sit frozen on its first keyframe — leaving every card in a
+ *   short shelf permanently turned fourteen degrees.
+ *
+ *   The whole block is inside @supports, so an engine without scroll-driven
+ *   animations gets flat cards rather than a broken rack. Nothing else changes.
+ */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .rail.is-flippable > * {
+      animation: shelf-turn linear both;
+      animation-timeline: view(inline);
+      animation-range: cover 0% cover 100%;
+    }
+  }
+}
+
+@keyframes shelf-turn {
+  from { transform: rotateY(calc(14deg * var(--parallax))) translateZ(calc(-44px * var(--parallax))); }
+  50%  { transform: rotateY(0deg) translateZ(0); }
+  to   { transform: rotateY(calc(-14deg * var(--parallax))) translateZ(calc(-44px * var(--parallax))); }
+}
 
 .rail {
   display: grid;
