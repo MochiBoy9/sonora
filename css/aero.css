@@ -519,3 +519,34 @@ body::after { z-index: 0; }
   --ease-back: var(--ease);
 }
 :root[data-motion="calm"] .card:hover { transform: none; }
+
+/* ------------------------------------------------------------------ relief
+
+   The lit surface of the printed cover, drawn by relief.js from a normal map
+   the importer built out of the artwork's own luminance.
+
+   Composited with soft-light rather than drawn over the top: what the canvas
+   holds is the *difference* the surface makes — white where a slope faces the
+   light, black where one faces away, and transparent across flat fields — so a
+   soft light leaves the artwork's own colour alone and only bends where there
+   is an edge to bend around. Normal alpha would wash the cover grey.
+
+   `--gloss` gates it with every other material effect, so the Plain look
+   switches it off along with the rest. */
+.art-relief {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  mix-blend-mode: soft-light;
+  opacity: calc(var(--gloss, 1) * 0.9);
+  /* The map is 64px and the sleeve is not; let the browser smooth it rather
+     than showing the reader the grid it was computed on. */
+  image-rendering: auto;
+}
+
+
+
+@media (prefers-reduced-motion: reduce) { .art-relief { display: none; } }

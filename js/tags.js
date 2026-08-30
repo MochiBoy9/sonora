@@ -181,6 +181,19 @@ async function readID3v2(reader, out, base = 0) {
     if (field && frame.length > 1) {
       const text = decodeText(frame.subarray(1, endOfString(frame, 1, frame[0])), frame[0]);
       if (text && !out[field]) out[field] = text;
+    } else if (id === 'TXXX' && frame.length > 2) {
+      /* A user-defined text frame: one encoding byte, a description, then the
+         value. ReplayGain lives here on MP3s — the description is
+         `replaygain_track_gain` and the value is the decibels. */
+      const enc = frame[0];
+      const descEnd = endOfString(frame, 1, enc);
+      const desc = decodeText(frame.subarray(1, descEnd), enc).trim().toUpperCase();
+      const rg = RG_FIELD[desc];
+      if (rg && out[rg] == null) {
+        const from = descEnd + (enc === 1 || enc === 2 ? 2 : 1);
+        const v = parseGainDb(decodeText(frame.subarray(from), enc));
+        if (v != null) out[rg] = v;
+      }
     } else if ((id === 'APIC' || id === 'PIC') && !out.picture && frame.length > 4) {
       out.picture = readAPIC(frame, id === 'PIC');
     } else if ((id === 'USLT' || id === 'ULT') && !out.lyrics && frame.length > 5) {
@@ -441,6 +454,30 @@ const VORBIS_FIELD = {
   LYRICS: 'lyrics', UNSYNCEDLYRICS: 'lyrics', 'UNSYNCED LYRICS': 'lyrics',
 };
 
+/**
+ * ReplayGain, wherever it is hiding.
+ *
+ * The value is written as a signed number of decibels with a unit stuck on the
+ * end — `-6.48 dB` — and occasionally without the unit, or with a `+`, or with
+ * a comma for a decimal point by a writer that took the system locale
+ * seriously. All of those are the same number and all of them are read.
+ *
+ * Anything past ±60 dB is a corrupt tag rather than a quiet record, and is
+ * dropped: applying one would either blow the limiter or mute the track.
+ */
+const RG_FIELD = {
+  REPLAYGAIN_TRACK_GAIN: 'gain',
+  REPLAYGAIN_ALBUM_GAIN: 'gainAlbum',
+};
+
+function parseGainDb(text) {
+  if (!text) return null;
+  const m = String(text).replace(',', '.').match(/[-+]?\d*\.?\d+/);
+  if (!m) return null;
+  const v = parseFloat(m[0]);
+  return isFinite(v) && Math.abs(v) <= 60 ? Math.round(v * 100) / 100 : null;
+}
+
 function readVorbisComment(b, out, p) {
   if (p + 4 > b.length) return;
   const vendorLen = u32le(b, p); p += 4 + vendorLen;
@@ -454,8 +491,14 @@ function readVorbisComment(b, out, p) {
     if (eq > 0 && eq < p + len) {
       const key = ascii(b, p, eq - p).toUpperCase();
       const field = VORBIS_FIELD[key];
+      const rg = RG_FIELD[key];
       if (field) {
         if (!out[field]) out[field] = trimNul(utf8.decode(b.subarray(eq + 1, p + len)));
+      } else if (rg) {
+        if (out[rg] == null) {
+          const v = parseGainDb(trimNul(utf8.decode(b.subarray(eq + 1, p + len))));
+          if (v != null) out[rg] = v;
+        }
       } else if (key === 'METADATA_BLOCK_PICTURE' && !out.picture) {
         try {
           const raw = atob(latin1.decode(b.subarray(eq + 1, p + len)));

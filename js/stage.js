@@ -15,6 +15,7 @@ import * as lib from './library.js';
 import { paintArt } from './ui.js';
 import { createVisualizer, MODES, isMode } from './visualizer.js';
 import * as lyrics from './lyrics.js';
+import * as peakmap from './peaks.js';
 import { tick, animate, spring, draggable, settled, ease, reduceMotion } from './motion.js';
 
 const MODE_KEY = 'sonora:viz';
@@ -80,8 +81,13 @@ export function openStage(backdrop) {
   const total = el('span', { class: 'stage-time', text: '0:00' });
   const fill = el('div', { class: 'seek-fill' });
   const knob = el('div', { class: 'seek-knob' });
+  /* The whole song, as a spectrogram, and the scrubber runs across it.
+     `spec-ahead` dims the part that has not played yet, so the strip reads as
+     a progress bar as well as a picture. */
+  const spec = el('canvas', { class: 'stage-spec', 'aria-hidden': 'true' });
+  const specAhead = el('div', { class: 'stage-spec-ahead', 'aria-hidden': 'true' });
   const seek = el('div', { class: 'seek stage-seek', role: 'slider', tabindex: '0', 'aria-label': 'Seek', 'aria-valuemin': '0', 'aria-valuemax': '100' },
-    el('div', { class: 'seek-track' }, fill), knob);
+    el('div', { class: 'seek-track' }, spec, specAhead, fill), knob);
 
   const playBtn = el('button', { class: 'pb-play stage-play', 'aria-label': 'Play', html: ico('play') + ico('pause'), onclick: () => player.toggle() });
   const transport = el('div', { class: 'stage-transport' },
@@ -172,6 +178,106 @@ export function openStage(backdrop) {
     playBtn.setAttribute('aria-label', player.state.playing ? 'Pause' : 'Play');
   }
 
+  /* ---------------------------------------------------------------- spectrogram */
+
+  /*
+   * The whole song at once, and the scrubber runs across it.
+   *
+   * The bars along the bottom of this view show the last 23 ms of the music.
+   * This shows all of it: where the verses are, where the chorus opens up,
+   * where the track drops to a filter sweep and comes back. It is the one
+   * picture that lets you navigate a song you have never heard before.
+   *
+   * Frequency is vertical and logarithmic — bass at the bottom, where people
+   * expect it — and time is horizontal, matched to the scrubber underneath it
+   * so the playhead is over the moment it is playing.
+   *
+   * Drawn once per track through an ImageData at the analysis's own size and
+   * scaled up by the canvas, rather than 23,000 fillRect calls.
+   */
+  let specFor = null;
+
+  function drawSpec(rec) {
+    const cols = rec.specCols, rows = rec.specBands;
+    const src = el('canvas');
+    src.width = cols; src.height = rows;
+    const sg = src.getContext('2d');
+    const img = sg.createImageData(cols, rows);
+    const px = img.data;
+
+    const cs = getComputedStyle(host);
+    const rgbOf = (name, fallback) => {
+      const v = cs.getPropertyValue(name).trim().split(/[\s,]+/).map(Number);
+      return v.length === 3 && v.every((n) => isFinite(n)) ? v : fallback;
+    };
+    const [ar, ag, ab] = rgbOf('--accent-rgb', [0, 209, 255]);
+
+    /* The loud end of the ramp has to be the opposite of the ground, not
+       always white: the stage takes its background from the theme, so a
+       white-hot spectrogram is invisible on a light one. */
+    const [br, bg_, bb] = rgbOf('--bg-rgb', [4, 8, 14]);
+    const groundIsDark = (0.2126 * br + 0.7152 * bg_ + 0.0722 * bb) < 128;
+    const [hr, hg, hb] = groundIsDark ? [255, 255, 255] : [6, 14, 24];
+
+    for (let y = 0; y < rows; y++) {
+      // Row 0 of the analysis is the lowest band, and canvas y grows downward,
+      // so the image is filled bottom-up to put bass at the bottom.
+      const dstRow = (rows - 1 - y) * cols;
+      for (let x = 0; x < cols; x++) {
+        const v = rec.spec[y * cols + x] / 255;
+        const o = (dstRow + x) * 4;
+        /* A ramp with a knee in it: the bottom two thirds climb through the
+           accent, and only the loudest third goes on toward white. A linear
+           ramp to white washes the whole picture out, because most of a
+           spectrogram sits in the middle. */
+        const t = v * v;                       // gamma, to open up the quiet end
+        const hot = Math.max(0, (v - 0.66) / 0.34);
+        px[o]     = Math.min(255, Math.max(0, ar * t + (hr - ar) * hot));
+        px[o + 1] = Math.min(255, Math.max(0, ag * t + (hg - ag) * hot));
+        px[o + 2] = Math.min(255, Math.max(0, ab * t + (hb - ab) * hot));
+        px[o + 3] = Math.min(255, 26 + t * 300);
+      }
+    }
+    sg.putImageData(img, 0, 0);
+
+    const rect = seek.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    spec.width = Math.max(1, Math.round((rect.width || cols) * dpr));
+    spec.height = Math.max(1, Math.round(56 * dpr));
+    const g = spec.getContext('2d');
+    g.clearRect(0, 0, spec.width, spec.height);
+    // Smoothing on: the analysis is 480 columns and the strip is a thousand
+    // pixels wide, and a nearest-neighbour spectrogram looks like a barcode.
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(src, 0, 0, spec.width, spec.height);
+  }
+
+  function clearSpec() {
+    specFor = null;
+    host.classList.remove('has-spec');
+  }
+
+  async function loadSpec() {
+    const t = player.state.current;
+    if (!t) return clearSpec();
+    if (specFor === t.id) return;
+    clearSpec();
+    const rec = await peakmap.forTrack(t, 'all').catch(() => null);
+    if (!rec || !rec.spec || !open) return;
+    if (!player.state.current || player.state.current.id !== t.id) return;
+    drawSpec(rec);
+    specFor = t.id;
+    host.classList.add('has-spec');
+  }
+
+  // `on` hands back its own unsubscriber — there is no `off`. Keeping it
+  // matters here: the stage is built and torn down on every open, so a
+  // listener left behind holds a dead stage's DOM alive for the session.
+  const offPeaks = peakmap.events.on('peaks', (id) => {
+    if (open && player.state.current && player.state.current.id === id) loadSpec();
+  });
+
   /* ---------------------------------------------------------------- seeking */
 
   let scrubbing = false;
@@ -180,6 +286,7 @@ export function openStage(backdrop) {
     onMove: (r) => {
       fill.style.transform = `scaleX(${r})`;
       knob.style.left = (r * 100).toFixed(2) + '%';
+      if (specFor) specAhead.style.clipPath = `inset(0 0 0 ${(r * 100).toFixed(3)}%)`;
       elapsed.textContent = fmtTime(r * (player.state.duration || 0));
     },
     onEnd: (r) => { scrubbing = false; seek.classList.remove('is-active'); player.seekRatio(r); player.play(); },
@@ -238,6 +345,7 @@ export function openStage(backdrop) {
       fill.style.transform = `scaleX(${r})`;
       knob.style.left = (r * 100).toFixed(2) + '%';
       elapsed.textContent = fmtTime(r * d);
+      if (specFor) specAhead.style.clipPath = `inset(0 0 0 ${(r * 100).toFixed(3)}%)`;
       seek.setAttribute('aria-valuenow', Math.round(r * 100));
       followLyric(player.currentTime());
     }
@@ -322,6 +430,8 @@ export function openStage(backdrop) {
 
   const offTrack = player.events.on('track', paint);
   const offLyrics = player.events.on('track', loadLyrics);
+  const offSpec = player.events.on('track', loadSpec);
+  loadSpec();
   loadLyrics();
   const offState = player.events.on('state', () => { paintState(); paint(); });
   const offArt = lib.events.on('art', () => { const t = player.state.current; if (t) paintArt(artImg, t.albumKey); });
@@ -340,7 +450,7 @@ export function openStage(backdrop) {
   paint();
   paintState();
 
-  if (backdrop) backdrop.setIntensity(1.9);
+  if (backdrop) { backdrop.setIntensity(1.9); backdrop.setRoom?.(1); }
   animate(host, { opacity: [0, 1] }, { duration: 360, easing: ease.out });
   animate(host.querySelector('.stage-body'),
     { opacity: [0, 1], transform: ['translate3d(0,26px,0) scale(.97)', 'none'] },
@@ -352,12 +462,13 @@ export function openStage(backdrop) {
     stopTick();
     sx.stop(); sy.stop();
     viz.destroy();
-    offTrack(); offState(); offArt(); offLyrics();
+    offTrack(); offState(); offArt(); offLyrics(); offSpec();
+    offPeaks();
     document.removeEventListener('keydown', onKey, true);
     host.removeEventListener('pointermove', onMove);
     document.body.classList.remove('stage-open');
     if (bdCanvas) document.body.insertBefore(bdCanvas, document.body.firstChild);
-    if (backdrop) backdrop.setIntensity(1);
+    if (backdrop) { backdrop.setIntensity(1); backdrop.setRoom?.(0); }
     const out = animate(host, { opacity: [1, 0], transform: ['scale(1)', 'scale(1.03)'] },
       { duration: 260, easing: ease.inOut, commit: false });
     settled(out, 260).then(() => host.remove());

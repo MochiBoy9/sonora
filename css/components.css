@@ -467,6 +467,39 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .seek:hover .seek-track, .seek.is-active .seek-track { height: 7px; }
 .vol:hover .vol-track { height: 5px; }
 
+/* ---------------------------------------------------------------- waveform
+
+   The scrubber knows the shape of the song, and shows it when you reach for
+   it. At rest the track is the same hairline it has always been and the
+   waveform is a texture inside it; on hover it opens to something you can
+   actually read and aim at.
+
+   Both canvases are drawn once per track at a fixed size and stretched to
+   whichever height the track currently has, so opening it costs no redraw —
+   only the height transition, which is on a 28-pixel element and cannot
+   reflow anything around it because the bar's row height does not change. */
+.seek.has-wave:hover .seek-track,
+.seek.has-wave.is-active .seek-track { height: 28px; }
+
+.seek-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  display: none;
+  pointer-events: none;
+}
+.seek.has-wave .seek-wave { display: block; }
+.seek-wave-lit { clip-path: inset(0 100% 0 0); }
+
+/* Open, the lit waveform *is* the progress fill, so the plain gradient would
+   only sit on top of it. The buffer bar goes too — a local file has nothing
+   worth reporting about how much of it has arrived. */
+.seek.has-wave:hover .seek-fill,
+.seek.has-wave.is-active .seek-fill,
+.seek.has-wave:hover .seek-buffer,
+.seek.has-wave.is-active .seek-buffer { opacity: 0; }
+.seek-fill, .seek-buffer { transition: opacity var(--dur-1) linear; }
+
 .seek-fill, .vol-fill, .seek-buffer {
   position: absolute;
   inset: 0;
@@ -1023,3 +1056,139 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .link-state[data-phase="failed"] .link-dot { background: var(--warn); }
 
 @keyframes link-blink { 50% { opacity: .2; } }
+
+/* ---------------------------------------------------------------- sleep timer
+
+   The button says nothing until a timer is running, and then it says how long.
+   An idle sleep timer is one of the least interesting things a transport bar
+   can show; a running one is one of the most. */
+.pb-sleep { position: relative; }
+.pb-sleep-left {
+  position: absolute;
+  inset: 0;
+  display: none;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.playerbar.sleep-on .pb-sleep { color: var(--accent); }
+.playerbar.sleep-on .pb-sleep .ico { opacity: .28; }
+.playerbar.sleep-on .pb-sleep-left { display: grid; }
+
+/* ---------------------------------------------------------------- selection
+
+   A row picked, and the bar that appears when one is. It sits above the
+   transport rather than in the list, because a list that scrolls must not
+   scroll its own toolbar out of reach. */
+.trow.is-selected {
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / .16), rgb(var(--accent-rgb) / .05) 70%);
+  color: var(--text);
+}
+.trow.is-selected::before { transform: scaleY(1); }
+.trow.is-selected:hover {
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / .22), rgb(var(--accent-rgb) / .08) 70%);
+}
+
+.selbar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--player-h) + 20px);
+  transform: translateX(-50%);
+  z-index: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  max-width: min(760px, calc(100vw - 32px));
+  background: rgb(var(--surface-2-rgb) / .92);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line), 0 18px 44px -18px rgb(0 0 0 / .7);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+.selbar[hidden] { display: none; }
+
+.selbar-count {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+  padding-right: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.selbar .btn { flex: none; }
+.selbar-close { margin-left: 2px; flex: none; }
+
+@media (max-width: 620px) {
+  .selbar { gap: 6px; padding: 8px; }
+  .selbar-count { font-size: calc(9.5px * var(--scale)); letter-spacing: .08em; }
+}
+
+/* On a phone the tab bar sits below the transport, so the toolbar has to
+   clear both of them. Same offset the queue pane already uses. */
+@media (max-width: 560px) {
+  .selbar { bottom: calc(var(--player-h) + 58px + 14px); }
+}
+
+/* ---------------------------------------------------------------- edit form
+
+   Correcting what a track says about itself. The note at the bottom is not
+   decoration: a listener is entitled to know whether what they just typed has
+   been written to their disk. */
+.edit-form { display: grid; gap: 12px; }
+
+.edit-field { display: grid; gap: 5px; }
+.edit-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+/* A field carrying an override is marked, so it is obvious which values came
+   from the file and which came from you. */
+.edit-field.is-edited .edit-label { color: var(--accent); }
+.edit-field.is-edited .input { box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+
+.edit-revert {
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  border-bottom: var(--hair) solid transparent;
+  transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
+}
+.edit-revert:hover { color: var(--accent); border-bottom-color: var(--accent-line); }
+
+.edit-note {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: calc(12px * var(--scale));
+  line-height: 1.5;
+}
+
+@media (min-width: 520px) {
+  /* The short numeric fields sit three to a row rather than each taking a
+     line of their own. */
+  .edit-form {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .edit-field:nth-child(-n+5) { grid-column: 1 / -1; }
+  .edit-note { grid-column: 1 / -1; }
+}

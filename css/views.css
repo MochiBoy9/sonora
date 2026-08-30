@@ -1161,3 +1161,387 @@
 @media (prefers-reduced-motion: reduce) {
   .crate-item { transition: none; }
 }
+
+/* ------------------------------------------------------------------ playback
+
+   The crossfade slider. Wide enough to aim with, and the readout beside it is
+   tabular so the number does not shuffle sideways as it changes. */
+.settings-slider { gap: 12px; }
+
+.settings-range {
+  width: clamp(120px, 22vw, 220px);
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.settings-range:disabled { opacity: .4; cursor: default; }
+
+.settings-value {
+  min-width: 6ch;
+  font-family: var(--mono);
+  font-size: calc(11.5px * var(--scale));
+  letter-spacing: .06em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.settings-range:disabled + .settings-value { color: var(--text-3); }
+
+/* ------------------------------------------------------------------ files
+
+   The library as it sits on the disk. Two questions on one page, because they
+   are the same question asked twice: what is actually in these folders, and
+   how much of it is here twice. */
+
+.files-body { display: flex; flex-direction: column; gap: 1px; margin-top: 6px; }
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 12px 0 calc(12px + var(--depth, 0) * 20px);
+  color: var(--text-2);
+  background: rgb(var(--surface-rgb) / .34);
+  cursor: pointer;
+  transition: background var(--dur-1) linear, color var(--dur-1) linear;
+}
+.file-row:hover { background: rgb(var(--accent-rgb) / .08); color: var(--text); }
+.file-row.is-track { cursor: default; background: transparent; }
+.file-row.is-track:hover { background: rgb(var(--accent-rgb) / .06); }
+
+.file-twist {
+  width: 18px; height: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  transition: transform var(--dur-2) var(--ease);
+}
+.file-twist .ico { width: 13px; height: 13px; }
+.file-row.is-open > .file-twist { transform: rotate(90deg); }
+
+.file-ico { flex: none; display: grid; place-items: center; color: var(--text-3); }
+.file-ico .ico { width: 15px; height: 15px; }
+.file-row.is-open > .file-ico { color: var(--accent); }
+
+.file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(13.5px * var(--scale));
+}
+.file-row.is-track .file-name { color: var(--text-3); font-family: var(--mono); font-size: calc(12px * var(--scale)); }
+
+.file-count {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  letter-spacing: .08em;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- duplicates ---- */
+
+.dupe-summary { margin: 4px 0 14px; }
+.dupe-note { margin-top: 18px; font-size: calc(12.5px * var(--scale)); }
+
+.dupe-group {
+  margin-bottom: 12px;
+  background: rgb(var(--surface-rgb) / .4);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.dupe-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: var(--hair) solid var(--line);
+  flex-wrap: wrap;
+}
+.dupe-reason {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 3px 8px;
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+}
+/* An identical file is a fact; the same recording in two files is a judgement.
+   Only the fact gets the accent. */
+.dupe-reason.is-hard { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+
+.dupe-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.dupe-size { flex: none; font-family: var(--mono); font-size: calc(11px * var(--scale)); color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+.dupe-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: var(--hair) solid rgb(120 200 255 / .06);
+}
+.dupe-row:last-child { border-bottom: 0; }
+.dupe-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(11.5px * var(--scale));
+  color: var(--text-2);
+  direction: rtl;            /* keep the filename visible when the path is long */
+  text-align: left;
+}
+.dupe-spec {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  color: var(--text-3);
+  letter-spacing: .04em;
+}
+
+@media (max-width: 620px) {
+  .dupe-spec { display: none; }
+  .file-count { display: none; }
+}
+
+/* ------------------------------------------------------------------ shelf
+
+   Records edge-on, the way almost everybody actually stores them. A wall of
+   covers is a shop; a shelf of spines is a collection.
+
+   The width of each spine is the album's own `--thick` — the same number the
+   sleeve uses to decide how far its edge plane sits behind its face, derived
+   from how many tracks are on the record. A double album is visibly fatter. */
+
+.shelf-run {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  min-height: 300px;
+  padding: 28px 12px 18px;
+  margin-top: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  perspective: 1400px;
+  /* The shelf itself: a board the records are standing on. */
+  background:
+    linear-gradient(to top, rgb(var(--surface-2-rgb) / .5), transparent 42%),
+    linear-gradient(to top, var(--line-2) var(--hair), transparent var(--hair));
+  scrollbar-width: thin;
+}
+
+.spine {
+  position: relative;
+  flex: none;
+  /* 14px for a single, half again for a double — the same curve the sleeve's
+     edge plane uses, so the two views agree about how big a record is. */
+  width: calc(13px + 11px * var(--thick, 1));
+  height: 268px;
+  display: block;
+  transform-style: preserve-3d;
+  transform-origin: bottom center;
+  transition: transform var(--dur-3) var(--ease), filter var(--dur-2) var(--ease);
+  will-change: transform;
+}
+
+.spine-face {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-2);
+  box-shadow:
+    inset 0 0 0 var(--hair) rgb(160 220 255 / .14),
+    /* The printed edge: a band of the record's own colour near the top, the
+       way a spine carries its label. */
+    inset 0 26px 0 -24px rgb(var(--spine-rgb, var(--accent-rgb)) / .9),
+    inset 0 -18px 0 -16px rgb(var(--spine-rgb, var(--accent-rgb)) / .55);
+}
+
+/* The paper edge of the sleeve, catching light down one side. */
+.spine-edge {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg,
+    rgb(255 255 255 / calc(.16 * var(--gloss, 1))) 0%,
+    transparent 22%,
+    rgb(0 0 0 / calc(.28 * var(--gloss, 1))) 100%);
+}
+
+.spine-text {
+  position: absolute;
+  inset: 34px 0 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 8px;
+  /* Read bottom-to-top, which is how spines are printed nearly everywhere
+     outside the United States and, more to the point, how they are readable
+     when the shelf is upright. */
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 0 2px;
+  overflow: hidden;
+}
+.spine-title {
+  font-size: calc(11.5px * var(--scale));
+  font-weight: 600;
+  letter-spacing: .01em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 60%;
+}
+.spine-artist {
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Pulled out and turned, the way a hand tips a record it is considering. */
+.spine:hover,
+.spine:focus-visible {
+  transform: translateY(-14px) translateZ(30px) rotateY(-22deg);
+  filter: brightness(1.12);
+  z-index: 2;
+}
+.spine:hover .spine-face,
+.spine:focus-visible .spine-face {
+  box-shadow:
+    inset 0 0 0 var(--hair) var(--accent-line),
+    inset 0 26px 0 -24px rgb(var(--spine-rgb, var(--accent-rgb)) / 1),
+    inset 0 -18px 0 -16px rgb(var(--spine-rgb, var(--accent-rgb)) / .7),
+    0 18px 40px -18px rgb(0 0 0 / .8);
+}
+
+/* ------------------------------------------------------------------ floor
+
+   The library standing on the world behind it, rather than floating in front
+   of it. See mountFloor in views.js for the three problems this had to answer
+   and why it is a fourth mode and never the only one. */
+
+.albums-floor { overflow-x: hidden; }
+
+.floor {
+  position: relative;
+  margin-top: 8px;
+  /* Matched to the backdrop's own camera: it looks very slightly down from a
+     little above the plane, and the interface has to agree or the two spaces
+     disagree by a few degrees and the whole illusion reads as a mistake. */
+  perspective: 1100px;
+  perspective-origin: 50% 34%;
+}
+
+.floor-camera {
+  position: sticky;
+  top: 0;
+  height: 78vh;
+  transform-style: preserve-3d;
+}
+
+.floor-row {
+  position: absolute;
+  left: 50%;
+  top: 22%;
+  display: flex;
+  gap: 26px;
+  transform-style: preserve-3d;
+  will-change: transform, opacity;
+  /* No transition: the position is a function of the scroll offset and is
+     written on every scroll frame. Easing it would make the floor lag behind
+     the scroll, which reads as the room sliding rather than the eye moving. */
+}
+
+.floor-card {
+  display: block;
+  width: 168px;
+  flex: none;
+  transform-style: preserve-3d;
+}
+
+.floor-art {
+  position: relative;
+  display: block;
+  width: 168px;
+  height: 168px;
+  overflow: hidden;
+  box-shadow:
+    inset 0 0 0 var(--hair) rgb(160 220 255 / .16),
+    0 30px 50px -26px rgb(0 0 0 / .85);
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+}
+.floor-art .art-img { width: 100%; height: 100%; object-fit: cover; }
+
+/* Titles do not recede. They stay flat and legible on the near rows and fade
+   out entirely past the third — distant rows become covers only, which is what
+   a room full of records actually looks like. */
+.floor-text {
+  display: block;
+  margin-top: 10px;
+  opacity: 0;
+  transition: opacity var(--dur-3) var(--ease);
+  pointer-events: none;
+}
+.floor-row.is-near .floor-text { opacity: 1; }
+.floor-text b {
+  display: block;
+  font-size: calc(13px * var(--scale));
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.floor-text span {
+  display: block;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.floor-card:hover .floor-art,
+.floor-card:focus-visible .floor-art {
+  box-shadow:
+    inset 0 0 0 var(--hair) var(--accent-line),
+    0 34px 60px -24px rgb(var(--accent-rgb) / .5);
+}
+
+/* Someone who has asked for less motion gets the grid's honesty instead of a
+   floor that moves whenever they scroll. */
+@media (prefers-reduced-motion: reduce) {
+  .floor { perspective: none; }
+  .floor-camera { position: static; height: auto; }
+  .floor-row { position: static; transform: none !important; opacity: 1 !important; flex-wrap: wrap; justify-content: center; margin-bottom: 26px; }
+  .floor-row .floor-text { opacity: 1; }
+}
+
+@media (max-width: 720px) {
+  .floor-card, .floor-art { width: 118px; }
+  .floor-art { height: 118px; }
+  .floor-row { gap: 16px; }
+  .spine { height: 210px; }
+}

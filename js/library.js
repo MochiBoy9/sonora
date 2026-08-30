@@ -88,6 +88,26 @@ function ensureWorker() {
 function absorb(batch) {
   const rows = [];
   for (const { track, art } of batch) {
+    /* Corrections the listener made survive a rescan.
+     *
+     * The parser hands back what the file says, and what the file says has not
+     * changed — Sonora does not write tags. So the edits are kept beside the
+     * parsed values rather than replacing them, and re-applied on top here.
+     * Clearing an edit therefore reveals the file's own tag again instead of
+     * leaving a blank, which is the behaviour that makes the feature safe to
+     * use on a library you care about. */
+    const prior = state.tracks.get(track.id);
+    if (prior && prior.edits) {
+      track.edits = prior.edits;
+      // The freshly parsed values are what the file says *now*, so they become
+      // the new originals for the fields being overridden — a tag fixed in
+      // another program and then reverted here lands on the corrected value
+      // rather than on whatever it said the first time Sonora saw it.
+      const orig = {};
+      for (const k of Object.keys(prior.edits)) orig[k] = track[k];
+      track.orig = orig;
+      applyEdits(track);
+    }
     decorate(track);
     state.tracks.set(track.id, track);
     rows.push(track);
@@ -104,6 +124,14 @@ function flushArt() {
   for (const a of items) {
     db.putArt(a.key, a.blob).catch(() => {});
     if (a.accent) accents.set(a.key, a.accent);
+    /* The surface, under its own key in the same store. A typed array goes
+       into IndexedDB as itself, so it comes back out ready to read without a
+       parse — and an album whose cover has no relief simply has no record,
+       which is the same thing as "this one is flat". */
+    if (a.relief) {
+      reliefs.set(a.key, a.relief);
+      db.putArt(a.key + '#relief', a.relief).catch(() => {});
+    }
     // Seed the cache from the blob we already hold: no round trip, and it
     // clears any "no art here" verdict reached while the import was running.
     artMisses.delete(a.key);
@@ -114,6 +142,101 @@ function flushArt() {
 }
 
 /* ------------------------------------------------------------------ records */
+
+/* ------------------------------------------------------------------ edits
+ *
+ * Tag corrections, written to Sonora's index and never to the file.
+ *
+ * This is the whole design and it is a deliberate limit rather than a missing
+ * feature. Writing tags means rewriting somebody's files in place, and a bug
+ * in that costs them a library — Sonora has read the disk and not written to
+ * it since the first line of it, and a spelling correction is not the reason
+ * to change that.
+ *
+ * So an edit is an overlay. The parsed value stays where it was, the edit sits
+ * beside it, and the edit wins when the record is read. Clearing a field
+ * reveals the file's own tag again rather than leaving a blank, and a rescan
+ * re-applies the overlay instead of losing it.
+ */
+
+/** Fields a listener may correct. Anything else is measured, not claimed. */
+export const EDITABLE = ['title', 'artist', 'albumArtist', 'album', 'genre', 'track', 'disc', 'year'];
+
+/** Lays a track's overlay over its parsed values. */
+function applyEdits(t) {
+  if (!t.edits) return t;
+  for (const k of EDITABLE) {
+    const v = t.edits[k];
+    if (v === undefined) continue;
+    t[k] = v;
+  }
+  return t;
+}
+
+/**
+ * Corrects one or more tracks.
+ *
+ * `patch` holds only the fields being changed; a field set to `null` drops the
+ * override and lets the file's own tag show through again. Returns the number
+ * of tracks touched.
+ */
+export async function editTracks(tracks, patch) {
+  const rows = [];
+  for (const t of tracks) {
+    const track = typeof t === 'string' ? state.tracks.get(t) : t;
+    if (!track) continue;
+    const edits = { ...(track.edits || {}) };
+    /* What the file said, kept for exactly the fields that were overridden.
+     *
+     * The first version re-read the tag to undo an edit, which is tidier right
+     * up until the file cannot be read — a folder picked as loose files has no
+     * handle after a reload, so `fileFor` returns null, the re-read is skipped
+     * and the field silently keeps the value being reverted. Observed. Holding
+     * the original costs a few bytes on the tracks somebody actually corrected
+     * and makes the undo exact, offline, and synchronous. */
+    const orig = { ...(track.orig || {}) };
+    let changed = false;
+
+    for (const k of EDITABLE) {
+      if (!(k in patch)) continue;
+      const v = patch[k];
+      if (v === null || v === undefined || v === '') {
+        if (k in edits) {
+          delete edits[k];
+          if (k in orig) { track[k] = orig[k]; delete orig[k]; }
+          changed = true;
+        }
+      } else if (edits[k] !== v) {
+        // Record what it was before the first override of this field.
+        if (!(k in edits) && !(k in orig)) orig[k] = track[k];
+        edits[k] = v;
+        changed = true;
+      }
+    }
+    if (!changed) continue;
+
+    if (Object.keys(edits).length) track.edits = edits; else delete track.edits;
+    if (Object.keys(orig).length) track.orig = orig; else delete track.orig;
+
+    applyEdits(track);
+    // The album key is derived from the artist and album, so correcting either
+    // moves the track to a different album — which is usually the point.
+    track.albumKey = albumKeyOf(track.albumArtist || track.artist || '', track.album);
+    track.namedArtist = true;
+    decorate(track);
+    rows.push(track);
+  }
+
+  if (rows.length) {
+    await db.putTracks(rows).catch(() => {});
+    reindex();
+    events.emit('change');
+  }
+  return rows.length;
+}
+
+/** Whether a track carries any correction at all. */
+export const isEdited = (t) => !!(t && t.edits && Object.keys(t.edits).length);
 
 /** Adds the derived fields every view depends on. Called once per track. */
 function decorate(t) {
@@ -139,6 +262,36 @@ function decorate(t) {
 }
 
 const accents = new Map();      // albumKey -> [r,g,b], filled during import
+
+/* albumKey -> { map, size, density }, the cover's own surface. Held in memory
+   only for albums that have been looked at; a library of four hundred at 8 KB
+   each would be three megabytes of normals nobody is currently hovering. */
+const reliefs = new Map();
+const reliefMisses = new Set();
+
+/**
+ * The relief map for an album, or null.
+ *
+ * Synchronous when it is already warm, which is the case that matters — this
+ * is asked for on pointerenter and an await there would light the sleeve one
+ * frame after the pointer arrived.
+ */
+export function reliefFor(key) {
+  if (!key || reliefMisses.has(key)) return null;
+  return reliefs.get(key) || null;
+}
+
+/** Fetches it from the store, once, for a sleeve that is about to want it. */
+export function loadRelief(key) {
+  if (!key || reliefs.has(key) || reliefMisses.has(key)) {
+    return Promise.resolve(reliefs.get(key) || null);
+  }
+  return db.getArt(key + '#relief').then((rec) => {
+    if (rec && rec.map) { reliefs.set(key, rec); return rec; }
+    reliefMisses.add(key);
+    return null;
+  }).catch(() => { reliefMisses.add(key); return null; });
+}
 export const accentFor = (key) =>
   accents.get(key) || state.albumBy.get(key)?.accent || null;
 

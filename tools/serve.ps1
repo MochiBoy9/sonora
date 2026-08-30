@@ -43,6 +43,7 @@ $mime = @{
   '.mjs'  = 'text/javascript; charset=utf-8'
   '.css'  = 'text/css; charset=utf-8'
   '.json' = 'application/json'
+  '.webmanifest' = 'application/manifest+json'
   '.svg'  = 'image/svg+xml'
   '.png'  = 'image/png'
   '.jpg'  = 'image/jpeg'
@@ -77,7 +78,16 @@ while ($listener.IsListening) {
       else { $res.ContentType = 'application/octet-stream' }
       # No caching: this is a development server, and a stale module is an
       # hour spent debugging a bug that was already fixed.
-      $res.Headers.Add('Cache-Control', 'no-store')
+      #
+      # The service worker script is the one exception, and it is not
+      # cosmetic: Chromium refuses to register a worker whose script it is
+      # forbidden to store, and reports it as "an unknown error occurred when
+      # fetching the script" - which points at the script, where there is
+      # nothing wrong. no-cache still revalidates on every load, so a changed
+      # sw.js is still picked up immediately; it only drops the part that says
+      # the browser may not keep a copy at all.
+      if ($rel -eq 'sw.js') { $res.Headers.Add('Cache-Control', 'no-cache') }
+      else { $res.Headers.Add('Cache-Control', 'no-store') }
       $res.ContentLength64 = $bytes.Length
       $res.OutputStream.Write($bytes, 0, $bytes.Length)
     } else {

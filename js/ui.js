@@ -180,7 +180,72 @@ function toggleRowFavourite(row) {
  * One factory for every track list in the app. Rows are recycled by the
  * virtualiser, so render() only ever writes fields that changed.
  */
-export function trackRowFactory({ columns = ['index', 'title', 'album', 'duration'], onPlay, onMenu }) {
+/**
+ * Which rows are picked, and the arithmetic of picking them.
+ *
+ * Held as ids rather than indices, deliberately. A virtualised list re-sorts
+ * and re-filters under the selection all the time; indices would silently come
+ * to mean different tracks, which is the kind of bug that only shows up as
+ * "it deleted the wrong thing".
+ *
+ * The anchor is the other half of it: shift-click means "from the last thing I
+ * picked to here", and that is a range in the list's *current* order, so it is
+ * resolved against the list at the moment of the click rather than stored.
+ */
+export class Selection {
+  constructor(onChange) {
+    this.ids = new Set();
+    this.anchorId = null;
+    this.onChange = onChange;
+  }
+
+  get size() { return this.ids.size; }
+  has(id) { return this.ids.has(id); }
+  clear() { if (!this.ids.size) return; this.ids.clear(); this.anchorId = null; this.onChange?.(); }
+
+  /** The picked tracks, in the order the list currently shows them. */
+  tracksIn(list) { return list.filter((t) => this.ids.has(t.id)); }
+
+  toggle(id) {
+    if (this.ids.has(id)) this.ids.delete(id); else this.ids.add(id);
+    this.anchorId = id;
+    this.onChange?.();
+  }
+
+  only(id) {
+    this.ids.clear();
+    this.ids.add(id);
+    this.anchorId = id;
+    this.onChange?.();
+  }
+
+  all(list) {
+    for (const t of list) this.ids.add(t.id);
+    this.onChange?.();
+  }
+
+  /** From the anchor to `id` in the list's current order, inclusive. */
+  range(list, id) {
+    const to = list.findIndex((t) => t.id === id);
+    if (to < 0) return;
+    let from = this.anchorId ? list.findIndex((t) => t.id === this.anchorId) : -1;
+    if (from < 0) from = to;
+    const [lo, hi] = from <= to ? [from, to] : [to, from];
+    for (let i = lo; i <= hi; i++) this.ids.add(list[i].id);
+    this.onChange?.();
+  }
+
+  /** Drops ids that are no longer in the list, after a filter or a delete. */
+  prune(list) {
+    if (!this.ids.size) return;
+    const live = new Set(list.map((t) => t.id));
+    let changed = false;
+    for (const id of [...this.ids]) if (!live.has(id)) { this.ids.delete(id); changed = true; }
+    if (changed) this.onChange?.();
+  }
+}
+
+export function trackRowFactory({ columns = ['index', 'title', 'album', 'duration'], onPlay, onMenu, onPick, selection }) {
   const create = () => {
     const row = el('div', { class: 'trow', role: 'row', tabindex: '-1' });
     let html = '';
@@ -201,9 +266,15 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
       onPlay?.(parseInt(row.dataset.index, 10));
     });
     row.addEventListener('click', (e) => {
-      if (e.target.closest('.trow-play')) onPlay?.(parseInt(row.dataset.index, 10));
-      else if (e.target.closest('.trow-fav')) toggleRowFavourite(row);
-      else if (e.target.closest('.trow-more')) onMenu?.(parseInt(row.dataset.index, 10), e.target.closest('.trow-more'));
+      if (e.target.closest('.trow-play')) return onPlay?.(parseInt(row.dataset.index, 10));
+      if (e.target.closest('.trow-fav')) return toggleRowFavourite(row);
+      if (e.target.closest('.trow-more')) return onMenu?.(parseInt(row.dataset.index, 10), e.target.closest('.trow-more'));
+      // A plain click on the row body picks it. Nothing used to happen here,
+      // so this takes no gesture away from anybody.
+      onPick?.(parseInt(row.dataset.index, 10), {
+        toggle: e.ctrlKey || e.metaKey,
+        range: e.shiftKey,
+      });
     });
     row.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -218,6 +289,11 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
     // favourite after the list underneath it has been re-sorted.
     row.dataset.id = track.id;
     paintFavourite(row, track.id);
+    if (selection) {
+      const picked = selection.has(track.id);
+      row.classList.toggle('is-selected', picked);
+      row.setAttribute('aria-selected', picked ? 'true' : 'false');
+    }
     const playing = player.state.current && player.state.current.id === track.id;
     row.classList.toggle('is-playing', !!playing);
     row.classList.toggle('is-missing', !lib.isAvailable(track.id));
@@ -346,8 +422,104 @@ export function trackMenu(tracks, opts = {}) {
     opts.onRemove && { separator: true },
     opts.onRemove && { label: opts.removeLabel || 'Remove', icon: 'trash', danger: true, onSelect: opts.onRemove },
     { separator: true },
+    tracks.length && {
+      label: tracks.length > 1 ? `Edit details for ${tracks.length} tracks…` : 'Edit details…',
+      icon: 'edit',
+      onSelect: () => editDialog(tracks),
+    },
     first && { label: 'Track info', icon: 'info', onSelect: () => infoDialog(first) },
   ].filter(Boolean);
+}
+
+/* ------------------------------------------------------------------ editing */
+
+const EDIT_FIELDS = [
+  ['title', 'Title', 'text'],
+  ['artist', 'Artist', 'text'],
+  ['albumArtist', 'Album artist', 'text'],
+  ['album', 'Album', 'text'],
+  ['genre', 'Genre', 'text'],
+  ['track', 'Track no.', 'number'],
+  ['disc', 'Disc', 'number'],
+  ['year', 'Year', 'number'],
+];
+
+/**
+ * Correct what a track says about itself.
+ *
+ * Edits go into Sonora's index and never into the file — see the note in
+ * library.js for why that is a decision rather than an omission. The dialog
+ * says so, because a listener is entitled to know whether the thing they just
+ * typed has been written to their disk.
+ *
+ * Over several tracks, a field where they already agree shows the shared value
+ * and a field where they differ shows nothing and is left alone unless typed
+ * into. That is the only behaviour that lets somebody fix the album name on
+ * forty tracks without flattening forty different titles into one.
+ */
+export function editDialog(tracks) {
+  if (!tracks || !tracks.length) return;
+  const many = tracks.length > 1;
+  const body = el('div', { class: 'edit-form' });
+  const inputs = new Map();
+  const mixed = new Set();
+
+  for (const [key, label, type] of EDIT_FIELDS) {
+    const values = new Set(tracks.map((t) => String(t[key] ?? '')));
+    const shared = values.size === 1 ? [...values][0] : '';
+    if (values.size > 1) mixed.add(key);
+
+    const input = el('input', {
+      type, class: 'input', value: shared === '0' && type === 'number' ? '' : shared,
+      placeholder: values.size > 1 ? '— several —' : '',
+      'aria-label': label,
+    });
+    inputs.set(key, input);
+
+    const edited = tracks.some((t) => t.edits && t.edits[key] !== undefined);
+    body.appendChild(el('label', { class: 'edit-field' + (edited ? ' is-edited' : '') },
+      el('span', { class: 'edit-label', text: label },
+        edited ? el('button', {
+          class: 'edit-revert', type: 'button', title: 'Use what the file says',
+          text: 'revert',
+          onclick: async (e) => {
+            e.preventDefault();
+            await lib.editTracks(tracks, { [key]: null });
+            const back = new Set(tracks.map((t) => String(t[key] ?? '')));
+            input.value = back.size === 1 ? [...back][0] : '';
+            e.currentTarget.closest('.edit-field').classList.remove('is-edited');
+            toast('Reverted to the file');
+          },
+        }) : null),
+      input));
+  }
+
+  body.appendChild(el('p', { class: 'edit-note',
+    text: 'Saved in Sonora only. Your files are never modified — a rescan keeps these corrections.' }));
+
+  dialog({
+    title: many ? `Edit ${tracks.length} tracks` : 'Edit details',
+    body,
+    width: 460,
+    actions: [
+      { label: 'Cancel' },
+      {
+        label: 'Save', primary: true,
+        onSelect: async () => {
+          const patch = {};
+          for (const [key, , type] of EDIT_FIELDS) {
+            const raw = inputs.get(key).value.trim();
+            // A field that was blank because the tracks disagreed, and was not
+            // typed into, must not overwrite forty different values with "".
+            if (mixed.has(key) && raw === '') continue;
+            patch[key] = type === 'number' ? (parseInt(raw, 10) || null) : raw;
+          }
+          const n = await lib.editTracks(tracks, patch);
+          toast(n ? `Updated ${n === 1 ? 'track' : n + ' tracks'}` : 'Nothing changed');
+        },
+      },
+    ],
+  });
 }
 
 /* ------------------------------------------------------------------ dialogs */

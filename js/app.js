@@ -3,7 +3,7 @@
 import { $, el, ico, debounce, clamp, acceptAttr, formatName } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
-import { renderView } from './views.js';
+import { renderView, hasLiveSelection } from './views.js';
 import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
 import { toast, closeMenu, promptDialog, menu, dialog } from './ui.js';
@@ -11,10 +11,12 @@ import * as session from './session.js';
 import * as stats from './stats.js';
 import * as looks from './looks.js';
 import * as rack from './audio.js';
-import { animate, ease, reduceMotion } from './motion.js';
+import { animate, ease, reduceMotion, startDeviceTilt, deviceTiltNeedsPermission } from './motion.js';
 import { startIntro } from './intro.js';
 import { mountBackdrop } from './backdrop.js';
 import { toggleStage, isOpen as stageOpen } from './stage.js';
+import { startRelief } from './relief.js';
+import { startOffline } from './offline.js';
 
 /* Destinations are numbered, like channels on a desk — the number is part of
    how you learn where things are, not decoration. */
@@ -25,6 +27,7 @@ const NAV = [
   { route: 'artists', label: 'Artists', icon: 'artist' },
   { route: 'favourites', label: 'Favourites', icon: 'star' },
   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
+  { route: 'files', label: 'Files', icon: 'folder' },
   { route: 'circles', label: 'Analysis', icon: 'circles' },
   { route: 'sound', label: 'Sound', icon: 'sliders' },
 ];
@@ -786,9 +789,36 @@ async function boot() {
     if (outcome === 'resumed' || outcome === 'ready') applyAccent();
   });
 
+  /* Offline, last of all.
+   *
+   * Deliberately after everything else has started: registering a service
+   * worker sets it fetching the whole shell, and doing that during boot means
+   * competing with the very files it is trying to cache. The one thing this
+   * must not do is make the first launch slower. */
+  setTimeout(() => { startOffline(); }, 2500);
+
+  /* The printed cover gets somewhere to catch the light. One delegated
+     controller for the whole page — see relief.js for why it is not one per
+     sleeve. */
+  startRelief();
+
+  /* Device tilt, where it was left switched on.
+   *
+   * Only restored where the platform hands orientation over without asking.
+   * iOS wants a real gesture for it, and a permission prompt fired at somebody
+   * who has just opened a music player is how that permission gets denied
+   * permanently — there, the switch in Settings is the gesture. */
+  try {
+    if (localStorage.getItem('sonora:tilt') === '1' && !deviceTiltNeedsPermission()) {
+      startDeviceTilt();
+    }
+  } catch { /* private mode */ }
+
   // Re-render list pages when the library changes underneath them. Deferred to
   // the next frame so we never rebuild the view from inside the emit that
-  // triggered it, and skipped when the user has scrolled away from the top.
+  // triggered it, and skipped when the listener is in the middle of something:
+  // scrolled away from the top, or part-way through picking a set of tracks.
+  // Both are work in progress, and a repaint throws both of them away.
   let repaintQueued = false;
   lib.events.on('change', () => {
     if (repaintQueued) return;
@@ -796,7 +826,8 @@ async function boot() {
     requestAnimationFrame(() => {
       repaintQueued = false;
       const route = parseHash();
-      if (['home', 'albums', 'artists', 'songs'].includes(route.name) && $('#view').scrollTop < 40) {
+      if (['home', 'albums', 'artists', 'songs'].includes(route.name) &&
+          $('#view').scrollTop < 40 && !hasLiveSelection()) {
         navigate();
       }
     });

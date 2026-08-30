@@ -1,6 +1,6 @@
 # Sonora — Feature Specification & UX Plan
 
-**Version** 2.4 · **Status** implemented and verified unless a section says
+**Version** 2.5 · **Status** implemented and verified unless a section says
 otherwise · **Audience** full-stack, design, QA
 
 ---
@@ -1731,4 +1731,30 @@ before consent" and "cached, not refetched" assertions are made.
 | B-7 | Per-album and per-artist racks, so a badly mastered record can carry its own correction | §F5 |
 | B-8 | Import and export a look or a rack as a file, for sharing | §F5.7, §F6.2 |
 | B-9 | A phase-vocoder pitch mode for large shifts, behind a quality setting | §F5.4 |
-| B-10 | Crossfade and gapless playback, which the rack's graph now makes reachable | §F5.3 |
+
+B-10 (crossfade and gapless) is **built** as of 2.5 — two decoders in parallel,
+one control at two of its positions. See `js/player.js`, the deck section.
+
+### Built in 2.5
+
+Twenty items from the second catalogue and the drawing set. Grouped by what
+they touch rather than by the order they landed:
+
+| Area | What |
+|---|---|
+| Playback | Gapless and crossfade on two decks; ReplayGain with a measured fallback; sleep timer; shuffle weighted by listening |
+| Analysis | One decode per track producing a waveform, a spectrogram and a loudness figure, computed on first listen and kept |
+| Transport | Waveform scrubber that opens on hover; whole-song spectrogram under the immersive scrubber |
+| Library | Multi-select across every list; folder view; duplicate detection verified against file contents; tag correction as an overlay that never touches your files |
+| Depth | Relief on printed covers from a surface derived at import; shelf and floor album views; the room answering the record on the immersive stage; device-orientation lighting |
+| Hardware | The Sound page as a rack-mount unit, with a lamp that reports what is passing through |
+| Platform | Metering moved to an AudioWorklet; the visualiser moved to an OffscreenCanvas worker; light shafts and a reflected floor in the backdrop; a service worker and manifest, so the application opens offline too |
+
+Five defects were found and fixed *by* that work rather than reported against
+it, and they are worth listing because each was invisible until something
+measured it: the two decks were playing at different element volumes, so every
+gapless handover had a level jump in it; the listening meter was accumulating
+silence, tapping after the volume control, and depending on frames being drawn
+to record anything at all; and the duplicate finder called eight different
+recordings copies of each other because uncompressed audio of equal length is
+always the same size.

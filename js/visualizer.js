@@ -12,13 +12,23 @@
  *   mesh    a spectrogram in perspective — the last few seconds of sound,
  *           receding toward a horizon
  *
+ * The drawing itself lives in visualizer-draw.js, because it runs in two
+ * places: here on the main thread, or inside a worker against an
+ * OffscreenCanvas. This file owns everything that cannot leave the main thread
+ * — the element, the ResizeObserver, the CSS custom properties, and the
+ * AudioContext's analyser — and hands the rest over.
+ *
+ * The worker is used where the platform has it and declined everywhere else,
+ * and the fallback is not a lesser path: it is the same renderer against the
+ * same context, one function call closer.
+ *
  * Nothing here touches the DOM after setup, and nothing allocates per frame
- * except the cached gradients, which are rebuilt only when the size or the
- * colours actually change.
+ * except the transfer buffers, which come from a small pool.
  */
 
 import { tick, reduceMotion } from './motion.js';
 import * as player from './player.js';
+import { createRenderer } from './visualizer-draw.js';
 
 export const MODES = [
   { id: 'bars', label: 'Bars' },
@@ -41,12 +51,23 @@ function readVar(name, fallback) {
   return parts.length >= 3 ? parts.slice(0, 3) : fallback;
 }
 
-const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
-const mix = (a, b, t) => [
-  Math.round(a[0] + (b[0] - a[0]) * t),
-  Math.round(a[1] + (b[1] - a[1]) * t),
-  Math.round(a[2] + (b[2] - a[2]) * t),
-];
+/* ------------------------------------------------------------------ offload */
+
+/**
+ * Can this canvas be handed to a worker?
+ *
+ * Every one of these has to hold, and the last is the one that is easy to
+ * forget: `transferControlToOffscreen` is one-way. Once a canvas has been
+ * transferred it can never be drawn to from this thread again, so a canvas
+ * that might need the main-thread path later must not be offered at all.
+ * Since the decision is made once at construction and never revisited, that
+ * is safe here.
+ */
+const canOffload = () =>
+  typeof OffscreenCanvas === 'function' &&
+  typeof HTMLCanvasElement !== 'undefined' &&
+  typeof HTMLCanvasElement.prototype.transferControlToOffscreen === 'function' &&
+  typeof Worker === 'function';
 
 /* ------------------------------------------------------------------ mount */
 
@@ -59,19 +80,46 @@ const mix = (a, b, t) => [
  * @param band              fraction of the canvas height the bars may fill
  * @param idleShimmer       breathe gently instead of flatlining when paused
  * @param chrome            draw the baseline rule and tick marks
+ * @param offload           allow the worker path (default true)
  */
 export function createVisualizer(canvas, {
   mode = 'bars', visible = () => true, intensity = 1, bars = 56, band = 0.94,
-  idleShimmer = true, chrome = true,
+  idleShimmer = true, chrome = true, offload = true,
 } = {}) {
-  const ctx = canvas.getContext('2d', { alpha: true });
-  if (!ctx) return { setMode() {}, setFocus() {}, kick() {}, destroy() {} };
+  const opts = { mode, intensity, bars, band, idleShimmer, chrome };
 
   let w = 0, h = 0, dpr = 1;
   let accent = DEFAULT_ACCENT;
   let art = DEFAULT_ACCENT;
   let accentAt = 0, sizeAt = 0;
-  let gradient = null, gradientKey = '';
+  let restFrames = 0;
+  let stillKey = '';
+  let focusX = 0.5, focusY = 0.5;
+
+  /* One of these two ends up driving the drawing. `worker` is preferred where
+     the platform allows it; `renderer` is the direct path. Exactly one is
+     ever non-null. */
+  let worker = null;
+  let renderer = null;
+  let ctx = null;
+
+  if (offload && canOffload()) {
+    try {
+      const off = canvas.transferControlToOffscreen();
+      worker = new Worker(new URL('./visualizer.worker.js', import.meta.url), { type: 'module' });
+      worker.onerror = () => { /* the canvas is already gone; nothing to fall back to */ };
+      worker.postMessage({ type: 'init', canvas: off, opts, dpr: 1, bandCount: 64 }, [off]);
+    } catch {
+      // The transfer failed before it took effect, so the canvas is still ours.
+      worker = null;
+    }
+  }
+
+  if (!worker) {
+    ctx = canvas.getContext('2d', { alpha: true });
+    if (!ctx) return { canvas, get mode() { return mode; }, setMode() {}, setFocus() {}, kick() {}, destroy() {} };
+    renderer = createRenderer(ctx, opts);
+  }
 
   const resize = () => {
     const rect = canvas.getBoundingClientRect();
@@ -80,9 +128,15 @@ export function createVisualizer(canvas, {
     const nw = Math.round(rect.width * dpr);
     const nh = Math.round(rect.height * dpr);
     if (nw === w && nh === h) return true;
-    w = canvas.width = nw;
-    h = canvas.height = nh;
-    gradient = null;
+    w = nw; h = nh;
+    if (worker) {
+      // The element's own width/height are the worker's to set now.
+      worker.postMessage({ type: 'size', w, h, dpr });
+    } else {
+      canvas.width = w;
+      canvas.height = h;
+      renderer.setSize(w, h, dpr);
+    }
     return true;
   };
 
@@ -90,26 +144,45 @@ export function createVisualizer(canvas, {
   ro.observe(canvas);
   resize();
 
-  const vertical = (key, stops) => {
-    if (gradient && gradientKey === key) return gradient;
-    const g = ctx.createLinearGradient(0, h, 0, 0);
-    for (const [at, colour] of stops) g.addColorStop(at, colour);
-    gradient = g;
-    gradientKey = key;
-    return g;
-  };
+  /* Transfer buffers, pooled.
+   *
+   * A transferred ArrayBuffer is detached, so the same one cannot be sent
+   * twice — and allocating a fresh kilobyte every frame is exactly the
+   * per-frame garbage this file's header promises not to make. Three buffers
+   * cycling is enough: by the time the third is in flight the first has come
+   * back. They are only ever created on the worker path. */
+  const POOL = 3;
+  const packedPool = worker ? Array.from({ length: POOL }, () => new Float32Array(128)) : null;
+  const wavePool = worker ? Array.from({ length: POOL }, () => new Uint8Array(1024)) : null;
+  let poolAt = 0;
 
-  let rotation = 0;
-  let restFrames = 0;
-  let stillKey = '';
-  // Where the radial mode is centred, in 0..1 of the canvas. The stage points
-  // this at the artwork so the ring is concentric with the sleeve.
-  let focusX = 0.5, focusY = 0.5;
+  function sendFrame(a, dt, now) {
+    // A detached buffer has length 0; that is how a returned one is spotted.
+    let packed = packedPool[poolAt];
+    let wave = wavePool[poolAt];
+    if (packed.length === 0) packed = packedPool[poolAt] = new Float32Array(128);
+    if (wave.length === 0) wave = wavePool[poolAt] = new Uint8Array(1024);
+    poolAt = (poolAt + 1) % POOL;
 
-  /* The spectrogram history the mesh mode draws, as a ring buffer. */
-  const ROWS = 26, COLS = 40;
-  const history = new Float32Array(ROWS * COLS);
-  let historyAt = 0, historyClock = 0;
+    const n = Math.min(64, a.bands.length);
+    packed.set(a.bands.subarray(0, n), 0);
+    packed.set(a.peaks.subarray(0, n), 64);
+
+    const transfer = [packed.buffer];
+    let waveBuf = null;
+    if (a.wave) {
+      const m = Math.min(wave.length, a.wave.length);
+      wave.set(a.wave.subarray(0, m));
+      waveBuf = wave.buffer;
+      transfer.push(waveBuf);
+    }
+
+    worker.postMessage({
+      type: 'frame', packed: packed.buffer, wave: waveBuf,
+      level: a.level, bass: a.bass, pulse: a.pulse, live: a.live, idle: a.idle,
+      dt, now,
+    }, transfer);
+  }
 
   const stop = tick((dt, now) => {
     if (!visible()) return;
@@ -119,7 +192,9 @@ export function createVisualizer(canvas, {
       const a = readVar('--accent-rgb', DEFAULT_ACCENT);
       const b = readVar('--art-rgb', a);
       if (a.join() !== accent.join() || b.join() !== art.join()) {
-        accent = a; art = b; gradient = null;
+        accent = a; art = b;
+        if (worker) worker.postMessage({ type: 'colours', accent, art });
+        else renderer.setColours(accent, art);
       }
     }
     if (now - sizeAt > 600) { sizeAt = now; resize(); }
@@ -129,7 +204,11 @@ export function createVisualizer(canvas, {
       // The still version has no reason to repaint until something it is made
       // of changes, so draw it once and stop.
       const key = `${w}x${h}|${accent.join()}|${mode}`;
-      if (key !== stillKey) { stillKey = key; drawStill(); }
+      if (key !== stillKey) {
+        stillKey = key;
+        if (worker) worker.postMessage({ type: 'still' });
+        else renderer.still();
+      }
       return;
     }
 
@@ -139,237 +218,35 @@ export function createVisualizer(canvas, {
       if (++restFrames > 90) return;
     } else restFrames = 0;
 
-    rotation += dt * (0.00004 + a.level * 0.0005);
-
-    // The mesh advances on its own clock so its scroll speed does not depend
-    // on the display's refresh rate.
-    historyClock += dt;
-    if (historyClock > 45) {
-      historyClock = 0;
-      historyAt = (historyAt + 1) % ROWS;
-      const row = historyAt * COLS;
-      const step = a.bands.length / COLS;
-      for (let i = 0; i < COLS; i++) {
-        let v = 0;
-        for (let j = Math.floor(i * step); j < Math.floor((i + 1) * step); j++) v = Math.max(v, a.bands[j]);
-        history[row + i] = v;
-      }
-    }
-
-    ctx.clearRect(0, 0, w, h);
-    ctx.globalAlpha = intensity;
-    ctx.lineCap = 'butt';
-    ctx.lineJoin = 'miter';
-    switch (mode) {
-      case 'wave': drawWave(a, now); break;
-      case 'radial': drawRadial(a); break;
-      case 'mesh': drawMesh(a); break;
-      default: drawBars(a, now);
-    }
-    ctx.globalAlpha = 1;
+    if (worker) sendFrame(a, dt, now);
+    else renderer.frame(a, dt, now);
   });
-
-  /* ---------------------------------------------------------------- bars */
-
-  function drawBars(a, now) {
-    const n = Math.max(8, Math.min(bars, a.bands.length));
-    const step = a.bands.length / n;
-    const gap = w / n;
-    const bw = Math.max(2 * dpr, gap * 0.56);
-    const g = vertical('bars' + accent.join() + art.join() + h, [
-      [0, rgba(accent, 0.95)], [0.6, rgba(accent, 1)], [1, rgba(mix(accent, art, 0.75), 1)]]);
-
-    if (chrome) {
-      // A baseline the bars stand on, so they read as measured, not floating.
-      ctx.fillStyle = rgba(accent, 0.22);
-      ctx.fillRect(0, h - dpr, w, dpr);
-    }
-
-    ctx.fillStyle = g;
-    for (let i = 0; i < n; i++) {
-      let v = 0, peak = 0;
-      for (let j = Math.floor(i * step); j < Math.floor((i + 1) * step); j++) {
-        v = Math.max(v, a.bands[j]);
-        peak = Math.max(peak, a.peaks[j]);
-      }
-      if (idleShimmer && !a.live) {
-        // A slow breath, so a paused panel still looks alive rather than dead.
-        v = Math.max(v, 0.03 + 0.025 * Math.sin(now * 0.0016 + i * 0.5));
-      }
-      const bh = Math.max(dpr, v * h * band);
-      const x = Math.round(i * gap + (gap - bw) / 2);
-      ctx.globalAlpha = intensity * (0.36 + v * 0.64);
-      ctx.fillRect(x, h - bh, Math.round(bw), bh);
-
-      if (peak > 0.04) {
-        const py = h - Math.max(bh, peak * h * band);
-        ctx.globalAlpha = intensity * 0.62;
-        ctx.fillRect(x, Math.round(py) - dpr * 2, Math.round(bw), dpr * 1.5);
-      }
-    }
-    ctx.globalAlpha = intensity;
-  }
-
-  /* ---------------------------------------------------------------- wave */
-
-  function drawWave(a, now) {
-    const wave = a.wave;
-    const mid = Math.round(h / 2);
-    const n = Math.min(160, Math.max(48, Math.round(w / (3 * dpr))));
-
-    if (chrome) {
-      ctx.fillStyle = rgba(accent, 0.16);
-      ctx.fillRect(0, mid, w, dpr);                    // the centre axis
-      // Ticks along it, every eighth of the width.
-      for (let i = 1; i < 8; i++) {
-        const x = Math.round((i / 8) * w);
-        ctx.fillRect(x, mid - 4 * dpr, dpr, 8 * dpr);
-      }
-    }
-
-    const amp = mid * 0.84;
-    ctx.lineWidth = Math.max(1.4 * dpr, 1.8 * dpr);
-    const line = ctx.createLinearGradient(0, 0, w, 0);
-    line.addColorStop(0, rgba(accent, 0.3));
-    line.addColorStop(0.5, rgba(accent, 1));
-    line.addColorStop(1, rgba(mix(accent, art, 0.8), 0.3));
-    ctx.strokeStyle = line;
-
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) {
-      const x = (i / (n - 1)) * w;
-      let v;
-      if (wave) {
-        const j = Math.floor((i / (n - 1)) * (wave.length - 1));
-        v = (wave[j] - 128) / 128;
-      } else {
-        v = idleShimmer ? 0.04 * Math.sin(now * 0.0018 + i * 0.3) : 0;
-      }
-      const y = mid - v * amp;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // The mirror, dimmer, so the trace sits in something rather than floating.
-    ctx.save();
-    ctx.globalAlpha = intensity * 0.2;
-    ctx.translate(0, 2 * mid);
-    ctx.scale(1, -1);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  /* ---------------------------------------------------------------- radial */
-
-  function drawRadial(a) {
-    const cx = w * focusX, cy = h * focusY;
-    const base = Math.min(w, h) * 0.27 * (1 + a.pulse * 0.05);
-    const n = Math.min(64, a.bands.length);
-    const step = a.bands.length / n;
-
-    ctx.save();
-    ctx.translate(cx, cy);
-
-    if (chrome) {
-      // A ticked ring: sixty marks, four of them long. An instrument dial.
-      ctx.strokeStyle = rgba(accent, 0.2);
-      ctx.lineWidth = dpr;
-      ctx.beginPath();
-      for (let i = 0; i < 60; i++) {
-        const ang = (i / 60) * Math.PI * 2;
-        const len = i % 15 === 0 ? 9 * dpr : 4 * dpr;
-        const r0 = base * 0.9;
-        ctx.moveTo(Math.cos(ang) * r0, Math.sin(ang) * r0);
-        ctx.lineTo(Math.cos(ang) * (r0 - len), Math.sin(ang) * (r0 - len));
-      }
-      ctx.stroke();
-    }
-
-    ctx.rotate(rotation);
-    for (let i = 0; i < n; i++) {
-      let v = 0;
-      for (let j = Math.floor(i * step); j < Math.floor((i + 1) * step); j++) v = Math.max(v, a.bands[j]);
-      const angle = (i / n) * Math.PI * 2;
-      const len = v * Math.min(w, h) * 0.3;
-      if (len < dpr) continue;
-      const colour = mix(accent, art, i / n);
-      ctx.strokeStyle = rgba(colour, 0.32 + v * 0.68);
-      ctx.lineWidth = Math.max(1.5 * dpr, (Math.PI * 2 * base / n) * 0.36);
-      const cos = Math.cos(angle), sin = Math.sin(angle);
-      ctx.beginPath();
-      ctx.moveTo(cos * base, sin * base);
-      ctx.lineTo(cos * (base + len), sin * (base + len));
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  /* ---------------------------------------------------------------- mesh */
-
-  /**
-   * The last second or so of spectrum, drawn as a wireframe surface running
-   * away from the viewer. Newest row at the front; each older row is narrower,
-   * higher and dimmer, which is all a perspective projection has to be here.
-   */
-  function drawMesh(a) {
-    const baseY = h * 0.92;
-    const depth = h * 0.62;
-    ctx.lineWidth = dpr;
-
-    for (let r = 0; r < ROWS; r++) {
-      // 0 = newest.
-      const age = r / (ROWS - 1);
-      const row = ((historyAt - r) % ROWS + ROWS) % ROWS;
-      const z = 1 / (1 + age * 2.4);                   // perspective divide
-      const rowW = w * (0.34 + z * 0.66);
-      const x0 = (w - rowW) / 2;
-      const y = baseY - (1 - z) * depth;
-      const scale = h * 0.3 * z;
-
-      ctx.strokeStyle = rgba(mix(art, accent, z), (0.1 + z * 0.75) * (0.4 + a.level * 0.8));
-      ctx.beginPath();
-      for (let c = 0; c < COLS; c++) {
-        const v = history[row * COLS + c];
-        const x = x0 + (c / (COLS - 1)) * rowW;
-        const yy = y - v * scale;
-        if (c === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
-      }
-      ctx.stroke();
-    }
-  }
-
-  /* ---------------------------------------------------------------- still */
-
-  /** What reduced-motion users get: the shape, once, without the animation. */
-  function drawStill() {
-    if (!resize() || !w || !h) return;
-    ctx.clearRect(0, 0, w, h);
-    ctx.globalAlpha = intensity * 0.45;
-    ctx.fillStyle = rgba(accent, 0.55);
-    const n = 26, gap = w / n;
-    for (let i = 0; i < n; i++) {
-      const v = 0.18 + 0.5 * Math.abs(Math.sin(i * 1.1));
-      const bh = v * h * band * 0.62;
-      ctx.fillRect(Math.round(i * gap + gap * 0.22), h - bh, Math.round(gap * 0.56), bh);
-    }
-    ctx.globalAlpha = 1;
-  }
 
   return {
     canvas,
+    /** Which thread is drawing. For the tests, and for a bad afternoon. */
+    get offloaded() { return !!worker; },
     get mode() { return mode; },
     setMode(next) {
       if (!isMode(next) || next === mode) return;
       mode = next;
-      gradient = null;
       restFrames = 0;
       stillKey = '';
-      if (w && h) ctx.clearRect(0, 0, w, h);
+      if (worker) worker.postMessage({ type: 'mode', mode });
+      else renderer.setMode(mode);
     },
     /** Wake a renderer that decided nothing was happening. */
     kick() { restFrames = 0; },
     /** Aim the radial mode at something other than the middle of the canvas. */
-    setFocus(x, y) { focusX = x; focusY = y; },
-    destroy() { stop(); ro.disconnect(); },
+    setFocus(x, y) {
+      focusX = x; focusY = y;
+      if (worker) worker.postMessage({ type: 'focus', x, y });
+      else renderer.setFocus(x, y);
+    },
+    destroy() {
+      stop();
+      ro.disconnect();
+      if (worker) worker.terminate();
+    },
   };
 }

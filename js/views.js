@@ -5,19 +5,20 @@
  * rendered directly, because 12 nodes are cheaper than the machinery.
  */
 
-import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText, formatName } from './util.js';
+import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText, formatName, norm } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import * as db from './db.js';
 import { VirtualList, VirtualGrid } from './virtual.js';
 import {
-  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog,
+  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, Selection,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
-import { enter, reveal, scramble, countTo, tilt3d } from './motion.js';
+import { enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunning, requestDeviceTilt, stopDeviceTilt, startDeviceTilt } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
 import { mountCircles } from './circles.js';
 import { mountSound } from './sound.js';
+import * as offline from './offline.js';
 import * as stats from './stats.js';
 import * as band from './band.js';
 import * as session from './session.js';
@@ -83,17 +84,64 @@ function shuffleAll(tracks, origin) {
 }
 
 /** A virtualised track table wired to the standard row menu. */
+/* Every live table, so the router can ask whether anybody is mid-selection.
+   A Set rather than a counter: a view torn down without its destroy() running
+   would leak a count forever, and a stale entry here is at worst one skipped
+   repaint. */
+const liveTables = new Set();
+
+/**
+ * Is the listener in the middle of picking tracks?
+ *
+ * app.js repaints the whole view when the library changes, which during an
+ * import is several times a second, and that repaint rebuilds this table and
+ * everything it is holding. It already declines to do that when the listener
+ * has scrolled away from the top; a half-built selection is the same kind of
+ * work in progress and gets the same protection. Without this, selecting
+ * anything while a scan is running is impossible.
+ */
+export const hasLiveSelection = () => {
+  for (const t of liveTables) if (t.selection.size) return true;
+  return false;
+};
+
 function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel } = {}) {
   let tracks = getTracks();
+
+  /* Building a thirty-track playlist used to be thirty right-clicks. Rows can
+     be picked now, and every action that took one track takes the picked set
+     instead. The bar only exists while something is picked. */
+  const selection = new Selection(() => { list.refresh(); paintBar(); });
+  const bar = el('div', { class: 'selbar', hidden: true, role: 'toolbar', 'aria-label': 'Selected tracks' });
+
   const factory = trackRowFactory({
     columns: columns || ['index', 'title', 'album', 'duration'],
+    selection,
     onPlay: (i) => playAll(tracks, i, origin),
+    onPick: (i, mods) => {
+      const t = tracks[i];
+      if (!t) return;
+      if (mods.range) selection.range(tracks, t.id);
+      else if (mods.toggle) selection.toggle(t.id);
+      else if (selection.size === 1 && selection.has(t.id)) selection.clear();
+      else selection.only(t.id);
+    },
     onMenu: (i, anchor, event) => {
       const t = tracks[i];
       if (!t) return;
-      menu(trackMenu([t], {
+      /* Right-clicking inside a selection acts on the whole of it; right-
+         clicking outside one is about the row under the pointer, and moves the
+         selection there rather than silently acting on something off-screen. */
+      if (!selection.has(t.id)) selection.only(t.id);
+      const picked = selection.tracksIn(tracks);
+      menu(trackMenu(picked.length ? picked : [t], {
         origin,
-        onRemove: onRemove && (() => onRemove(t, i)),
+        onRemove: onRemove && (() => {
+          for (const track of (picked.length ? picked : [t])) {
+            onRemove(track, tracks.indexOf(track));
+          }
+          selection.clear();
+        }),
         removeLabel,
       }), { anchor, event });
     },
@@ -102,18 +150,74 @@ function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel } 
   const list = new VirtualList({ viewport: host, rowHeight: ROW_H, ...factory });
   list.setItems(tracks);
 
+  /* On the body rather than in the page: it floats above the transport, and a
+     list that scrolls must not scroll its own toolbar out of reach. */
+  document.body.appendChild(bar);
+
+  function paintBar() {
+    const n = selection.size;
+    bar.hidden = n === 0;
+    if (!n) return;
+    const picked = () => selection.tracksIn(tracks);
+    bar.textContent = '';
+    bar.append(
+      el('span', { class: 'selbar-count', text: fmtCount(n, 'track', 'tracks') }),
+      el('button', { class: 'btn sm primary', text: 'Play', onclick: () => {
+        const p = picked(); if (p.length) player.playTracks(p, 0, origin); } }),
+      el('button', { class: 'btn sm ghost', text: 'Play next', onclick: () => {
+        const p = picked(); if (p.length) { player.playNext(p); toast(`${fmtCount(p.length, 'track', 'tracks')} up next`); } } }),
+      el('button', { class: 'btn sm ghost', text: 'Queue', onclick: () => {
+        const p = picked(); if (p.length) { player.enqueue(p); toast(`${fmtCount(p.length, 'track', 'tracks')} queued`); } } }),
+      el('button', { class: 'btn sm ghost', text: 'More', onclick: (e) => {
+        const p = picked(); if (p.length) menu(trackMenu(p, { origin }), { anchor: e.currentTarget }); } }),
+      el('button', { class: 'icon-btn selbar-close', 'aria-label': 'Clear selection',
+        html: ico('close'), onclick: () => selection.clear() }),
+    );
+  }
+
+  /* Escape clears; ctrl-A takes the lot — but only when the pointer is not in
+     a text field, or select-all in the search box would select the library. */
+  const onKey = (e) => {
+    if (!host.isConnected) return;
+    const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || '') ||
+                   document.activeElement?.isContentEditable;
+    if (e.key === 'Escape' && selection.size) { selection.clear(); e.stopPropagation(); return; }
+    if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey) && !typing) {
+      e.preventDefault();
+      selection.all(tracks);
+    }
+  };
+  document.addEventListener('keydown', onKey);
+
   // A star pressed anywhere — a row, the transport, a menu — has to land on
   // every visible copy of that track, so the rows on screen are repainted
   // rather than rebuilt: `refresh` rewrites what is live and moves nothing.
   const offFav = lib.events.on('favourites', () => list.refresh());
 
-  return {
+  const api = {
     list,
-    update() { tracks = getTracks(); list.setItems(tracks); },
+    bar,
+    selection,
+    update() {
+      tracks = getTracks();
+      list.setItems(tracks);
+      // The list changed underneath the selection; anything gone is gone.
+      selection.prune(tracks);
+      paintBar();
+    },
     refresh() { list.refresh(); },
-    destroy() { offFav(); list.destroy(); },
+    destroy() {
+      offFav();
+      document.removeEventListener('keydown', onKey);
+      liveTables.delete(api);
+      bar.remove();
+      list.destroy();
+    },
     get tracks() { return tracks; },
   };
+
+  liveTables.add(api);
+  return api;
 }
 
 function columnHeader(columns, sortState, onSort) {
@@ -475,12 +579,16 @@ function viewAlbums(host) {
   /* Two ways to look at a wall of records: as a wall, or as a crate you flip
      through. The choice is remembered, because it is a way of working rather
      than a novelty to be re-chosen every visit. */
+  const MODES = ['grid', 'crate', 'shelf', 'floor'];
   let mode = 'grid';
-  try { mode = localStorage.getItem(ALBUM_VIEW) === 'crate' ? 'crate' : 'grid'; } catch { /* private */ }
+  try {
+    const saved = localStorage.getItem(ALBUM_VIEW);
+    if (MODES.includes(saved)) mode = saved;
+  } catch { /* private */ }
 
   const bar = el('div', { class: 'toolbar' }, el('div', { class: 'segmented', role: 'tablist' }));
   const seg = bar.firstChild;
-  for (const [id, label] of [['grid', 'Grid'], ['crate', 'Crate']]) {
+  for (const [id, label] of [['grid', 'Grid'], ['crate', 'Crate'], ['shelf', 'Shelf'], ['floor', 'Floor']]) {
     seg.appendChild(el('button', {
       class: 'seg' + (id === mode ? ' is-on' : ''), role: 'tab', text: label,
       'aria-selected': id === mode ? 'true' : 'false',
@@ -504,7 +612,11 @@ function viewAlbums(host) {
     }
     try { teardown(); } catch (err) { console.warn(err); }
     slot.textContent = '';
-    teardown = mode === 'crate' ? mountCrate(slot) : mountGrid(slot);
+    host.classList.toggle('albums-floor', mode === 'floor');
+    teardown = mode === 'crate' ? mountCrate(slot)
+             : mode === 'shelf' ? mountShelf(slot)
+             : mode === 'floor' ? mountFloor(slot, host)
+             : mountGrid(slot);
   }
 
   function mountGrid(into) {
@@ -526,6 +638,189 @@ function viewAlbums(host) {
 }
 
 const ALBUM_VIEW = 'sonora:albumview';
+
+/* ------------------------------------------------------------------ shelf */
+
+/**
+ * Records on a shelf, seen edge-on.
+ *
+ * The one way of storing records that every other view here refuses to
+ * consider, and the way almost everybody actually stores them. A wall of
+ * covers is a shop; a shelf of spines is a collection, and reading along it is
+ * a different and older kind of browsing.
+ *
+ * The width of each spine is the album's own thickness — the same `--thick`
+ * the sleeve has been using to decide how far its edge plane sits behind its
+ * face, derived from how many tracks are on the record. Nothing new is
+ * computed; a value that was being used for a shadow is used for a width, and
+ * a double album is visibly fatter than a single.
+ *
+ * The spine turns to face you as you point at it, which is what a hand does to
+ * a record it is considering.
+ */
+function mountShelf(host) {
+  const shelf = el('div', { class: 'shelf-run', role: 'list', 'aria-label': 'Albums by spine' });
+
+  function paint() {
+    shelf.textContent = '';
+    for (const album of lib.state.albums) {
+      const thick = thicknessOf(album);
+      const spine = el('a', {
+        class: 'spine', role: 'listitem', href: '#/album/' + album.key,
+        style: `--thick:${thick.toFixed(3)}`,
+        'aria-label': `${album.title} by ${album.artist}`,
+      },
+        el('span', { class: 'spine-face', style: { background: placeholderStyle(album.key) } }),
+        el('span', { class: 'spine-text' },
+          el('b', { class: 'spine-title', text: album.title }),
+          el('span', { class: 'spine-artist', text: album.artist })),
+        el('span', { class: 'spine-edge', 'aria-hidden': 'true' }));
+
+      // The colour the importer pulled out of the cover, so a shelf of spines
+      // is still recognisably a shelf of *these* records.
+      const rgb = lib.accentFor(album.key);
+      if (rgb) spine.style.setProperty('--spine-rgb', rgb.join(' '));
+      shelf.appendChild(spine);
+    }
+  }
+
+  paint();
+  host.appendChild(shelf);
+  const off = lib.events.on('change', paint);
+  const offArt = lib.events.on('art', paint);
+  return () => { off(); offArt(); };
+}
+
+/* ------------------------------------------------------------------ floor */
+
+/**
+ * The library standing on the world behind it.
+ *
+ * Sonora draws a real 3D room and then floats a flat interface in front of it,
+ * and the two have never touched. Every depth effect so far — the sleeve, the
+ * rack, the crate — happens on the flat layer in its own pocket of perspective.
+ * This puts the records on the backdrop's own ground plane, so the world is a
+ * place the library is standing in rather than wallpaper behind it.
+ *
+ * Three things had to be answered, and each answer is also a design decision:
+ *
+ *   Legibility. Titles at the far plane are unreadable, so titles do not
+ *   recede at all — they fade out past the third row. Distant rows become
+ *   covers only, which is what a room full of records actually looks like.
+ *
+ *   Scroll length. Perspective compresses, so a three-hundred-album library
+ *   would become a corridor nobody reaches the end of. The Z range is bounded:
+ *   past the far plane rows stop receding and the list scrolls linearly.
+ *
+ *   Hit testing. The browser inverts the transform for clicks, so those still
+ *   land — but keyboard order and drag-selection stop matching what the eye
+ *   sees. That is why this is a fourth mode beside Grid, Crate and Shelf and
+ *   never the only way to see the library.
+ */
+function mountFloor(host, viewport) {
+  const PER_ROW = 4;                  // albums across
+  const ROW_DEPTH = 210;              // px of Z between rows
+  const FAR = 6;                      // rows past which nothing recedes further
+  const NEAR_ROWS = 3;                // rows that still get a readable title
+
+  const stage = el('div', { class: 'floor', 'aria-label': 'Albums on the floor' });
+  const camera = el('div', { class: 'floor-camera' });
+  stage.appendChild(camera);
+
+  let rows = [];
+  let items = [];
+
+  function build() {
+    items = lib.state.albums;
+    camera.textContent = '';
+    rows = [];
+    for (let i = 0; i < items.length; i += PER_ROW) {
+      const row = el('div', { class: 'floor-row' });
+      for (const album of items.slice(i, i + PER_ROW)) {
+        const card = el('a', {
+          class: 'floor-card', href: '#/album/' + album.key,
+          'aria-label': `${album.title} by ${album.artist}`,
+        },
+          el('span', { class: 'floor-art', style: { background: placeholderStyle(album.key) } },
+            el('img', { class: 'art-img', alt: '', decoding: 'async', loading: 'lazy' })),
+          el('span', { class: 'floor-text' },
+            el('b', { text: album.title }),
+            el('span', { text: album.artist })));
+        paintArt(card.querySelector('.art-img'), album.key);
+        row.appendChild(card);
+      }
+      camera.appendChild(row);
+      rows.push(row);
+    }
+    place();
+  }
+
+  /* Where each row sits, written once per scroll rather than per frame.
+   *
+   * The camera moves forward through a fixed arrangement instead of the rows
+   * moving past a fixed camera — the same thing to look at, and much cheaper
+   * to think about: a row's Z is a function of its index and the scroll
+   * position, and nothing has to be animated. */
+  let raf = 0;
+  function place() {
+    raf = 0;
+    if (!rows.length) return;
+    const scrolled = viewport.scrollTop;
+    // One row per this many pixels of scroll.
+    const advance = scrolled / ROW_DEPTH;
+
+    for (let i = 0; i < rows.length; i++) {
+      const d = i - advance;                       // rows ahead of the camera
+      // Bounded: past the far plane rows stop receding, so a long library is a
+      // long list rather than an infinitely compressed corridor.
+      const z = -Math.min(d, FAR) * ROW_DEPTH;
+      const near = d < NEAR_ROWS;
+      const row = rows[i];
+
+      // Rows well behind the camera are not drawn at all.
+      if (d < -1.2 || d > FAR + 3) {
+        if (row.style.visibility !== 'hidden') row.style.visibility = 'hidden';
+        continue;
+      }
+      if (row.style.visibility) row.style.removeProperty('visibility');
+
+      row.style.transform = `translate3d(-50%, 0, ${z.toFixed(1)}px)`;
+      // Depth fade, so the far end goes into the room rather than stopping.
+      row.style.opacity = String(Math.max(0, Math.min(1, 1 - Math.max(0, d) / (FAR + 2.5))).toFixed(3));
+      row.classList.toggle('is-near', near);
+    }
+  }
+
+  const onScroll = () => { if (!raf) raf = requestAnimationFrame(place); };
+  viewport.addEventListener('scroll', onScroll, { passive: true });
+
+  // The stage has to be tall enough to scroll through every row.
+  function resize() {
+    stage.style.height = `${Math.max(1, Math.ceil(items.length / PER_ROW)) * ROW_DEPTH + viewport.clientHeight * 0.4}px`;
+  }
+  const ro = new ResizeObserver(() => { resize(); place(); });
+  ro.observe(viewport);
+
+  build();
+  resize();
+  host.appendChild(stage);
+  place();
+
+  const off = lib.events.on('change', () => { build(); resize(); });
+  const offArt = lib.events.on('art', () => {
+    for (const row of rows) {
+      for (const img of row.querySelectorAll('.art-img')) {
+        if (img.dataset.key) paintArt(img, img.dataset.key);
+      }
+    }
+  });
+
+  return () => {
+    off(); offArt(); ro.disconnect();
+    viewport.removeEventListener('scroll', onScroll);
+    if (raf) cancelAnimationFrame(raf);
+  };
+}
 
 /* ------------------------------------------------------------------ crate */
 
@@ -1406,8 +1701,122 @@ function viewSettings(host) {
   const head = el('header', { class: 'page-head' },
     el('p', { class: 'eyebrow', text: 'System' }),
     el('h1', { class: 'page-title', text: 'Settings' }),
-    el('p', { class: 'page-sub', text: 'Folders · appearance · visualiser · storage' }));
+    el('p', { class: 'page-sub', text: 'Playback · folders · appearance · visualiser · storage' }));
   host.appendChild(head);
+
+  /* --- playback ---
+   *
+   * One slider for gapless and crossfade, because they are one mechanism: at
+   * zero the next track starts the instant the last one ends, and above zero
+   * they overlap. Splitting them into two controls would suggest they can
+   * disagree, and would leave a listener wondering which one wins. */
+  const playback = el('section', { class: 'block' }, sectionHead('Playback'));
+  const pbRows = el('div', { class: 'rows' });
+
+  const fadeValue = el('span', { class: 'settings-value' });
+  const fadeSlider = el('input', {
+    type: 'range', min: '0', max: String(player.MAX_CROSSFADE), step: '0.5',
+    class: 'settings-range', 'aria-label': 'Crossfade length in seconds',
+    value: String(player.state.crossfade),
+  });
+  const paintFade = () => {
+    const v = player.state.crossfade;
+    fadeValue.textContent = v === 0 ? 'Gapless' : v.toFixed(1).replace(/\.0$/, '') + 's';
+    fadeSlider.value = String(v);
+    fadeSlider.setAttribute('aria-valuetext', fadeValue.textContent);
+  };
+  fadeSlider.addEventListener('input', () => {
+    player.setCrossfade(parseFloat(fadeSlider.value));
+    paintFade();
+  });
+  paintFade();
+
+  const seamlessSwitch = el('button', {
+    class: 'switch' + (player.state.seamless ? ' is-on' : ''),
+    role: 'switch', 'aria-checked': String(player.state.seamless),
+  }, el('span', { class: 'switch-knob' }));
+  seamlessSwitch.addEventListener('click', () => {
+    player.setSeamless(!player.state.seamless);
+    const on = player.state.seamless;
+    seamlessSwitch.classList.toggle('is-on', on);
+    seamlessSwitch.setAttribute('aria-checked', String(on));
+    fadeSlider.disabled = !on;
+  });
+  fadeSlider.disabled = !player.state.seamless;
+
+  pbRows.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('next') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Run tracks together' }),
+      el('div', { class: 'settings-note', text: 'Hand over to the next track without stopping. Off leaves the gap between them.' })),
+    el('div', { class: 'settings-actions' }, seamlessSwitch)));
+
+  pbRows.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('shuffle') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Crossfade' }),
+      el('div', { class: 'settings-note', text: 'How long the two overlap. At zero the next track starts the instant the last one ends — what a live album needs.' })),
+    el('div', { class: 'settings-actions settings-slider' }, fadeSlider, fadeValue)));
+
+  const levelPick = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Loudness levelling' });
+  for (const [mode, label, hint] of [
+    ['off', 'Off', 'Play every file at the level it was mastered'],
+    ['track', 'Track', 'Even out every song against every other'],
+    ['album', 'Album', 'Move each record as a whole, keeping its internal balance'],
+  ]) {
+    const b = el('button', {
+      class: 'seg' + (player.state.levelling === mode ? ' is-on' : ''),
+      role: 'radio', 'aria-checked': String(player.state.levelling === mode),
+      text: label, title: hint,
+    });
+    b.addEventListener('click', () => {
+      player.setLevelling(mode);
+      for (const x of levelPick.children) {
+        const on = x === b;
+        x.classList.toggle('is-on', on);
+        x.setAttribute('aria-checked', String(on));
+      }
+    });
+    levelPick.appendChild(b);
+  }
+
+  pbRows.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('volume') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Even out the volume' }),
+      el('div', { class: 'settings-note', text: 'Uses the ReplayGain tag where a file has one, and what Sonora measured on the first listen where it does not.' })),
+    el('div', { class: 'settings-actions' }, levelPick)));
+
+  const shufPick = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Shuffle style' });
+  for (const [mode, label, hint] of [
+    ['even', 'Even', 'Every track equally likely'],
+    ['weighted', 'Learned', 'Leans towards what you play and away from what you just heard'],
+  ]) {
+    const b = el('button', {
+      class: 'seg' + (player.state.shuffleMode === mode ? ' is-on' : ''),
+      role: 'radio', 'aria-checked': String(player.state.shuffleMode === mode),
+      text: label, title: hint,
+    });
+    b.addEventListener('click', () => {
+      player.setShuffleMode(mode);
+      for (const x of shufPick.children) {
+        const on = x === b;
+        x.classList.toggle('is-on', on);
+        x.setAttribute('aria-checked', String(on));
+      }
+    });
+    shufPick.appendChild(b);
+  }
+
+  pbRows.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('shuffle') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Shuffle style' }),
+      el('div', { class: 'settings-note', text: 'Learned leans gently towards what you actually play, and hard away from anything heard in the last hour.' })),
+    el('div', { class: 'settings-actions' }, shufPick)));
+
+  playback.appendChild(pbRows);
+  host.appendChild(playback);
 
   /* --- folders --- */
   const folders = el('section', { class: 'block' }, sectionHead('Music folders'));
@@ -1475,6 +1884,37 @@ function viewSettings(host) {
 
   /* --- appearance --- */
   const appearance = el('section', { class: 'block' }, sectionHead('Appearance'));
+
+  /* Device tilt. Only offered where the platform can actually report it —
+     a switch that does nothing on a desktop is worse than no switch. */
+  if (canDeviceTilt()) {
+    const tiltBtn = el('button', {
+      class: 'switch' + (deviceTiltRunning() ? ' is-on' : ''),
+      role: 'switch', 'aria-checked': String(deviceTiltRunning()),
+    }, el('span', { class: 'switch-knob' }));
+    tiltBtn.addEventListener('click', async () => {
+      if (deviceTiltRunning()) {
+        stopDeviceTilt();
+        try { localStorage.setItem('sonora:tilt', '0'); } catch { /* private mode */ }
+      } else {
+        // Must happen inside this click: iOS refuses the prompt otherwise.
+        const ok = await requestDeviceTilt();
+        try { localStorage.setItem('sonora:tilt', ok ? '1' : '0'); } catch { /* private mode */ }
+        if (!ok) toast('Your device would not share its orientation');
+      }
+      const on = deviceTiltRunning();
+      tiltBtn.classList.toggle('is-on', on);
+      tiltBtn.setAttribute('aria-checked', String(on));
+    });
+
+    appearance.appendChild(el('div', { class: 'rows' },
+      el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-ico', html: ico('cube') }),
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: 'Tilt with the device' }),
+          el('div', { class: 'settings-note', text: 'Artwork catches the light from however you are holding it, the way a record held up to a window does.' })),
+        el('div', { class: 'settings-actions' }, tiltBtn))));
+  }
 
   const accentRow = el('div', { class: 'settings-row' },
     el('div', { class: 'settings-ico', html: ico('palette') }),
@@ -1574,6 +2014,47 @@ function viewSettings(host) {
       ? `${fmtBytes(u.used)} used${u.quota ? ` of ${fmtBytes(u.quota)} available` : ''}`
       : `${fmtCount(lib.trackCount(), 'track')} indexed`;
   });
+
+  /* Whether the application itself opens without a network.
+   *
+   * Worth showing rather than leaving implicit: "works offline" is the sort of
+   * claim people reasonably want to verify before they get on a plane, and
+   * until this row existed there was no way to tell whether the shell had
+   * actually been cached or only promised. */
+  const offNote = el('div', { class: 'settings-note', text: 'Checking…' });
+  const offRow = el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('plug') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Opens without a network' }), offNote),
+    el('div', { class: 'settings-actions' },
+      el('button', {
+        class: 'btn ghost sm', text: 'Clear app cache',
+        onclick: async () => {
+          const ok = await offline.clearOffline();
+          toast(ok ? 'App cache cleared — reload to fetch a fresh copy' : 'Nothing to clear');
+          paintOffline();
+        },
+      })));
+  storage.appendChild(offRow);
+
+  async function paintOffline() {
+    const s = offline.status();
+    if (!s.supported) {
+      offNote.textContent = 'Not available here — this needs to be served over http, not opened as a file.';
+      return;
+    }
+    const c = await offline.cachedBytes();
+    if (c && c.files) {
+      offNote.textContent = `${fmtCount(c.files, 'file')} cached · ${fmtBytes(c.bytes)}` +
+        (s.controlled ? ' · serving from cache' : ' · takes effect on next launch');
+    } else {
+      offNote.textContent = s.registered
+        ? 'Caching the app now…'
+        : 'Not cached yet — this happens a few seconds after launch.';
+    }
+  }
+  paintOffline();
+
   host.appendChild(storage);
 
   /* What the collection is made of. Bars in the mono stack rather than a pie
@@ -1856,8 +2337,335 @@ function notFound(host, message) {
   return () => {};
 }
 
+/* ------------------------------------------------------------------ FILES */
+
+/*
+ * The library as it actually sits on the disk, which is not the same thing as
+ * the library as music.
+ *
+ * Two questions live here because they are the same question asked twice: what
+ * is actually in these folders, and how much of it is the same thing twice.
+ * Both are about files rather than songs, and neither belongs on a page that
+ * is trying to be about albums.
+ */
+
+/** Builds a nested folder tree out of the flat path on every track. */
+function folderTree() {
+  const roots = [];
+  const byRoot = new Map();
+
+  for (const root of lib.state.roots) {
+    const node = { name: root.name, path: '', kind: 'root', children: new Map(), tracks: [] };
+    byRoot.set(root.id, node);
+    roots.push(node);
+  }
+  // Anything whose root has gone is still on the disk somewhere; it gets a
+  // home rather than vanishing from a view whose whole job is to show files.
+  const orphan = { name: 'Elsewhere', path: '', kind: 'root', children: new Map(), tracks: [] };
+
+  for (const t of lib.allTracks()) {
+    let node = byRoot.get(t.rootId) || orphan;
+    const parts = String(t.path || t.name || '').split('/').filter(Boolean);
+    // The last part is the file itself.
+    for (let i = 0; i < parts.length - 1; i++) {
+      const seg = parts[i];
+      let next = node.children.get(seg);
+      if (!next) {
+        next = { name: seg, path: node.path ? node.path + '/' + seg : seg,
+                 kind: 'dir', children: new Map(), tracks: [] };
+        node.children.set(seg, next);
+      }
+      node = next;
+    }
+    node.tracks.push(t);
+  }
+
+  if (orphan.tracks.length || orphan.children.size) roots.push(orphan);
+  return roots;
+}
+
+/** Every track at or below a node, in folder order. */
+function tracksUnder(node) {
+  const out = node.tracks.slice().sort((a, b) => cmpText(a.name, b.name));
+  for (const child of [...node.children.values()].sort((a, b) => cmpText(a.name, b.name))) {
+    out.push(...tracksUnder(child));
+  }
+  return out;
+}
+
+/**
+ * A short, strong fingerprint of a file's actual contents.
+ *
+ * The head and the tail rather than the whole thing: a hash of a 40 MB FLAC is
+ * 40 MB of reading, and doing that across a library to answer a question
+ * nobody asked yet is not a reasonable thing to do to somebody's disk. The
+ * first and last 64 KB plus the exact byte length is enough — two audio files
+ * that agree on all three and are not the same file do not occur outside a
+ * deliberate attempt to make one.
+ */
+async function contentKey(track) {
+  const file = await lib.fileFor(track.id);
+  if (!file) return null;
+  const CHUNK = 65536;
+  const size = file.size;
+  const parts = [file.slice(0, Math.min(CHUNK, size))];
+  if (size > CHUNK * 2) parts.push(file.slice(size - CHUNK, size));
+  const bufs = await Promise.all(parts.map((p) => p.arrayBuffer()));
+  const total = bufs.reduce((n, b) => n + b.byteLength, 0);
+  const joined = new Uint8Array(total);
+  let at = 0;
+  for (const b of bufs) { joined.set(new Uint8Array(b), at); at += b.byteLength; }
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', joined);
+    return size + ':' + [...new Uint8Array(digest).slice(0, 12)]
+      .map((n) => n.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Copies of the same thing.
+ *
+ * Two passes, because "duplicate" means two different things and conflating
+ * them produces a list nobody trusts.
+ *
+ * The first is a *file* duplicate, and it is checked rather than guessed.
+ * Matching byte length and duration is only the cheap filter that decides what
+ * is worth reading; the claim itself is made on a hash of the bytes. That
+ * distinction is not pedantry — an uncompressed WAV of a given length is
+ * *always* the same size, so on a library of WAVs the cheap filter alone
+ * reports every track of the same duration as a copy of every other. It did
+ * exactly that here before this was written.
+ *
+ * The second is the same *recording* in two files: the artist and title match
+ * once punctuation and case are taken out, and the lengths agree to within two
+ * seconds. That catches the FLAC and the MP3 of the same song, and the album
+ * track that is also on a greatest-hits — which is a real duplicate to some
+ * people and not to others, so it is labelled rather than assumed.
+ *
+ * A group is only reported once, under the stronger reason.
+ */
+async function findDuplicates() {
+  const all = lib.allTracks();
+  const groups = [];
+  const claimed = new Set();
+
+  const bySize = new Map();
+  for (const t of all) {
+    if (!t.size || !t.duration) continue;
+    const key = t.size + ':' + Math.round(t.duration);
+    if (!bySize.has(key)) bySize.set(key, []);
+    bySize.get(key).push(t);
+  }
+  for (const list of bySize.values()) {
+    if (list.length < 2) continue;
+    // Same size and length: worth reading. Now find out whether they really
+    // are the same bytes.
+    const byContent = new Map();
+    for (const t of list) {
+      const key = await contentKey(t);
+      // Unreadable, or no crypto: it cannot be claimed as identical, so it
+      // falls through to the tag-based pass like anything else.
+      if (!key) continue;
+      if (!byContent.has(key)) byContent.set(key, []);
+      byContent.get(key).push(t);
+    }
+    for (const same of byContent.values()) {
+      if (same.length < 2) continue;
+      groups.push({ kind: 'file', reason: 'Identical files', tracks: same });
+      for (const t of same) claimed.add(t.id);
+    }
+  }
+
+  const byWork = new Map();
+  for (const t of all) {
+    if (claimed.has(t.id) || !t.duration) continue;
+    // Bucketed to the nearest two seconds, and each track also checked against
+    // the neighbouring bucket, so a pair straddling a boundary still meets.
+    const stem = norm(t.artist) + '|' + norm(t.title);
+    const bucket = Math.round(t.duration / 2);
+    for (const b of [bucket - 1, bucket, bucket + 1]) {
+      const key = stem + '|' + b;
+      if (!byWork.has(key)) byWork.set(key, new Set());
+      byWork.get(key).add(t);
+    }
+  }
+  const seenPair = new Set();
+  for (const set of byWork.values()) {
+    if (set.size < 2) continue;
+    const list = [...set].sort((a, b) => cmpText(a.name, b.name));
+    // The bucket overlap means the same group is built three times over.
+    const sig = list.map((t) => t.id).join(' ');
+    if (seenPair.has(sig)) continue;
+    seenPair.add(sig);
+    if (list.some((t) => claimed.has(t.id))) continue;
+    groups.push({ kind: 'work', reason: 'Same recording', tracks: list });
+    for (const t of list) claimed.add(t.id);
+  }
+
+  // Biggest waste first: that is the order somebody clearing space wants.
+  const waste = (g) => g.tracks.slice(1).reduce((s, t) => s + (t.size || 0), 0);
+  groups.sort((a, b) => waste(b) - waste(a));
+  return groups;
+}
+
+function viewFiles(host) {
+  const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
+    el('h1', { class: 'page-title', text: 'Files' }),
+    el('p', { class: 'page-sub', text: 'The folders on disk, and what is in them twice' }));
+  host.appendChild(head);
+  decode(head.querySelector('.page-title'), 'Files');
+
+  let mode = 'folders';
+  const bar = el('div', { class: 'toolbar' });
+  const seg = el('div', { class: 'segmented', role: 'tablist' });
+  for (const [id, label] of [['folders', 'Folders'], ['dupes', 'Duplicates']]) {
+    seg.appendChild(el('button', {
+      class: 'seg' + (id === mode ? ' is-on' : ''), role: 'tab', text: label,
+      onclick: () => {
+        mode = id;
+        for (const b of seg.children) b.classList.toggle('is-on', b.textContent === label);
+        paint();
+      },
+    }));
+  }
+  bar.appendChild(seg);
+  host.appendChild(bar);
+
+  const body = el('div', { class: 'files-body' });
+  host.appendChild(body);
+
+  /* ---- folders ---- */
+
+  const open = new Set();          // paths currently expanded
+
+  function folderRow(node, depth) {
+    const under = tracksUnder(node);
+    const isOpen = open.has(node.kind + ':' + node.name + ':' + node.path);
+    const key = node.kind + ':' + node.name + ':' + node.path;
+
+    const row = el('div', { class: 'file-row' + (isOpen ? ' is-open' : ''), style: `--depth:${depth}` },
+      el('button', { class: 'file-twist', 'aria-expanded': String(isOpen),
+        'aria-label': isOpen ? 'Collapse' : 'Expand', html: ico('chev-right') }),
+      el('span', { class: 'file-ico', html: ico('folder') }),
+      el('span', { class: 'file-name', text: node.name }),
+      el('span', { class: 'file-count', text: fmtCount(under.length, 'track', 'tracks') }),
+      el('button', { class: 'icon-btn ghost sm', title: 'Play this folder', 'aria-label': `Play ${node.name}`,
+        html: ico('play'), onclick: (e) => {
+          e.stopPropagation();
+          if (under.length) playAll(under, 0, { type: 'folder', label: node.name });
+        } }));
+
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.icon-btn') && !e.target.closest('.file-twist')) return;
+      if (open.has(key)) open.delete(key); else open.add(key);
+      paint();
+    });
+    return row;
+  }
+
+  function paintFolders() {
+    const tree = folderTree();
+    if (!tree.length) {
+      body.appendChild(emptyState({ icon: 'folder', title: 'No folders yet',
+        note: 'Add music and the folders it came from will appear here.' }));
+      return;
+    }
+
+    const walk = (node, depth) => {
+      body.appendChild(folderRow(node, depth));
+      const key = node.kind + ':' + node.name + ':' + node.path;
+      if (!open.has(key)) return;
+      for (const child of [...node.children.values()].sort((a, b) => cmpText(a.name, b.name))) {
+        walk(child, depth + 1);
+      }
+      for (const t of node.tracks.slice().sort((a, b) => cmpText(a.name, b.name))) {
+        body.appendChild(el('div', { class: 'file-row is-track', style: `--depth:${depth + 1}` },
+          el('span', { class: 'file-twist' }),
+          el('span', { class: 'file-ico', html: ico('music') }),
+          el('span', { class: 'file-name', text: t.name }),
+          el('span', { class: 'file-count', text: t.duration ? fmtTime(t.duration) : '--:--' }),
+          el('button', { class: 'icon-btn ghost sm', title: 'Play', 'aria-label': `Play ${t.title}`,
+            html: ico('play'), onclick: () => player.playTracks([t], 0, { type: 'folder', label: node.name }) })));
+      }
+    };
+
+    // One root opens itself: a tree that starts entirely shut is a page of
+    // nothing, and most people have one folder anyway.
+    if (!open.size && tree.length) open.add(tree[0].kind + ':' + tree[0].name + ':' + tree[0].path);
+    for (const root of tree) walk(root, 0);
+  }
+
+  /* ---- duplicates ---- */
+
+  let dupeToken = 0;
+
+  async function paintDupes() {
+    const token = ++dupeToken;
+    // Reading the head and tail of every candidate takes a moment on a real
+    // library, and a page that sits blank while it happens looks broken.
+    const busy = el('p', { class: 'muted dupe-summary', text: 'Comparing files…' });
+    body.appendChild(busy);
+    const groups = await findDuplicates();
+    if (token !== dupeToken || !body.isConnected) return;
+    busy.remove();
+    if (!groups.length) {
+      body.appendChild(emptyState({ icon: 'database', title: 'Nothing duplicated',
+        note: 'No two files in the library look like the same recording.' }));
+      return;
+    }
+
+    const wasted = groups.reduce((s, g) => s + g.tracks.slice(1).reduce((n, t) => n + (t.size || 0), 0), 0);
+    body.appendChild(el('p', { class: 'muted dupe-summary',
+      text: `${fmtCount(groups.length, 'group', 'groups')} · about ${fmtBytes(wasted)} held twice` }));
+
+    for (const g of groups) {
+      const box = el('section', { class: 'dupe-group' });
+      box.appendChild(el('div', { class: 'dupe-head' },
+        el('span', { class: 'dupe-reason' + (g.kind === 'file' ? ' is-hard' : ''), text: g.reason }),
+        el('span', { class: 'dupe-title', text: `${g.tracks[0].artist} — ${g.tracks[0].title}` }),
+        el('span', { class: 'dupe-size', text: fmtBytes(g.tracks.slice(1).reduce((n, t) => n + (t.size || 0), 0)) })));
+
+      for (const t of g.tracks) {
+        box.appendChild(el('div', { class: 'dupe-row' },
+          el('span', { class: 'dupe-path', text: (lib.state.roots.find((r) => r.id === t.rootId)?.name || '?') + ' / ' + (t.path || t.name) }),
+          el('span', { class: 'dupe-spec', text: [formatName(t.name || ''), t.bitrate ? t.bitrate + ' kbps' : null,
+            t.duration ? fmtTime(t.duration) : null, fmtBytes(t.size || 0)].filter(Boolean).join(' · ') }),
+          el('button', { class: 'icon-btn ghost sm', title: 'Play', 'aria-label': `Play ${t.title}`,
+            html: ico('play'), onclick: () => player.playTracks([t], 0, { type: 'dupes', label: 'Duplicates' }) }),
+          el('button', { class: 'icon-btn ghost sm', title: 'Show in library', 'aria-label': 'Show in library',
+            html: ico('album'), onclick: () => { location.hash = '#/album/' + t.albumKey; } })));
+      }
+      body.appendChild(box);
+    }
+
+    /* Deliberately no delete button.
+     *
+     * Sonora reads the disk and does not write to it — nothing in this app has
+     * ever removed one of the listener's files and this page is not where that
+     * should start. Finding the copies is the hard part and is the part worth
+     * doing; deciding which to keep, and doing it, belongs to whoever owns the
+     * files. */
+    body.appendChild(el('p', { class: 'muted dupe-note',
+      text: 'Sonora only reads your files — nothing here deletes anything. Use these paths in your file manager.' }));
+  }
+
+  function paint() {
+    body.textContent = '';
+    if (mode === 'folders') paintFolders(); else paintDupes();
+  }
+
+  paint();
+  enter([head, bar], { y: 10 });
+  const off = lib.events.on('change', paint);
+  return () => off();
+}
+
 const ROUTES = {
   home: viewHome,
+  files: viewFiles,
   songs: viewSongs,
   albums: viewAlbums,
   album: viewAlbum,

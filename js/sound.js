@@ -15,7 +15,7 @@ import { el, ico } from './util.js';
 import * as rack from './audio.js';
 import * as player from './player.js';
 import { toast, promptDialog } from './ui.js';
-import { enter } from './motion.js';
+import { enter, tick } from './motion.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const svgEl = (tag, attrs) => {
@@ -72,8 +72,15 @@ export function mountSound(host) {
     class: 'btn ghost sm', text: 'Reset',
     onclick: () => { rack.reset(); paintAll(); toast('Rack reset'); },
   });
+  /* The unit's own plate and lamp. The lamp is not decoration: it is lit while
+     the rack is in circuit, amber while it is bypassed, and it flickers with
+     what is actually passing through. A lamp that is always on is a sticker. */
+  const lamp = el('i', { class: 'rack-lamp', 'aria-hidden': 'true' });
+  const plate = el('span', { class: 'rack-plate' }, lamp,
+    el('b', { text: 'SONORA' }), el('span', { text: 'RK-10' }));
+
   left.appendChild(el('div', { class: 'rack-head' },
-    el('span', { class: 'label', text: 'Equaliser' }), bypass, resetBtn));
+    el('span', { class: 'label', text: 'Equaliser' }), plate, bypass, resetBtn));
 
   /* ---- presets --------------------------------------------------------- */
 
@@ -387,6 +394,12 @@ export function mountSound(host) {
   }
 
   function paintAll() {
+    /* Whether the unit is in circuit is state, not signal, so it is written
+       here rather than from the ticker. The ticker stops when nothing is
+       playing — which is exactly when somebody is most likely to be pressing
+       Bypass and looking at the lamp to see whether it did anything. */
+    grid.classList.toggle('is-live', rack.state.on);
+    grid.classList.toggle('is-bypassed', !rack.state.on);
     paintCurve();
 
     faderCells.forEach((f, i) => {
@@ -456,6 +469,21 @@ export function mountSound(host) {
 
   on(rack, 'change', () => { if (!host.isConnected) return; paintAll(); });
   on(player, 'track', () => paintAll());
+
+  /* The lamp reads the same per-frame analysis every visualiser reads, so it
+     costs no second look at the analyser — and the ticker stops on its own
+     when nothing is playing, which is exactly when a signal lamp should go
+     out. Smoothed on the way down only: a lamp that tracks a waveform sample
+     for sample strobes, and a lamp that lags the music is not reporting it. */
+  let sig = 0;
+  const stopLamp = tick((dt) => {
+    if (!host.isConnected) return;
+    const live = player.state.playing && rack.state.on;
+    const target = live ? Math.min(1, player.analysis().level * 1.6) : 0;
+    sig += (target - sig) * Math.min(1, dt / (target > sig ? 60 : 260));
+    grid.style.setProperty('--sig', sig.toFixed(3));
+  });
+  offs.push(stopLamp);
 
   enter(host.children, { each: 60, y: 12 });
   return () => { while (offs.length) offs.pop()(); };
