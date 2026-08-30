@@ -180,7 +180,72 @@ function toggleRowFavourite(row) {
  * One factory for every track list in the app. Rows are recycled by the
  * virtualiser, so render() only ever writes fields that changed.
  */
-export function trackRowFactory({ columns = ['index', 'title', 'album', 'duration'], onPlay, onMenu }) {
+/**
+ * Which rows are picked, and the arithmetic of picking them.
+ *
+ * Held as ids rather than indices, deliberately. A virtualised list re-sorts
+ * and re-filters under the selection all the time; indices would silently come
+ * to mean different tracks, which is the kind of bug that only shows up as
+ * "it deleted the wrong thing".
+ *
+ * The anchor is the other half of it: shift-click means "from the last thing I
+ * picked to here", and that is a range in the list's *current* order, so it is
+ * resolved against the list at the moment of the click rather than stored.
+ */
+export class Selection {
+  constructor(onChange) {
+    this.ids = new Set();
+    this.anchorId = null;
+    this.onChange = onChange;
+  }
+
+  get size() { return this.ids.size; }
+  has(id) { return this.ids.has(id); }
+  clear() { if (!this.ids.size) return; this.ids.clear(); this.anchorId = null; this.onChange?.(); }
+
+  /** The picked tracks, in the order the list currently shows them. */
+  tracksIn(list) { return list.filter((t) => this.ids.has(t.id)); }
+
+  toggle(id) {
+    if (this.ids.has(id)) this.ids.delete(id); else this.ids.add(id);
+    this.anchorId = id;
+    this.onChange?.();
+  }
+
+  only(id) {
+    this.ids.clear();
+    this.ids.add(id);
+    this.anchorId = id;
+    this.onChange?.();
+  }
+
+  all(list) {
+    for (const t of list) this.ids.add(t.id);
+    this.onChange?.();
+  }
+
+  /** From the anchor to `id` in the list's current order, inclusive. */
+  range(list, id) {
+    const to = list.findIndex((t) => t.id === id);
+    if (to < 0) return;
+    let from = this.anchorId ? list.findIndex((t) => t.id === this.anchorId) : -1;
+    if (from < 0) from = to;
+    const [lo, hi] = from <= to ? [from, to] : [to, from];
+    for (let i = lo; i <= hi; i++) this.ids.add(list[i].id);
+    this.onChange?.();
+  }
+
+  /** Drops ids that are no longer in the list, after a filter or a delete. */
+  prune(list) {
+    if (!this.ids.size) return;
+    const live = new Set(list.map((t) => t.id));
+    let changed = false;
+    for (const id of [...this.ids]) if (!live.has(id)) { this.ids.delete(id); changed = true; }
+    if (changed) this.onChange?.();
+  }
+}
+
+export function trackRowFactory({ columns = ['index', 'title', 'album', 'duration'], onPlay, onMenu, onPick, selection }) {
   const create = () => {
     const row = el('div', { class: 'trow', role: 'row', tabindex: '-1' });
     let html = '';
@@ -201,9 +266,15 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
       onPlay?.(parseInt(row.dataset.index, 10));
     });
     row.addEventListener('click', (e) => {
-      if (e.target.closest('.trow-play')) onPlay?.(parseInt(row.dataset.index, 10));
-      else if (e.target.closest('.trow-fav')) toggleRowFavourite(row);
-      else if (e.target.closest('.trow-more')) onMenu?.(parseInt(row.dataset.index, 10), e.target.closest('.trow-more'));
+      if (e.target.closest('.trow-play')) return onPlay?.(parseInt(row.dataset.index, 10));
+      if (e.target.closest('.trow-fav')) return toggleRowFavourite(row);
+      if (e.target.closest('.trow-more')) return onMenu?.(parseInt(row.dataset.index, 10), e.target.closest('.trow-more'));
+      // A plain click on the row body picks it. Nothing used to happen here,
+      // so this takes no gesture away from anybody.
+      onPick?.(parseInt(row.dataset.index, 10), {
+        toggle: e.ctrlKey || e.metaKey,
+        range: e.shiftKey,
+      });
     });
     row.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -218,6 +289,11 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
     // favourite after the list underneath it has been re-sorted.
     row.dataset.id = track.id;
     paintFavourite(row, track.id);
+    if (selection) {
+      const picked = selection.has(track.id);
+      row.classList.toggle('is-selected', picked);
+      row.setAttribute('aria-selected', picked ? 'true' : 'false');
+    }
     const playing = player.state.current && player.state.current.id === track.id;
     row.classList.toggle('is-playing', !!playing);
     row.classList.toggle('is-missing', !lib.isAvailable(track.id));

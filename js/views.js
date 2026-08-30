@@ -11,7 +11,7 @@ import * as player from './player.js';
 import * as db from './db.js';
 import { VirtualList, VirtualGrid } from './virtual.js';
 import {
-  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog,
+  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, Selection,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
 import { enter, reveal, scramble, countTo, tilt3d } from './motion.js';
@@ -83,17 +83,64 @@ function shuffleAll(tracks, origin) {
 }
 
 /** A virtualised track table wired to the standard row menu. */
+/* Every live table, so the router can ask whether anybody is mid-selection.
+   A Set rather than a counter: a view torn down without its destroy() running
+   would leak a count forever, and a stale entry here is at worst one skipped
+   repaint. */
+const liveTables = new Set();
+
+/**
+ * Is the listener in the middle of picking tracks?
+ *
+ * app.js repaints the whole view when the library changes, which during an
+ * import is several times a second, and that repaint rebuilds this table and
+ * everything it is holding. It already declines to do that when the listener
+ * has scrolled away from the top; a half-built selection is the same kind of
+ * work in progress and gets the same protection. Without this, selecting
+ * anything while a scan is running is impossible.
+ */
+export const hasLiveSelection = () => {
+  for (const t of liveTables) if (t.selection.size) return true;
+  return false;
+};
+
 function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel } = {}) {
   let tracks = getTracks();
+
+  /* Building a thirty-track playlist used to be thirty right-clicks. Rows can
+     be picked now, and every action that took one track takes the picked set
+     instead. The bar only exists while something is picked. */
+  const selection = new Selection(() => { list.refresh(); paintBar(); });
+  const bar = el('div', { class: 'selbar', hidden: true, role: 'toolbar', 'aria-label': 'Selected tracks' });
+
   const factory = trackRowFactory({
     columns: columns || ['index', 'title', 'album', 'duration'],
+    selection,
     onPlay: (i) => playAll(tracks, i, origin),
+    onPick: (i, mods) => {
+      const t = tracks[i];
+      if (!t) return;
+      if (mods.range) selection.range(tracks, t.id);
+      else if (mods.toggle) selection.toggle(t.id);
+      else if (selection.size === 1 && selection.has(t.id)) selection.clear();
+      else selection.only(t.id);
+    },
     onMenu: (i, anchor, event) => {
       const t = tracks[i];
       if (!t) return;
-      menu(trackMenu([t], {
+      /* Right-clicking inside a selection acts on the whole of it; right-
+         clicking outside one is about the row under the pointer, and moves the
+         selection there rather than silently acting on something off-screen. */
+      if (!selection.has(t.id)) selection.only(t.id);
+      const picked = selection.tracksIn(tracks);
+      menu(trackMenu(picked.length ? picked : [t], {
         origin,
-        onRemove: onRemove && (() => onRemove(t, i)),
+        onRemove: onRemove && (() => {
+          for (const track of (picked.length ? picked : [t])) {
+            onRemove(track, tracks.indexOf(track));
+          }
+          selection.clear();
+        }),
         removeLabel,
       }), { anchor, event });
     },
@@ -102,18 +149,74 @@ function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel } 
   const list = new VirtualList({ viewport: host, rowHeight: ROW_H, ...factory });
   list.setItems(tracks);
 
+  /* On the body rather than in the page: it floats above the transport, and a
+     list that scrolls must not scroll its own toolbar out of reach. */
+  document.body.appendChild(bar);
+
+  function paintBar() {
+    const n = selection.size;
+    bar.hidden = n === 0;
+    if (!n) return;
+    const picked = () => selection.tracksIn(tracks);
+    bar.textContent = '';
+    bar.append(
+      el('span', { class: 'selbar-count', text: fmtCount(n, 'track', 'tracks') }),
+      el('button', { class: 'btn sm primary', text: 'Play', onclick: () => {
+        const p = picked(); if (p.length) player.playTracks(p, 0, origin); } }),
+      el('button', { class: 'btn sm ghost', text: 'Play next', onclick: () => {
+        const p = picked(); if (p.length) { player.playNext(p); toast(`${fmtCount(p.length, 'track', 'tracks')} up next`); } } }),
+      el('button', { class: 'btn sm ghost', text: 'Queue', onclick: () => {
+        const p = picked(); if (p.length) { player.enqueue(p); toast(`${fmtCount(p.length, 'track', 'tracks')} queued`); } } }),
+      el('button', { class: 'btn sm ghost', text: 'More', onclick: (e) => {
+        const p = picked(); if (p.length) menu(trackMenu(p, { origin }), { anchor: e.currentTarget }); } }),
+      el('button', { class: 'icon-btn selbar-close', 'aria-label': 'Clear selection',
+        html: ico('close'), onclick: () => selection.clear() }),
+    );
+  }
+
+  /* Escape clears; ctrl-A takes the lot — but only when the pointer is not in
+     a text field, or select-all in the search box would select the library. */
+  const onKey = (e) => {
+    if (!host.isConnected) return;
+    const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || '') ||
+                   document.activeElement?.isContentEditable;
+    if (e.key === 'Escape' && selection.size) { selection.clear(); e.stopPropagation(); return; }
+    if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey) && !typing) {
+      e.preventDefault();
+      selection.all(tracks);
+    }
+  };
+  document.addEventListener('keydown', onKey);
+
   // A star pressed anywhere — a row, the transport, a menu — has to land on
   // every visible copy of that track, so the rows on screen are repainted
   // rather than rebuilt: `refresh` rewrites what is live and moves nothing.
   const offFav = lib.events.on('favourites', () => list.refresh());
 
-  return {
+  const api = {
     list,
-    update() { tracks = getTracks(); list.setItems(tracks); },
+    bar,
+    selection,
+    update() {
+      tracks = getTracks();
+      list.setItems(tracks);
+      // The list changed underneath the selection; anything gone is gone.
+      selection.prune(tracks);
+      paintBar();
+    },
     refresh() { list.refresh(); },
-    destroy() { offFav(); list.destroy(); },
+    destroy() {
+      offFav();
+      document.removeEventListener('keydown', onKey);
+      liveTables.delete(api);
+      bar.remove();
+      list.destroy();
+    },
     get tracks() { return tracks; },
   };
+
+  liveTables.add(api);
+  return api;
 }
 
 function columnHeader(columns, sortState, onSort) {

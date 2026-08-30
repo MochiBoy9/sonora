@@ -1078,3 +1078,64 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .playerbar.sleep-on .pb-sleep { color: var(--accent); }
 .playerbar.sleep-on .pb-sleep .ico { opacity: .28; }
 .playerbar.sleep-on .pb-sleep-left { display: grid; }
+
+/* ---------------------------------------------------------------- selection
+
+   A row picked, and the bar that appears when one is. It sits above the
+   transport rather than in the list, because a list that scrolls must not
+   scroll its own toolbar out of reach. */
+.trow.is-selected {
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / .16), rgb(var(--accent-rgb) / .05) 70%);
+  color: var(--text);
+}
+.trow.is-selected::before { transform: scaleY(1); }
+.trow.is-selected:hover {
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / .22), rgb(var(--accent-rgb) / .08) 70%);
+}
+
+.selbar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--player-h) + 20px);
+  transform: translateX(-50%);
+  z-index: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  max-width: min(760px, calc(100vw - 32px));
+  background: rgb(var(--surface-2-rgb) / .92);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line), 0 18px 44px -18px rgb(0 0 0 / .7);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+.selbar[hidden] { display: none; }
+
+.selbar-count {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+  padding-right: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.selbar .btn { flex: none; }
+.selbar-close { margin-left: 2px; flex: none; }
+
+@media (max-width: 620px) {
+  .selbar { gap: 6px; padding: 8px; }
+  .selbar-count { font-size: calc(9.5px * var(--scale)); letter-spacing: .08em; }
+}
+
+/* On a phone the tab bar sits below the transport, so the toolbar has to
+   clear both of them. Same offset the queue pane already uses. */
+@media (max-width: 560px) {
+  .selbar { bottom: calc(var(--player-h) + 58px + 14px); }
+}

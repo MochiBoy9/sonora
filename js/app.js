@@ -3,7 +3,7 @@
 import { $, el, ico, debounce, clamp, acceptAttr, formatName } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
-import { renderView } from './views.js';
+import { renderView, hasLiveSelection } from './views.js';
 import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
 import { toast, closeMenu, promptDialog, menu, dialog } from './ui.js';
@@ -788,7 +788,9 @@ async function boot() {
 
   // Re-render list pages when the library changes underneath them. Deferred to
   // the next frame so we never rebuild the view from inside the emit that
-  // triggered it, and skipped when the user has scrolled away from the top.
+  // triggered it, and skipped when the listener is in the middle of something:
+  // scrolled away from the top, or part-way through picking a set of tracks.
+  // Both are work in progress, and a repaint throws both of them away.
   let repaintQueued = false;
   lib.events.on('change', () => {
     if (repaintQueued) return;
@@ -796,7 +798,8 @@ async function boot() {
     requestAnimationFrame(() => {
       repaintQueued = false;
       const route = parseHash();
-      if (['home', 'albums', 'artists', 'songs'].includes(route.name) && $('#view').scrollTop < 40) {
+      if (['home', 'albums', 'artists', 'songs'].includes(route.name) &&
+          $('#view').scrollTop < 40 && !hasLiveSelection()) {
         navigate();
       }
     });
