@@ -23,6 +23,11 @@ import { Emitter, idle } from './util.js';
 
 export const events = new Emitter();
 
+/* The record shape this build understands. A stored record from an older
+   version is treated as absent and recomputed once, because the fields it is
+   missing cannot be derived from the ones it kept — only from the samples. */
+const REC_VERSION = 2;
+
 /** id -> record | null (a null means "looked, found nothing, stop asking"). */
 const memo = new Map();
 /** id -> promise, so two callers asking at once share one decode. */
@@ -185,7 +190,7 @@ export function forTrack(track, want = 'all') {
 
   const p = (async () => {
     const stored = await db.getPeaks(id).catch(() => null);
-    if (stored && stored.v === 1 && satisfies(stored, want)) {
+    if (stored && stored.v === REC_VERSION && satisfies(stored, want)) {
       memo.set(id, stored);
       return stored;
     }

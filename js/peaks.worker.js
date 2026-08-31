@@ -137,20 +137,11 @@ function waveform(chans, frames) {
  * magnitude is stored in dB rather than linearly — a linear spectrogram of
  * music is a black rectangle with a bright line along the bottom.
  */
-function spectrogram(chans, frames, sampleRate) {
+function spectrogram(mono, frames, sampleRate) {
   const plan = planFFT(FFT);
   const half = FFT >> 1;
   const mag = new Float32Array(half);
   const out = new Uint8Array(BANDS * COLS);
-
-  // Mono mix, once, so the FFT loop reads one array.
-  const mono = new Float32Array(frames);
-  const n = chans.length;
-  for (let c = 0; c < n; c++) {
-    const ch = chans[c];
-    for (let i = 0; i < frames; i++) mono[i] += ch[i];
-  }
-  if (n > 1) for (let i = 0; i < frames; i++) mono[i] /= n;
 
   /* Band edges as *fractional* bins, and deliberately not forced apart.
    *
@@ -184,11 +175,26 @@ function spectrogram(chans, frames, sampleRate) {
      in the peak bin alone. Without this a full-scale sine reads +1.8 dB. */
   const scale = (4 / FFT) / Math.sqrt(1.5);
 
+  /* A mean magnitude per *raw* bin, kept alongside the banded output.
+   *
+   * The bands stop at 16 kHz, which is right for a picture — above that there
+   * is nothing to look at and the space is better spent on the octaves people
+   * hear. It is wrong for finding an encoder's shelf, which is the one thing
+   * that lives up there: a 128 kbps MP3 cuts at about 16 kHz and a 256 kbps
+   * one nearer 20, and neither is visible in a display that ends at 16.
+   *
+   * The raw bins run to Nyquist at 21.5 Hz apiece and cost one array and one
+   * add per bin per column to accumulate. */
+  const binProfile = new Float32Array(half);
+  let colsSeen = 0;
+
   const hop = Math.max(1, Math.floor((frames - FFT) / COLS));
   for (let col = 0; col < COLS; col++) {
     const at = col * hop;
     if (at >= frames) break;
     fftMag(plan, mono, at, mag);
+    for (let j = 0; j < half; j++) binProfile[j] += mag[j];
+    colsSeen++;
 
     for (let b = 0; b < BANDS; b++) {
       const lo = edges[b], hi = edges[b + 1];
@@ -236,7 +242,358 @@ function spectrogram(chans, frames, sampleRate) {
       out[b * COLS + col] = Math.round(norm * 255);
     }
   }
-  return { spec: out, bands: BANDS, cols: COLS };
+  if (colsSeen) for (let j = 0; j < half; j++) binProfile[j] /= colsSeen;
+  return { spec: out, bands: BANDS, cols: COLS, binProfile, binHz: perBin };
+}
+
+/* ------------------------------------------------------------------ tempo */
+
+/* The onset envelope is sampled at this many frames per second — one value per
+   512 input samples at 44.1 kHz, about 86 Hz. Fine enough to place a beat to
+   within 12 ms, coarse enough that the whole envelope for a long track is a
+   few tens of thousands of floats. */
+const ENV_HOP = 512;
+
+/* The range worth looking in. Below 60 and above 200 the answer is nearly
+   always a half or double of something inside it, and reporting 38 BPM for a
+   ballad is worse than reporting nothing. */
+const BPM_MIN = 60, BPM_MAX = 200;
+
+/**
+ * Tempo, from the shape of the track rather than from a second decode.
+ *
+ * Three steps, and each is the cheap version of something a proper beat
+ * tracker does more carefully:
+ *
+ *   1. An energy envelope at ~86 Hz. Not the waveform stored for the scrubber
+ *      — that is 2048 buckets over the whole track, which for four minutes is
+ *      117 ms a bucket, and a beat at 120 BPM is 500 ms. Four samples per beat
+ *      is not enough to find a beat with.
+ *   2. Half-wave rectified difference. What matters is energy *arriving*; a
+ *      decay carries no onset information and including it smears the peaks.
+ *   3. Autocorrelation over the plausible lags, with the lag having the
+ *      strongest agreement winning.
+ *
+ * Returned with a confidence, because the honest failure mode here is not
+ * being wrong — it is being wrong *confidently*. Rubato, free time and much
+ * electronic music with no percussive onset all produce a flat correlation
+ * with no clear winner, and that is reported as a low number rather than as a
+ * tempo.
+ */
+function tempoOf(mono, frames, sampleRate) {
+  const n = Math.floor(frames / ENV_HOP);
+  if (n < 64) return null;                       // too short to mean anything
+
+  // 1. energy per hop
+  const env = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    const from = i * ENV_HOP, to = from + ENV_HOP;
+    for (let j = from; j < to; j++) sum += mono[j] * mono[j];
+    env[i] = Math.sqrt(sum / ENV_HOP);
+  }
+
+  // 2. half-wave rectified difference, then mean-removed so the correlation
+  //    below measures shape rather than loudness
+  const flux = new Float32Array(n);
+  let mean = 0;
+  for (let i = 1; i < n; i++) { const d = env[i] - env[i - 1]; flux[i] = d > 0 ? d : 0; mean += flux[i]; }
+  mean /= n;
+  for (let i = 0; i < n; i++) flux[i] -= mean;
+
+  // 3. autocorrelation over the lags a tempo in range would produce
+  const fps = sampleRate / ENV_HOP;
+  const loLag = Math.max(2, Math.floor(fps * 60 / BPM_MAX));
+  const hiLag = Math.min(n - 2, Math.ceil(fps * 60 / BPM_MIN));
+  if (hiLag <= loLag) return null;
+
+  const corr = new Float32Array(hiLag - loLag + 1);
+  for (let lag = loLag; lag <= hiLag; lag++) {
+    let acc = 0;
+    for (let i = lag; i < n; i++) acc += flux[i] * flux[i - lag];
+    corr[lag - loLag] = acc / (n - lag);
+  }
+
+  /* A preference for the octave people actually hear.
+   *
+   * Autocorrelation cannot distinguish a tempo from half or double of it —
+   * both are real periods of the same signal — and which one wins is decided
+   * by details of the normalisation rather than by the music. Measured: a
+   * click track at an exact 175 BPM came out at 87.6, precisely half, because
+   * the peak at twice the period edged it.
+   *
+   * Every beat tracker resolves this the same way, with a prior: listeners
+   * perceive tempo clustered around 120 BPM, and the further an octave is from
+   * there the less likely it is to be the one being felt. A log-normal weight
+   * centred on 120 is gentle enough that a genuine 170 still wins over its own
+   * half, and firm enough to break the tie when the two are level. */
+  let best = -Infinity, bestLag = 0;
+  for (let lag = loLag; lag <= hiLag; lag++) {
+    const bpm = (fps * 60) / lag;
+    const octaves = Math.log2(bpm / 120);
+    const prior = Math.exp(-0.5 * Math.pow(octaves / 0.9, 2));
+    const score = corr[lag - loLag] * prior;
+    if (score > best) { best = score; bestLag = lag; }
+  }
+  if (!bestLag) return null;
+
+  /* Then check whether the beat is really twice as fast.
+   *
+   * The prior above cannot settle an octave on its own, and for one pair it
+   * never will: 120 BPM sits almost exactly halfway between 87.5 and 175 in
+   * log space, so a preference centred there is neutral between them and the
+   * winner falls out of rounding. Measured: a click track at an exact 175 BPM
+   * reported 87.6.
+   *
+   * The question a prior cannot answer, the signal can — is there an onset
+   * halfway between the beats? At a real 175 the correlation at half the
+   * chosen lag is just as strong, because those onsets are genuinely there;
+   * for a track that really is 87.5 there is nothing at the halfway point and
+   * it collapses. So halve while the half-lag still holds up. */
+  /* Baseline first: the flux had its mean removed, so most lags sit slightly
+     below zero and a raw comparison of correlations is comparing offsets. */
+  let corrMean = 0;
+  for (let k = 0; k < corr.length; k++) corrMean += corr[k];
+  corrMean /= corr.length;
+
+  /* Energy in a small window around a lag, above the baseline.
+   *
+   * A window rather than a single value, and this is the whole of why the
+   * check took three attempts. A period of 29.53 envelope frames has no bin of
+   * its own: its correlation splits across lags 29 and 30, roughly half in
+   * each. Its second harmonic at 59.06 lands almost exactly on lag 59 and
+   * keeps all of its energy in one place — so comparing peak against peak
+   * compares half a fundamental with a whole harmonic and concludes, wrongly,
+   * that the track is half as fast. Measured on a 175 BPM click track: 0.00168
+   * and 0.00191 either side of 29.5, against 0.00353 at 59.
+   *
+   * Summing the neighbourhood puts them back on equal terms: 0.00359 against
+   * 0.00361, which is the tie it always should have been. */
+  const energyAt = (lag) => {
+    let sum = 0;
+    for (let l = Math.floor(lag) - 1; l <= Math.ceil(lag) + 1; l++) {
+      if (l < loLag || l > hiLag) continue;
+      const v = corr[l - loLag] - corrMean;
+      if (v > 0) sum += v;
+    }
+    return sum;
+  };
+
+  for (let guard = 0; guard < 2; guard++) {
+    const half = bestLag / 2;
+    if (half - 1 < loLag) break;
+    const here = energyAt(bestLag);
+    if (!(here > 0) || energyAt(half) < here * 0.7) break;
+    // Land on whichever of the two bracketing lags actually holds more.
+    const lo = Math.floor(half), hi = Math.min(hiLag, Math.ceil(half));
+    bestLag = (corr[hi - loLag] > corr[lo - loLag]) ? hi : lo;
+  }
+
+  /* Confidence as a z-score: how many standard deviations the winner stands
+     above the run of lags.
+   *
+   * The first version compared it against the mean, which a periodic track
+   * inflates with its own harmonics — the steadier the beat, the worse it
+   * scored. The second used the median, which is robust to those peaks but
+   * goes *negative* here: the flux has had its mean removed, so most lags
+   * correlate slightly below zero and a ratio against the median is
+   * meaningless. A z-score is indifferent to both problems because it measures
+   * spread rather than magnitude. */
+  let variance = 0;
+  for (let k = 0; k < corr.length; k++) { const d = corr[k] - corrMean; variance += d * d; }
+  const sd = Math.sqrt(variance / corr.length);
+  const peak = corr[bestLag - loLag];
+  const z = sd > 0 ? (peak - corrMean) / sd : 0;
+  // Two sigma is a shrug; eight is a metronome.
+  const confidence = Math.max(0, Math.min(1, (z - 2) / 6));
+
+  /* Parabolic interpolation across the peak. Lags are whole envelope frames,
+     which at 86 Hz quantises the answer to about 1.5 BPM at 160 — fitting a
+     parabola to the winner and its two neighbours recovers most of that. */
+  let refined = bestLag;
+  const i = bestLag - loLag;
+  if (i > 0 && i < corr.length - 1) {
+    const a = corr[i - 1], b = corr[i], c = corr[i + 1];
+    const denom = a - 2 * b + c;
+    if (denom !== 0) refined = bestLag + Math.max(-0.5, Math.min(0.5, 0.5 * (a - c) / denom));
+  }
+
+  const bpm = (fps * 60) / refined;
+  return { bpm: Math.round(bpm * 10) / 10, confidence: Math.round(confidence * 100) / 100 };
+}
+
+/* ------------------------------------------------------------------ colour */
+
+/**
+ * Where the spectrum's balance point sits, and where its content stops.
+ *
+ * Both come off the spectrogram that has already been computed, in one pass.
+ *
+ * The centroid is the magnitude-weighted mean band, converted back to hertz.
+ * It maps closely onto how bright or dark a record sounds, and unlike a genre
+ * tag it is measured rather than asserted.
+ *
+ * The shelf is the highest band still carrying real energy. A lossy encoder
+ * throws away everything above a cutoff — 16 kHz for most MP3s, lower for
+ * older ones — and a file that was transcoded to a lossless container keeps
+ * that hole. It is the one reliable way to catch a FLAC that used to be a
+ * 128 kbps MP3, and the census currently counts those as lossless.
+ */
+function spectralShape(spec, bands, cols, sampleRate, binProfile, binHz) {
+  const hzOf = (b) => F_LOW * Math.pow(F_HIGH / F_LOW, (b + 0.5) / bands);
+
+  let wsum = 0, msum = 0;
+  // Mean level per band over the whole track, for the broadband test below.
+  const perBand = new Float32Array(bands);
+
+  for (let b = 0; b < bands; b++) {
+    let acc = 0;
+    for (let c = 0; c < cols; c++) acc += spec[b * cols + c];
+    const meanLevel = acc / cols / 255;
+    perBand[b] = meanLevel;
+    wsum += meanLevel * hzOf(b);
+    msum += meanLevel;
+  }
+  const centroid = msum > 0 ? Math.round(wsum / msum) : null;
+
+  /* The shelf comes off the raw FFT bins, not the bands.
+   *
+   * The bands end at 16 kHz, and an encoder's cutoff is usually at or above
+   * that — so measured against the display, a 16 kHz shelf and a 20 kHz one
+   * both read as "content up to the top band" and neither is distinguishable
+   * from an untouched file. The raw bins run to Nyquist and settle it.
+   *
+   * The floor is relative to the track's own loudest bin, because a quiet
+   * recording is not a truncated one. */
+  let binPeak = 0;
+  for (let j = 0; j < binProfile.length; j++) if (binProfile[j] > binPeak) binPeak = binProfile[j];
+  let topBin = binProfile.length - 1;
+  if (binPeak > 0) {
+    const binFloor = binPeak * 0.0025;      // about -52 dB of the peak bin
+    while (topBin > 0 && binProfile[topBin] < binFloor) topBin--;
+  }
+  const shelfHz = Math.round((topBin + 0.5) * binHz);
+
+  // The broadband test still reads the bands, which is the right resolution
+  // for "is there music across the spectrum" as opposed to "where does it end".
+  let peak = 0;
+  for (let b = 0; b < bands; b++) if (perBand[b] > peak) peak = perBand[b];
+  let top = bands - 1;
+  if (peak > 0) {
+    const floor = peak * 0.06;
+    while (top > 0 && perBand[top] < floor) top--;
+  }
+
+  /* Whether that shelf is evidence of anything, which is a narrower question
+     than where it is. Three things all have to hold.
+   *
+   * It has to be below what the sample rate could carry — a 44.1 kHz file can
+   * hold 22 kHz, so content stopping at 16 is a decision somebody's encoder
+   * made and content stopping at 20 is just a recording.
+   *
+   * It has to be in the range encoders actually cut. Lossy codecs shelve
+   * somewhere between about 11 kHz at low bitrates and 20 kHz at high ones. A
+   * shelf at 300 Hz is not a transcode, it is a bass line.
+   *
+   * And the track has to be broadband underneath it. This is the test that
+   * stops the feature libelling people's records: a solo flute, a sine sweep
+   * or a field recording of a hum genuinely has nothing up high, and without
+   * this check every one of them is reported as a fake — measured, a pure
+   * 200 Hz tone came out "truncated" with a shelf at 344 Hz. Music that has
+   * been through an encoder is loud across most of the spectrum and then stops
+   * dead; that pattern is the actual signature, not the stopping alone. */
+  const nyquist = sampleRate / 2;
+  const ceiling = Math.min(nyquist, F_HIGH);
+
+  let occupied = 0;
+  const floorLevel = peak * 0.06;
+  for (let b = 0; b <= top; b++) if (perBand[b] >= floorLevel) occupied++;
+  const broadband = top > 0 && occupied / (top + 1) > 0.6 && top > bands * 0.35;
+
+  /* Encoders cut somewhere between about 10 kHz at low bitrates and 20 at
+     high ones. Below that range it is a recording, above it there was nothing
+     to remove. */
+  const truncated = broadband && shelfHz > 9500 && shelfHz < nyquist * 0.93;
+
+  return { centroid, shelfHz, truncated };
+}
+
+/* ------------------------------------------------------------------ hook */
+
+/* The similarity pass runs on this many columns rather than all 480: the
+   matrix is quadratic and 120 is plenty to find a repeat that lasts seconds. */
+const HOOK_COLS = 120;
+
+/**
+ * The part of the track that repeats most, which in most popular music is the
+ * chorus.
+ *
+ * A self-similarity matrix over the spectrogram: every column compared with
+ * every other, which at 120 columns is 14,400 comparisons of 48 numbers. The
+ * lag with the highest average similarity is the length of the repeat; the
+ * position where that repeat is both strongest and loudest is where the hook
+ * starts.
+ *
+ * This is emphatically not "here is the bit we decided you want". It is "here
+ * is the part of this file that repeats", which is a measurement, and it is
+ * meaningless on anything through-composed — so it carries a confidence too
+ * and callers are expected to decline it.
+ */
+function hookOf(spec, bands, cols, duration) {
+  const m = Math.min(HOOK_COLS, cols);
+  const step = cols / m;
+
+  // Reduced, and normalised per column so the comparison is of shape rather
+  // than of loudness — otherwise the loudest passage always looks like itself.
+  const v = [];
+  for (let i = 0; i < m; i++) {
+    const c = Math.floor(i * step);
+    const col = new Float32Array(bands);
+    let norm = 0;
+    for (let b = 0; b < bands; b++) { const x = spec[b * cols + c] / 255; col[b] = x; norm += x * x; }
+    norm = Math.sqrt(norm) || 1;
+    for (let b = 0; b < bands; b++) col[b] /= norm;
+    v.push(col);
+  }
+
+  const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+
+  /* The repeat period: the lag whose columns agree with themselves best.
+     Bounded to between about eight seconds and a third of the track — shorter
+     is a bar, longer is not a section. */
+  const secsPerCol = duration / m;
+  const loLag = Math.max(2, Math.floor(8 / secsPerCol));
+  const hiLag = Math.min(m - 2, Math.floor((duration / 3) / secsPerCol));
+  if (hiLag <= loLag) return null;
+
+  let bestLag = 0, bestScore = -1, total = 0, n = 0;
+  for (let lag = loLag; lag <= hiLag; lag++) {
+    let acc = 0;
+    for (let i = lag; i < m; i++) acc += dot(v[i], v[i - lag]);
+    acc /= (m - lag);
+    total += acc; n++;
+    if (acc > bestScore) { bestScore = acc; bestLag = lag; }
+  }
+  if (!bestLag) return null;
+
+  /* Where that repeat is strongest *and* loudest. Similarity alone would
+     happily pick a repeated silence. */
+  let at = 0, atScore = -1;
+  for (let i = 0; i + bestLag < m; i++) {
+    let loud = 0;
+    for (let b = 0; b < bands; b++) loud += spec[b * cols + Math.floor(i * step)] / 255;
+    loud /= bands;
+    const s = dot(v[i], v[i + bestLag]) * (0.35 + loud);
+    if (s > atScore) { atScore = s; at = i; }
+  }
+
+  const avg = n ? total / n : 0;
+  const confidence = avg > 0 ? Math.min(1, (bestScore / avg - 1) / 0.35) : 0;
+  return {
+    at: Math.round(at * secsPerCol * 10) / 10,
+    length: Math.round(bestLag * secsPerCol * 10) / 10,
+    confidence: Math.round(confidence * 100) / 100,
+  };
 }
 
 /**
@@ -265,25 +622,86 @@ function loudness(chans, frames) {
 
 /* ------------------------------------------------------------------ pump */
 
+/** One mono mix, shared by everything below that needs samples. */
+function toMono(chans, frames) {
+  const n = chans.length;
+  if (n === 1) return chans[0];
+  const mono = new Float32Array(frames);
+  for (let c = 0; c < n; c++) {
+    const ch = chans[c];
+    for (let i = 0; i < frames; i++) mono[i] += ch[i];
+  }
+  for (let i = 0; i < frames; i++) mono[i] /= n;
+  return mono;
+}
+
+/**
+ * Where the music actually starts, in seconds.
+ *
+ * Most rips carry between half a second and three seconds of nothing before
+ * the first note, and on shuffle that is a stutter between every track — the
+ * gap the two-deck handover exists to remove, put back by the files.
+ *
+ * Read off the waveform rather than the samples: it is already computed, and
+ * bucket resolution (about 100 ms on a four-minute track) is finer than the
+ * thing being measured. The floor is relative to the track's own peak, so a
+ * quiet recording is not mistaken for a late one.
+ */
+function leadInOf(min, max, duration) {
+  let peak = 0;
+  for (let i = 0; i < max.length; i++) {
+    const a = Math.max(max[i], -min[i]);
+    if (a > peak) peak = a;
+  }
+  if (peak <= 0) return 0;
+  const floor = peak * 0.02;                 // -34 dB of the track's own peak
+  let i = 0;
+  while (i < max.length && Math.max(max[i], -min[i]) < floor) i++;
+  if (i === 0 || i >= max.length) return 0;
+  // Back off one bucket, so the attack itself is never clipped.
+  return Math.max(0, ((i - 1) / max.length) * duration);
+}
+
 self.onmessage = (e) => {
   const { id, channels, frames, sampleRate, want } = e.data;
   try {
     const chans = channels.map((b) => new Float32Array(b));
+    const duration = frames / sampleRate;
     const wave = waveform(chans, frames);
+    const mono = toMono(chans, frames);
+
     const rec = {
       id,
-      v: 1,
+      /* v2 adds tempo, lead-in, spectral shape and the hook. A v1 record is
+         still perfectly good for what it holds, but there is no way to fill in
+         the new fields without the samples — so it is treated as stale and
+         recomputed the next time the track is played, once, and never again. */
+      v: 2,
       min: wave.min,
       max: wave.max,
       rms: loudness(chans, frames),
+      lead: Math.round(leadInOf(wave.min, wave.max, duration) * 100) / 100,
       at: Date.now(),
     };
+
+    const tempo = tempoOf(mono, frames, sampleRate);
+    if (tempo) { rec.bpm = tempo.bpm; rec.bpmConfidence = tempo.confidence; }
+
     if (want !== 'wave') {
-      const s = spectrogram(chans, frames, sampleRate);
+      const s = spectrogram(mono, frames, sampleRate);
       rec.spec = s.spec;
       rec.specBands = s.bands;
       rec.specCols = s.cols;
+
+      const shape = spectralShape(s.spec, s.bands, s.cols, sampleRate, s.binProfile, s.binHz);
+      rec.centroid = shape.centroid;
+      rec.shelfHz = shape.shelfHz;
+      rec.truncated = shape.truncated;
+
+      const hook = hookOf(s.spec, s.bands, s.cols, duration);
+      if (hook) { rec.hookAt = hook.at; rec.hookLen = hook.length; rec.hookConfidence = hook.confidence; }
     }
+
     self.postMessage({ type: 'peaks', rec });
   } catch (err) {
     self.postMessage({ type: 'error', id, message: String(err && err.message || err) });
