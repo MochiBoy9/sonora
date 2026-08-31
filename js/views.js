@@ -226,6 +226,7 @@ function columnHeader(columns, sortState, onSort) {
   if (columns.includes('index')) html += '<div class="trow-index">#</div>';
   html += '<div class="trow-main"><button class="sortable" data-sort="title">Title</button></div>';
   if (columns.includes('album')) html += '<div class="trow-album"><button class="sortable" data-sort="album">Album</button></div>';
+  if (columns.includes('dr')) html += '<div class="trow-dr"><button class="sortable" data-sort="dr" title="Dynamic range">DR</button></div>';
   if (columns.includes('duration')) html += `<div class="trow-time"><button class="sortable" data-sort="duration">${ico('clock')}</button></div>`;
   html += '<div class="trow-actions"></div>';
   head.innerHTML = html;
@@ -534,7 +535,7 @@ function viewHome(host) {
 const songSort = { key: 'title', dir: 1 };
 
 function viewSongs(host) {
-  const columns = ['index', 'art', 'title', 'album', 'duration'];
+  const columns = ['index', 'art', 'title', 'album', 'dr', 'duration'];
   const all = lib.allTracks();
   const head = el('header', { class: 'page-head' },
     el('p', { class: 'eyebrow', text: 'Library' }),
@@ -1538,7 +1539,7 @@ function viewPlaylist(host, id) {
     return () => off();
   }
 
-  const columns = ['index', 'art', 'title', 'album', 'duration'];
+  const columns = ['index', 'art', 'title', 'album', 'dr', 'duration'];
   const table = trackTable(host, () => lib.playlistTracks(p), {
     origin, columns, removeLabel: 'Remove from playlist',
     onRemove: (t) => {
@@ -1922,6 +1923,34 @@ function viewSettings(host) {
       el('div', { class: 'settings-name', text: 'Shuffle style' }),
       el('div', { class: 'settings-note', text: 'Learned leans gently towards what you actually play, and hard away from anything heard in the last hour.' })),
     el('div', { class: 'settings-actions' }, shufPick)));
+
+  /** A plain on/off row driven by a player setter. */
+  const toggleRow = (icon, name, note, get, set) => {
+    const btn = el('button', {
+      class: 'switch' + (get() ? ' is-on' : ''),
+      role: 'switch', 'aria-checked': String(get()),
+    }, el('span', { class: 'switch-knob' }));
+    btn.addEventListener('click', () => {
+      set(!get());
+      const on = get();
+      btn.classList.toggle('is-on', on);
+      btn.setAttribute('aria-checked', String(on));
+    });
+    return el('div', { class: 'settings-row' },
+      el('div', { class: 'settings-ico', html: ico(icon) }),
+      el('div', { class: 'settings-text' },
+        el('div', { class: 'settings-name', text: name }),
+        el('div', { class: 'settings-note', text: note })),
+      el('div', { class: 'settings-actions' }, btn));
+  };
+
+  pbRows.appendChild(toggleRow('play', 'Skip the silence at the start',
+    'Most rips carry a second or two of nothing before the first note. Starts at the music instead, and the scrubber still shows what was skipped.',
+    () => player.state.trimSilence, (v) => player.setTrimSilence(v)));
+
+  pbRows.appendChild(toggleRow('sliders', 'Land the crossfade on the beat',
+    'Where both tracks have a clear tempo and the two are close, the overlap starts on a beat rather than on a stopwatch.',
+    () => player.state.beatMatch, (v) => player.setBeatMatch(v)));
 
   playback.appendChild(pbRows);
   host.appendChild(playback);

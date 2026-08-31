@@ -255,6 +255,11 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
       (columns.includes('art') ? '<div class="art art-sm"><img class="art-img" alt="" decoding="async"></div>' : '') +
       '<div class="trow-text"><div class="trow-title"></div><div class="trow-sub"></div></div></div>';
     if (columns.includes('album')) html += '<div class="trow-album"></div>';
+    /* The dynamic range, where the listener asked for it. Measured on the audio
+       thread the first time a track is played and otherwise shown in a panel
+       almost nobody opens — it is the most useful number about a file that is
+       not its title, and a library sorted by it is a different library. */
+    if (columns.includes('dr')) html += '<div class="trow-dr"></div>';
     if (columns.includes('duration')) html += '<div class="trow-time"></div>';
     html += '<div class="trow-actions">' +
       `<button class="icon-btn ghost trow-fav" aria-label="Favourite" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>` +
@@ -313,6 +318,21 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
 
     const album = row.querySelector('.trow-album');
     if (album && album.textContent !== track.album) album.textContent = track.album;
+
+    const dr = row.querySelector('.trow-dr');
+    if (dr) {
+      const v = track.dr;
+      const text = v > 0 ? 'DR' + Math.round(v) : '—';
+      if (dr.textContent !== text) dr.textContent = text;
+      dr.title = v > 0
+        ? v.toFixed(1) + ' dB crest factor'
+        : 'Not measured yet — play the track once';
+      /* Under 8 dB is a loudness-war master and 14 or over is a well-cut one.
+         Marked at the two ends rather than shaded on a gradient: this is a
+         verdict somebody wants to read at a glance, not a heat map. */
+      dr.classList.toggle('is-squashed', v > 0 && v < 8);
+      dr.classList.toggle('is-open', v >= 14);
+    }
 
     const time = row.querySelector('.trow-time');
     if (time) {
@@ -421,6 +441,14 @@ export function trackMenu(tracks, opts = {}) {
     first && { label: 'Go to artist', icon: 'artist', onSelect: () => (location.hash = '#/artist/' + first.artistKey) },
     opts.onRemove && { separator: true },
     opts.onRemove && { label: opts.removeLabel || 'Remove', icon: 'trash', danger: true, onSelect: opts.onRemove },
+    /* Only offered where the analysis actually found a repeat. On anything
+       through-composed it declines, and a menu item that does nothing on half
+       a library is worse than one that is sometimes absent. */
+    first && player.hookOf(first) && {
+      label: 'Play the good bit', icon: 'play',
+      hint: fmtTime(player.hookOf(first).at),
+      onSelect: () => { if (!player.playHook(first)) toast('No repeated section found'); },
+    },
     { separator: true },
     tracks.length && {
       label: tracks.length > 1 ? `Edit details for ${tracks.length} tracks…` : 'Edit details…',

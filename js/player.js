@@ -53,7 +53,19 @@ export const state = {
   shuffleMode: 'even',
   /* A timestamp, the string 'track', or null. */
   sleepUntil: null,
+  /* Start at the first note rather than at the first sample. Most rips carry
+     between half a second and three seconds of nothing, and on shuffle that is
+     a stutter between every track — the gap the two decks exist to remove, put
+     back by the files. Off for anyone who wants the air before a recording. */
+  trimSilence: false,
+  /* Line the overlap up with the beat when both tracks have a confident tempo
+     and the two are close enough for it to mean anything. */
+  beatMatch: true,
 };
+
+/* Below this there is nothing worth skipping and the seek would only risk
+   clipping an attack. */
+const MIN_TRIM = 0.35;
 
 /** The longest overlap on offer. Past this it stops being a crossfade. */
 export const MAX_CROSSFADE = 12;
@@ -715,6 +727,14 @@ async function load(track, autoplay, { count = true } = {}) {
   }
   applyLevel(deck, track);
 
+  /* Start at the first note, where there is dead air and the listener asked
+     for it to go. Done before play() rather than after, so nothing of the
+     silence is ever heard — a seek a moment later is audible as a stumble. */
+  const from = startOf(track);
+  if (from > 0) {
+    try { audio.currentTime = from; state.time = from; } catch { /* not seekable */ }
+  }
+
   try {
     if (autoplay) await play();
   } catch (err) {
@@ -797,6 +817,59 @@ function cancelHandover() {
   }
 }
 
+/**
+ * Where this track should start, in seconds.
+ *
+ * Zero unless the listener asked for the silence to be skipped and the
+ * analysis found enough of it to be worth skipping. The figure comes off the
+ * waveform, which is measured once and kept — nothing is decoded to answer
+ * this, and a track with no analysis yet simply starts at zero like it always
+ * did.
+ */
+export function startOf(track) {
+  if (!state.trimSilence || !track) return 0;
+  const rec = peakmap.peek(track);
+  const lead = rec && rec.lead;
+  if (!lead || lead < MIN_TRIM) return 0;
+  // Never eat more than a fifth of a track: a lead-in that long is the piece.
+  const cap = (track.duration || 0) * 0.2;
+  return cap > 0 ? Math.min(lead, cap) : lead;
+}
+
+/**
+ * How far to nudge a handover so the two tracks land in step.
+ *
+ * Returns seconds to *delay* the overlap by, at most one beat of the outgoing
+ * track. The idea is small and the constraint on it is the interesting part:
+ * this only runs when both tempos are confident and close, because a
+ * beat-match between 92 and 140 is not a transition, it is a collision — and
+ * an alignment computed from a tempo the analysis was unsure about is worse
+ * than no alignment, because it moves the fade for no reason.
+ */
+function beatOffset(fromTrack, toTrack, remaining, fade) {
+  if (!state.beatMatch || fade <= 0) return 0;
+  const a = peakmap.peek(fromTrack);
+  const b = peakmap.peek(toTrack);
+  if (!a || !b || !a.bpm || !b.bpm) return 0;
+  if ((a.bpmConfidence || 0) < 0.4 || (b.bpmConfidence || 0) < 0.4) return 0;
+  // Within a tenth of each other, or one is double the other — either can be
+  // mixed. Anything else is two different records being played at once.
+  const ratio = a.bpm / b.bpm;
+  const close = Math.abs(ratio - 1) < 0.1 ||
+                Math.abs(ratio - 2) < 0.2 || Math.abs(ratio - 0.5) < 0.05;
+  if (!close) return 0;
+
+  const beat = 60 / a.bpm;
+  if (!isFinite(beat) || beat <= 0) return 0;
+  /* Where the outgoing track's beat grid falls relative to the moment the fade
+     would otherwise start. Delay to the next beat, never advance — pulling the
+     fade earlier could start it before the arming window and miss it. */
+  const startAt = audio.currentTime + Math.max(0, remaining - fade);
+  const phase = ((startAt - (a.lead || 0)) % beat + beat) % beat;
+  const wait = phase < 0.01 ? 0 : beat - phase;
+  return wait < beat * 0.98 ? wait : 0;
+}
+
 /** Seconds of overlap actually usable for this pair of tracks. */
 function fadeFor(remaining, nextDuration) {
   if (!state.seamless) return -1;
@@ -846,7 +919,11 @@ function maybeHandover() {
   if (fade < 0) return;
   if (remaining > fade + ARM_WINDOW) return;
 
-  armHandover(nextTrack, peekIndex(1), fade, Math.max(0, remaining - fade));
+  /* Nudged onto the beat where both tracks agree on one, and never by more
+     than a single beat — so the overlap still finishes inside the track. */
+  const nudge = beatOffset(state.current, nextTrack, remaining, fade);
+  const delay = Math.max(0, Math.min(remaining - fade + nudge, remaining));
+  armHandover(nextTrack, peekIndex(1), fade, delay);
 }
 
 function armHandover(nextTrack, nextIndex, fade, delaySeconds) {
@@ -1049,6 +1126,43 @@ export function setLevelling(mode) {
 
 /** The correction in dB currently applied to a track, for the readouts. */
 export const levelFor = (track) => levelDbFor(track);
+
+/** Start at the first note rather than at the first sample. */
+export function setTrimSilence(on) {
+  state.trimSilence = on === undefined ? !state.trimSilence : !!on;
+  db.setKV('trimSilence', state.trimSilence).catch(() => {});
+  events.emit('state');
+}
+
+/** Line the overlap up with the beat where both tracks agree on one. */
+export function setBeatMatch(on) {
+  state.beatMatch = on === undefined ? !state.beatMatch : !!on;
+  db.setKV('beatMatch', state.beatMatch).catch(() => {});
+  events.emit('state');
+}
+
+/**
+ * Jumps to the part of the track that repeats most — the chorus, in nearly all
+ * popular music. Returns false when the analysis declined to name one, which
+ * is the honest answer for anything through-composed.
+ */
+export function playHook(track) {
+  const t = track || state.current;
+  if (!t) return false;
+  const rec = peakmap.peek(t);
+  if (!rec || rec.hookAt == null || (rec.hookConfidence || 0) < 0.35) return false;
+  if (state.current !== t) { playTracks([t], 0, state.origin); }
+  seek(rec.hookAt);
+  play();
+  return true;
+}
+
+/** Where the hook is, or null. For the menu, which hides itself without one. */
+export function hookOf(track) {
+  const rec = track && peakmap.peek(track);
+  if (!rec || rec.hookAt == null || (rec.hookConfidence || 0) < 0.35) return null;
+  return { at: rec.hookAt, length: rec.hookLen, confidence: rec.hookConfidence };
+}
 
 /** Whether tracks run into each other at all. Off restores the plain gap. */
 export function setSeamless(on) {
@@ -1550,7 +1664,7 @@ if ('mediaSession' in navigator) {
 /* ------------------------------------------------------------------ restore */
 
 export async function init() {
-  const [vol, shuffle, repeat, crossfade, seamless, levelling, shuffleMode] = await Promise.all([
+  const [vol, shuffle, repeat, crossfade, seamless, levelling, shuffleMode, trimSilence, beatMatch] = await Promise.all([
     db.getKV('volume').catch(() => null),
     db.getKV('shuffle').catch(() => null),
     db.getKV('repeat').catch(() => null),
@@ -1558,6 +1672,8 @@ export async function init() {
     db.getKV('seamless').catch(() => null),
     db.getKV('levelling').catch(() => null),
     db.getKV('shuffleMode').catch(() => null),
+    db.getKV('trimSilence').catch(() => null),
+    db.getKV('beatMatch').catch(() => null),
   ]);
   if (typeof vol === 'number') state.volume = clamp(vol, 0, 1);
   if (typeof shuffle === 'boolean') state.shuffle = shuffle;
@@ -1566,6 +1682,8 @@ export async function init() {
   if (typeof seamless === 'boolean') state.seamless = seamless;
   if (levelling === 'off' || levelling === 'album' || levelling === 'track') state.levelling = levelling;
   if (shuffleMode === 'weighted' || shuffleMode === 'even') state.shuffleMode = shuffleMode;
+  if (typeof trimSilence === 'boolean') state.trimSilence = trimSilence;
+  if (typeof beatMatch === 'boolean') state.beatMatch = beatMatch;
   applyVolume();
   // The rack owns playback speed, which is a property of the element and works
   // with or without a Web Audio graph — and the graph does not exist until the

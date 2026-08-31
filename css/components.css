@@ -1192,3 +1192,28 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   .edit-field:nth-child(-n+5) { grid-column: 1 / -1; }
   .edit-note { grid-column: 1 / -1; }
 }
+
+/* ---------------------------------------------------------------- dynamic range
+
+   The crest factor, measured on the audio thread the first time a track is
+   played. It is the most useful number about a file that is not its title —
+   a well-cut record sits at 12-16 dB and a loudness-war victim under 8 — and
+   until now it lived only in a panel almost nobody opens.
+
+   Marked at the two ends rather than shaded across the range: this is a
+   verdict to be read at a glance, not a heat map. */
+.trow-dr {
+  width: 46px;
+  flex: none;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  letter-spacing: .04em;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.trow-dr.is-squashed { color: var(--warn); }
+.trow-dr.is-open { color: var(--accent); }
+.thead .trow-dr { font-size: calc(10px * var(--scale)); }
+
+@media (max-width: 860px) { .trow-dr { display: none; } }
