@@ -1,6 +1,6 @@
 /* app.js — shell: routing, navigation, search, shortcuts, theming, ingestion. */
 
-import { $, el, ico, debounce, clamp, acceptAttr, formatName } from './util.js';
+import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { renderView, hasLiveSelection } from './views.js';
@@ -17,6 +17,7 @@ import { mountBackdrop } from './backdrop.js';
 import { toggleStage, isOpen as stageOpen } from './stage.js';
 import { startRelief } from './relief.js';
 import { startOffline } from './offline.js';
+import * as peakmap from './peaks.js';
 
 /* Destinations are numbered, like channels on a desk — the number is part of
    how you learn where things are, not decoration. */
@@ -68,6 +69,13 @@ function swapView() {
   try { teardown(); } catch (err) { console.warn(err); }
   closeMenu();
   host.textContent = '';
+  /* And its classes. A view that puts one on the container — the album Floor
+     mode does, to clip its own horizontal overflow — had no way to take it off
+     again: its teardown unwinds what it built, and clearing `textContent`
+     leaves the element itself untouched. So the class outlived the view and
+     every page afterwards inherited it. Resetting here fixes it for every
+     view at once rather than asking each one to remember. */
+  host.className = 'view';
   host.scrollTop = 0;
 
   teardown = renderView(host, route);
@@ -788,6 +796,19 @@ async function boot() {
   session.restore(toast).then((outcome) => {
     if (outcome === 'resumed' || outcome === 'ready') applyAccent();
   });
+
+  /* Hold the analysis cache to its documented size.
+   *
+   * `peaks.trim()` has always known what the bound was — four thousand records,
+   * about a hundred megabytes — and nothing ever called it, so the store grew
+   * by roughly 28 KB for every track ever played and never gave any of it back.
+   * Once per launch, on idle, is the right cadence: it is a slow scan and
+   * nothing depends on its result. */
+  idle(() => {
+    peakmap.trim().then((dropped) => {
+      if (dropped) console.info(`[sonora] analysis cache: dropped ${dropped} old records`);
+    }).catch(() => {});
+  }, 8000);
 
   /* Offline, last of all.
    *

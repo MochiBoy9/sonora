@@ -659,36 +659,126 @@ const ALBUM_VIEW = 'sonora:albumview';
  * a record it is considering.
  */
 function mountShelf(host) {
+  /*
+   * Windowed, like the crate is.
+   *
+   * The first version built one element per album and rebuilt every one of
+   * them on each `change` and each `art` event — which during an import is a
+   * full DOM rebuild several times a second, on the thread that also has to
+   * answer scrolling. The crate next door keeps eleven records in the DOM
+   * however large the library is; a shelf drawn the naive way was the one
+   * album view that did not scale, which is a poor showing for the view whose
+   * whole premise is a collection too big for a wall.
+   *
+   * A spine is a fixed width for a given thickness, so the run's total width
+   * is known without measuring and only the spines inside the scrolled window
+   * need to exist. The spacer either side holds the scroll range open.
+   */
   const shelf = el('div', { class: 'shelf-run', role: 'list', 'aria-label': 'Albums by spine' });
+  const before = el('div', { class: 'shelf-pad', 'aria-hidden': 'true' });
+  const after = el('div', { class: 'shelf-pad', 'aria-hidden': 'true' });
+  shelf.append(before, after);
 
-  function paint() {
-    shelf.textContent = '';
-    for (const album of lib.state.albums) {
-      const thick = thicknessOf(album);
-      const spine = el('a', {
-        class: 'spine', role: 'listitem', href: '#/album/' + album.key,
-        style: `--thick:${thick.toFixed(3)}`,
-        'aria-label': `${album.title} by ${album.artist}`,
-      },
-        el('span', { class: 'spine-face', style: { background: placeholderStyle(album.key) } }),
-        el('span', { class: 'spine-text' },
-          el('b', { class: 'spine-title', text: album.title }),
-          el('span', { class: 'spine-artist', text: album.artist })),
-        el('span', { class: 'spine-edge', 'aria-hidden': 'true' }));
+  /* Width of one spine, in px, matching the CSS: 13 + 11 × thickness. Kept in
+     step with `.spine { width: calc(13px + 11px * var(--thick)) }` — if that
+     changes, this has to. */
+  const GAP = 2;
+  const widthOf = (album) => 13 + 11 * thicknessOf(album) + GAP;
 
-      // The colour the importer pulled out of the cover, so a shelf of spines
-      // is still recognisably a shelf of *these* records.
-      const rgb = lib.accentFor(album.key);
-      if (rgb) spine.style.setProperty('--spine-rgb', rgb.join(' '));
-      shelf.appendChild(spine);
+  let albums = [];
+  let offsets = [];          // running x position of each spine
+  let total = 0;
+  const live = new Map();    // album key -> element, for what is on screen now
+
+  function measure() {
+    albums = lib.state.albums;
+    offsets = new Array(albums.length);
+    let x = 0;
+    for (let i = 0; i < albums.length; i++) { offsets[i] = x; x += widthOf(albums[i]); }
+    total = x;
+  }
+
+  function build(album) {
+    const spine = el('a', {
+      class: 'spine', role: 'listitem', href: '#/album/' + album.key,
+      style: `--thick:${thicknessOf(album).toFixed(3)}`,
+      'aria-label': `${album.title} by ${album.artist}`,
+    },
+      el('span', { class: 'spine-face', style: { background: placeholderStyle(album.key) } }),
+      el('span', { class: 'spine-text' },
+        el('b', { class: 'spine-title', text: album.title }),
+        el('span', { class: 'spine-artist', text: album.artist })),
+      el('span', { class: 'spine-edge', 'aria-hidden': 'true' }));
+    // The colour the importer pulled out of the cover, so a shelf of spines
+    // is still recognisably a shelf of *these* records.
+    const rgb = lib.accentFor(album.key);
+    if (rgb) spine.style.setProperty('--spine-rgb', rgb.join(' '));
+    return spine;
+  }
+
+  let raf = 0;
+  function place() {
+    raf = 0;
+    if (!albums.length) return;
+    const left = shelf.scrollLeft;
+    const right = left + shelf.clientWidth;
+    // A screen either side, so flicking sideways never shows a gap.
+    const pad = shelf.clientWidth;
+
+    let from = 0, to = albums.length - 1;
+    while (from < albums.length && offsets[from] + widthOf(albums[from]) < left - pad) from++;
+    while (to >= 0 && offsets[to] > right + pad) to--;
+
+    const wanted = new Set();
+    for (let i = from; i <= to; i++) wanted.add(albums[i].key);
+
+    for (const [key, node] of live) {
+      if (!wanted.has(key)) { node.remove(); live.delete(key); }
+    }
+    for (let i = from; i <= to; i++) {
+      const album = albums[i];
+      if (live.has(album.key)) continue;
+      const node = build(album);
+      node.style.position = 'absolute';
+      node.style.left = offsets[i] + 'px';
+      shelf.appendChild(node);
+      live.set(album.key, node);
+    }
+    before.style.width = total + 'px';
+  }
+
+  function rebuild() {
+    for (const node of live.values()) node.remove();
+    live.clear();
+    measure();
+    place();
+  }
+
+  /* An art batch changes colours, not the arrangement — so it repaints what is
+     on screen instead of rebuilding the shelf. This is the event that fires
+     several times a second during a scan. */
+  function repaintColours() {
+    for (const [key, node] of live) {
+      const rgb = lib.accentFor(key);
+      if (rgb) node.style.setProperty('--spine-rgb', rgb.join(' '));
     }
   }
 
-  paint();
+  const onScroll = () => { if (!raf) raf = requestAnimationFrame(place); };
+  shelf.addEventListener('scroll', onScroll, { passive: true });
+  const ro = new ResizeObserver(() => place());
+  ro.observe(shelf);
+
   host.appendChild(shelf);
-  const off = lib.events.on('change', paint);
-  const offArt = lib.events.on('art', paint);
-  return () => { off(); offArt(); };
+  rebuild();
+
+  const off = lib.events.on('change', rebuild);
+  const offArt = lib.events.on('art', repaintColours);
+  return () => {
+    off(); offArt(); ro.disconnect();
+    shelf.removeEventListener('scroll', onScroll);
+    if (raf) cancelAnimationFrame(raf);
+  };
 }
 
 /* ------------------------------------------------------------------ floor */
@@ -727,31 +817,48 @@ function mountFloor(host, viewport) {
   const camera = el('div', { class: 'floor-camera' });
   stage.appendChild(camera);
 
-  let rows = [];
+  let rowCount = 0;
   let items = [];
+
+  /* Rows exist only while the camera can see them.
+   *
+   * The first version built every row up front and then hid the distant ones,
+   * which is the expensive half of virtualising done backwards: a
+   * four-hundred-album library still put a hundred rows and four hundred
+   * covers into the DOM, and only then declined to draw most of them. Now a
+   * row is built when it comes within range and dropped when it leaves, so
+   * what exists is bounded by the depth of the room rather than by the size of
+   * the collection — which is the same argument the crate makes next door.
+   *
+   * `rows` is a sparse array indexed by row number; the gaps are the rows that
+   * do not currently exist. */
+  const liveRows = new Map();       // row index -> element
+
+  function buildRow(r) {
+    const row = el('div', { class: 'floor-row' });
+    for (const album of items.slice(r * PER_ROW, r * PER_ROW + PER_ROW)) {
+      const card = el('a', {
+        class: 'floor-card', href: '#/album/' + album.key,
+        'aria-label': `${album.title} by ${album.artist}`,
+      },
+        el('span', { class: 'floor-art', style: { background: placeholderStyle(album.key) } },
+          el('img', { class: 'art-img', alt: '', decoding: 'async', loading: 'lazy' })),
+        el('span', { class: 'floor-text' },
+          el('b', { text: album.title }),
+          el('span', { text: album.artist })));
+      paintArt(card.querySelector('.art-img'), album.key);
+      row.appendChild(card);
+    }
+    camera.appendChild(row);
+    liveRows.set(r, row);
+    return row;
+  }
 
   function build() {
     items = lib.state.albums;
     camera.textContent = '';
-    rows = [];
-    for (let i = 0; i < items.length; i += PER_ROW) {
-      const row = el('div', { class: 'floor-row' });
-      for (const album of items.slice(i, i + PER_ROW)) {
-        const card = el('a', {
-          class: 'floor-card', href: '#/album/' + album.key,
-          'aria-label': `${album.title} by ${album.artist}`,
-        },
-          el('span', { class: 'floor-art', style: { background: placeholderStyle(album.key) } },
-            el('img', { class: 'art-img', alt: '', decoding: 'async', loading: 'lazy' })),
-          el('span', { class: 'floor-text' },
-            el('b', { text: album.title }),
-            el('span', { text: album.artist })));
-        paintArt(card.querySelector('.art-img'), album.key);
-        row.appendChild(card);
-      }
-      camera.appendChild(row);
-      rows.push(row);
-    }
+    liveRows.clear();
+    rowCount = Math.ceil(items.length / PER_ROW);
     place();
   }
 
@@ -764,30 +871,30 @@ function mountFloor(host, viewport) {
   let raf = 0;
   function place() {
     raf = 0;
-    if (!rows.length) return;
+    if (!rowCount) return;
     const scrolled = viewport.scrollTop;
     // One row per this many pixels of scroll.
     const advance = scrolled / ROW_DEPTH;
 
-    for (let i = 0; i < rows.length; i++) {
+    // Which rows the camera can see: one behind, and as far ahead as the far
+    // plane plus a little. Everything outside this does not exist.
+    const first = Math.max(0, Math.ceil(advance - 1.2));
+    const last = Math.min(rowCount - 1, Math.floor(advance + FAR + 3));
+
+    for (const [i, row] of liveRows) {
+      if (i < first || i > last) { row.remove(); liveRows.delete(i); }
+    }
+
+    for (let i = first; i <= last; i++) {
+      const row = liveRows.get(i) || buildRow(i);
       const d = i - advance;                       // rows ahead of the camera
       // Bounded: past the far plane rows stop receding, so a long library is a
       // long list rather than an infinitely compressed corridor.
       const z = -Math.min(d, FAR) * ROW_DEPTH;
-      const near = d < NEAR_ROWS;
-      const row = rows[i];
-
-      // Rows well behind the camera are not drawn at all.
-      if (d < -1.2 || d > FAR + 3) {
-        if (row.style.visibility !== 'hidden') row.style.visibility = 'hidden';
-        continue;
-      }
-      if (row.style.visibility) row.style.removeProperty('visibility');
-
       row.style.transform = `translate3d(-50%, 0, ${z.toFixed(1)}px)`;
       // Depth fade, so the far end goes into the room rather than stopping.
       row.style.opacity = String(Math.max(0, Math.min(1, 1 - Math.max(0, d) / (FAR + 2.5))).toFixed(3));
-      row.classList.toggle('is-near', near);
+      row.classList.toggle('is-near', d < NEAR_ROWS);
     }
   }
 
@@ -807,8 +914,9 @@ function mountFloor(host, viewport) {
   place();
 
   const off = lib.events.on('change', () => { build(); resize(); });
+  // Only the rows that exist, which is only the ones you can see.
   const offArt = lib.events.on('art', () => {
-    for (const row of rows) {
+    for (const row of liveRows.values()) {
       for (const img of row.querySelectorAll('.art-img')) {
         if (img.dataset.key) paintArt(img, img.dataset.key);
       }
@@ -2600,16 +2708,23 @@ function viewFiles(host) {
 
   /* ---- duplicates ---- */
 
-  let dupeToken = 0;
+  /* One token for the whole page, bumped by *any* repaint.
+   *
+   * It used to be bumped only by the duplicate scan itself, which meant
+   * switching to Folders mid-scan invalidated nothing: the body was still
+   * connected and the token still matched, so a scan finishing afterwards
+   * appended its groups underneath the folder tree. A guard has to be owned by
+   * whatever can invalidate it, and that is `paint`. */
+  let paintToken = 0;
 
   async function paintDupes() {
-    const token = ++dupeToken;
+    const token = paintToken;
     // Reading the head and tail of every candidate takes a moment on a real
     // library, and a page that sits blank while it happens looks broken.
     const busy = el('p', { class: 'muted dupe-summary', text: 'Comparing files…' });
     body.appendChild(busy);
     const groups = await findDuplicates();
-    if (token !== dupeToken || !body.isConnected) return;
+    if (token !== paintToken || !body.isConnected) return;
     busy.remove();
     if (!groups.length) {
       body.appendChild(emptyState({ icon: 'database', title: 'Nothing duplicated',
@@ -2654,6 +2769,7 @@ function viewFiles(host) {
 
   function paint() {
     body.textContent = '';
+    paintToken++;
     if (mode === 'folders') paintFolders(); else paintDupes();
   }
 

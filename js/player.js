@@ -846,18 +846,18 @@ function maybeHandover() {
   if (fade < 0) return;
   if (remaining > fade + ARM_WINDOW) return;
 
-  armHandover(nextTrack, fade, Math.max(0, remaining - fade));
+  armHandover(nextTrack, peekIndex(1), fade, Math.max(0, remaining - fade));
 }
 
-function armHandover(nextTrack, fade, delaySeconds) {
+function armHandover(nextTrack, nextIndex, fade, delaySeconds) {
   const from = deck;
   const to = idleDeck;
-  const timer = setTimeout(() => beginHandover(nextTrack, fade, from, to),
+  const timer = setTimeout(() => beginHandover(nextTrack, nextIndex, fade, from, to),
                            Math.round(delaySeconds * 1000));
   handover = { from, to, id: nextTrack.id, timer, armed: true };
 }
 
-function beginHandover(nextTrack, fade, from, to) {
+function beginHandover(nextTrack, nextIndex, fade, from, to) {
   // Everything may have moved since the timer was set: a seek backwards, a
   // manual skip, a pause. Re-check rather than trusting a 1.5-second-old plan.
   if (!handover || handover.to !== to || handover.from !== from) return;
@@ -899,7 +899,7 @@ function beginHandover(nextTrack, fade, from, to) {
     }
 
     to.el.play().catch(() => {});
-    finishHandover(nextTrack, from, to, fade);
+    finishHandover(nextTrack, nextIndex, from, to, fade);
   }
 }
 
@@ -911,7 +911,7 @@ function beginHandover(nextTrack, fade, from, to) {
  * session should already be describing. The outgoing deck is left running
  * until its own fade is over and is then parked.
  */
-function finishHandover(track, from, to, fade) {
+function finishHandover(track, nextIndex, from, to, fade) {
   const token = ++loadToken;
   commitMeter();
 
@@ -921,7 +921,13 @@ function finishHandover(track, from, to, fade) {
   rack.bindElement(audio);
   rack.apply();
 
-  state.index = Math.min(state.index + 1, state.queue.length - 1);
+  /* The position `peek` actually chose, carried down from the arming rather
+     than recomputed as `index + 1`. Those two agree everywhere except at the
+     end of a queue on repeat-all, where peek wraps to 0 and `index + 1` runs
+     off the end and gets clamped to the last track — leaving the transport
+     pointing at the record that just finished while the first one plays. */
+  state.index = nextIndex >= 0 ? nextIndex
+    : Math.min(state.index + 1, state.queue.length - 1);
   state.current = track;
   state.time = to.el.currentTime || 0;
   state.duration = track.duration || to.el.duration || 0;
@@ -1313,13 +1319,27 @@ export function clearQueue() {
   events.emit('queue');
 }
 
-function peek(offset) {
+/**
+ * Which queue position is `offset` away, honouring repeat-all's wraparound,
+ * or -1 if there is nothing there.
+ *
+ * Split out from `peek` because the handover needs the *position* and not only
+ * the track. It used to assume the answer was always `index + 1`, which is
+ * true everywhere except the one place it matters: at the end of a queue on
+ * repeat-all, `peek` wraps to 0 while `index + 1` runs off the end.
+ */
+function peekIndex(offset) {
   const i = state.index + offset;
-  if (i >= 0 && i < state.queue.length) return lib.getTrack(state.queue[i]);
+  if (i >= 0 && i < state.queue.length) return i;
   if (state.repeat === 'all' && state.queue.length) {
-    return lib.getTrack(state.queue[(i % state.queue.length + state.queue.length) % state.queue.length]);
+    return (i % state.queue.length + state.queue.length) % state.queue.length;
   }
-  return null;
+  return -1;
+}
+
+function peek(offset) {
+  const i = peekIndex(offset);
+  return i < 0 ? null : lib.getTrack(state.queue[i]);
 }
 
 export function jumpTo(index) {

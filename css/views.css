@@ -1326,6 +1326,7 @@
    from how many tracks are on the record. A double album is visibly fatter. */
 
 .shelf-run {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 2px;
@@ -1545,3 +1546,10 @@
   .floor-row { gap: 16px; }
   .spine { height: 210px; }
 }
+
+/* The shelf is windowed like the crate: only the spines inside the scrolled
+   view exist, absolutely positioned at their computed offset, with a spacer
+   holding the scroll range open. Without `position: relative` on the run they
+   would position against the page instead. */
+.shelf-pad { flex: none; height: 1px; pointer-events: none; }
+.shelf-run > .spine { position: absolute; bottom: 18px; }
