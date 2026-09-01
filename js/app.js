@@ -18,6 +18,8 @@ import { toggleStage, isOpen as stageOpen } from './stage.js';
 import { startRelief } from './relief.js';
 import { startOffline } from './offline.js';
 import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
+import * as db from './db.js';
+import * as keys from './keys.js';
 import * as peakmap from './peaks.js';
 import * as undoStack from './undo.js';
 
@@ -29,6 +31,7 @@ const NAV = [
   { route: 'albums', label: 'Albums', icon: 'album' },
   { route: 'artists', label: 'Artists', icon: 'artist' },
   { route: 'favourites', label: 'Favourites', icon: 'star' },
+  { route: 'recent', label: 'Recently played', icon: 'clock' },
   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
   { route: 'files', label: 'Files', icon: 'folder' },
   { route: 'circles', label: 'Analysis', icon: 'circles' },
@@ -429,6 +432,12 @@ function paintRouteTag(route) {
  */
 function announceImport(report) {
   if (!report || !report.added) return;
+  /* Now there is something worth keeping, ask the browser to keep it. Not at
+     boot: an empty index is nothing to protect and Firefox would be prompting
+     before the app had shown what it is for. Once only — `requestPersist`
+     short-circuits when the grant already exists — and silently, because the
+     answer belongs in Settings rather than in the way. */
+  db.requestPersist().catch(() => {});
   const merged = report.merged || [];
   if (merged.length) {
     const names = merged.slice(0, 2).map((a) => `“${a.title}”`).join(', ');
@@ -621,51 +630,116 @@ function applyAccent() {
  * existing — which is the failure mode of every keyboard list ever written in
  * a settings page by hand.
  */
-const SHORTCUTS = [
-  ['Playback', [
-    [['Space'], 'Play or pause'],
-    [['←', '→'], 'Seek 5 seconds'],
-    [['⇧', '←/→'], 'Seek 30 seconds'],
-    [['↑', '↓'], 'Volume'],
-    [['N'], 'Next track'],
-    [['P'], 'Previous, or restart the track'],
-    [['M'], 'Mute'],
-    [['S'], 'Shuffle'],
-    [['R'], 'Repeat: off, all, one'],
-    [['F'], 'Favourite what is playing'],
-  ]],
-  ['Getting around', [
-    [['/'], 'Search the library'],
-    [['⌘', 'K'], 'Everything, by name'],
-    [['Q'], 'Queue panel'],
-    [['V'], 'Immersive visualiser'],
-    [['E'], 'The Sound page'],
-    [['?'], 'This list'],
-    [['Esc'], 'Close whatever is open'],
-  ]],
-  ['The library', [
-    [['⌘', 'Z'], 'Undo the last change'],
-    [['⌘', '⇧', 'Z'], 'Redo it'],
-  ]],
-  ['Sound', [
-    [['B'], 'Bypass the rack — A/B it'],
-  ]],
-  ['In the visualiser', [
-    [['D'], 'The turntable'],
-    [['L'], 'Lyrics, when there are any'],
-  ]],
-];
+/*
+ * Every shortcut in the application, registered once.
+ *
+ * This used to be two lists — a `switch` that did the work and a separate array
+ * that drew the overlay — and the README said outright that they were not the
+ * same list and could not be kept in step by hand. They had already drifted:
+ * ⌘Y ran redo and appeared in neither the overlay nor the documentation.
+ *
+ * Order is priority, and two pairs here depend on it. "?" is registered before
+ * "/" because Shift is held to type it on most layouts and arrives as Shift+"/"
+ * on the rest, which is the same physical key as search. And Redo is registered
+ * before Undo so that ⌘⇧Z is not swallowed by the ⌘Z that would otherwise
+ * match it first.
+ */
+function registerKeys() {
+  const K = keys.bind;
+
+  K({ id: 'play', group: 'Playback', combo: 'Space', label: 'Play or pause',
+      run: () => { player.toggle(); } });
+  K({ id: 'seek-fwd', group: 'Playback', combo: 'ArrowRight', label: 'Seek 5 seconds',
+      display: ['←', '→'], note: ['⇧', '←/→', 'Seek 30 seconds'],
+      run: (e) => { player.seek(player.state.time + (e.shiftKey ? 30 : 5)); } });
+  K({ id: 'seek-back', group: 'Playback', combo: 'ArrowLeft', label: 'Seek back 5 seconds', hidden: true,
+      run: (e) => { player.seek(player.state.time - (e.shiftKey ? 30 : 5)); } });
+  K({ id: 'volume-up', group: 'Playback', combo: 'ArrowUp', label: 'Volume', display: ['↑', '↓'],
+      run: () => { player.setVolume(player.state.volume + 0.05); } });
+  K({ id: 'volume-down', group: 'Playback', combo: 'ArrowDown', label: 'Volume down', hidden: true,
+      run: () => { player.setVolume(player.state.volume - 0.05); } });
+  K({ id: 'next', group: 'Playback', combo: 'N', label: 'Next track',
+      run: () => { player.next(false); } });
+  K({ id: 'prev', group: 'Playback', combo: 'P', label: 'Previous, or restart the track',
+      run: () => { player.prev(); } });
+  K({ id: 'mute', group: 'Playback', combo: 'M', label: 'Mute',
+      run: () => { player.toggleMute(); } });
+  K({ id: 'shuffle', group: 'Playback', combo: 'S', label: 'Shuffle',
+      run: () => { player.setShuffle(); toast(player.state.shuffle ? 'Shuffle on' : 'Shuffle off'); } });
+  K({ id: 'repeat', group: 'Playback', combo: 'R', label: 'Repeat: off, all, one',
+      run: () => { player.cycleRepeat(); toast('Repeat: ' + player.state.repeat); } });
+  K({ id: 'favourite', group: 'Playback', combo: 'F', label: 'Favourite what is playing',
+      run: () => {
+        const track = player.state.current;
+        if (!track) { toast('Nothing playing to favourite'); return; }
+        toast(lib.toggleFavourite(track.id)
+          ? `Favourited “${track.title}”`
+          : `Removed “${track.title}” from favourites`);
+      } });
+
+  // Before search: the same physical key produces both on a lot of layouts.
+  K({ id: 'shortcuts', group: 'Getting around', combo: ['?', 'Shift+/'], label: 'This list',
+      run: () => { showShortcuts(); } });
+  K({ id: 'search', group: 'Getting around', combo: '/', label: 'Search the library',
+      run: () => { $('#search')?.focus(); } });
+  /* The palette, not the search field. Cmd-K means "let me type what I want"
+     everywhere else, and Sonora has forty actions that were previously only
+     reachable by knowing where they lived. */
+  K({ id: 'palette', group: 'Getting around', combo: 'Mod+K', label: 'Everything, by name',
+      run: () => { togglePalette(); } });
+  K({ id: 'queue', group: 'Getting around', combo: 'Q', label: 'Queue panel',
+      run: () => { toggleQueuePane(); } });
+  K({ id: 'stage', group: 'Getting around', combo: 'V', label: 'Immersive visualiser',
+      run: () => { toggleStage(backdrop); } });
+  K({ id: 'sound', group: 'Getting around', combo: 'E', label: 'The Sound page',
+      run: () => { location.hash = '#/sound'; } });
+  K({ id: 'escape', group: 'Getting around', combo: 'Escape', label: 'Close whatever is open',
+      passive: true });
+
+  /* Redo first, so ⌘⇧Z is not taken by the ⌘Z below it. Neither fires while a
+     text field has the caret — inside the edit dialog ⌘Z has to mean "undo what
+     I just typed", which is the browser's job and not ours. */
+  /* `alt` prints the second spelling in the overlay. ⌘Y is here because Windows
+     users reach for it, and it is *shown* because a working shortcut nobody has
+     written down is exactly the drift this table exists to stop — it was in the
+     handler and in neither list for two releases. "?" carries no `alt`, because
+     its second form is Shift and the same physical key, which is how you type a
+     question mark rather than a different shortcut. */
+  K({ id: 'redo', group: 'The library', combo: ['Mod+Shift+Z', 'Mod+Y'], label: 'Redo it',
+      alt: 'Mod+Y', run: () => { runUndo(true); } });
+  K({ id: 'undo', group: 'The library', combo: 'Mod+Z', label: 'Undo the last change',
+      run: () => { runUndo(false); } });
+
+  // A/B the whole rack from anywhere: the only way to hear what an equaliser is
+  // actually doing is to take it out and put it back.
+  K({ id: 'bypass', group: 'Sound', combo: 'B', label: 'Bypass the rack — A/B it',
+      run: () => {
+        rack.set({ on: !rack.state.on });
+        toast(rack.state.on ? 'Rack in' : 'Rack bypassed');
+      } });
+}
 
 let shortcutSheet = null;
 
 function showShortcuts() {
   if (shortcutSheet) { shortcutSheet.close(); shortcutSheet = null; return; }
   const body = el('div', { class: 'keys' });
-  for (const [group, rows] of SHORTCUTS) {
+  /* Rendered from the same table the handler dispatches from, so a shortcut
+     cannot exist without appearing here and cannot appear here without
+     existing. */
+  for (const [group, rows] of keys.groups()) {
     const table = el('dl', { class: 'keys-list' });
-    for (const [keys, what] of rows) {
-      table.appendChild(el('dt', {}, keys.map((k) => el('kbd', { text: k }))));
-      table.appendChild(el('dd', { text: what }));
+    for (const b of rows) {
+      table.appendChild(el('dt', {}, (b.display || keys.caps(b.combo)).map((k) => el('kbd', { text: k }))));
+      table.appendChild(el('dd', { text: b.label }));
+      if (b.alt) {
+        table.appendChild(el('dt', {}, keys.caps(b.alt).map((k) => el('kbd', { text: k }))));
+        table.appendChild(el('dd', { class: 'keys-alt', text: b.label }));
+      }
+      if (b.note) {
+        table.appendChild(el('dt', {}, b.note.slice(0, -1).map((k) => el('kbd', { text: k }))));
+        table.appendChild(el('dd', { text: b.note[b.note.length - 1] }));
+      }
     }
     body.appendChild(el('section', { class: 'keys-col' },
       el('h3', { class: 'keys-group', text: group }), table));
@@ -700,63 +774,16 @@ async function runUndo(redo) {
 }
 
 function bindKeys() {
+  registerKeys();
   addEventListener('keydown', (e) => {
     const t = e.target;
     const typing = t instanceof HTMLElement &&
       (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
-
-    // "?" first, and before the modifier gate below: Shift is held to type it
-    // on most layouts, and on the ones that report the unshifted key instead
-    // it arrives as Shift+"/" — which is the same physical key as search, so
-    // this has to be settled before "/" claims it.
-    if (!typing && (e.key === '?' || (e.key === '/' && e.shiftKey))) {
-      e.preventDefault(); showShortcuts(); return;
-    }
-    if (e.key === '/' && !typing) { e.preventDefault(); $('#search')?.focus(); return; }
-    /* The palette, not the search field. Cmd-K means "let me type what I want"
-       everywhere else, and Sonora has forty actions that were previously only
-       reachable by knowing where they lived. "/" still goes to the search box
-       for anyone who wants to search the library specifically. */
-    if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); togglePalette(); return; }
-    /* Undo, but not while a text field has the caret: inside the edit dialog
-       ⌘Z has to mean "undo what I just typed", which is the browser's job and
-       not ours. Ctrl-Y is here because Windows users reach for it. */
-    if (!typing && (e.metaKey || e.ctrlKey)) {
-      if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); runUndo(e.shiftKey); return; }
-      if (e.key === 'y' || e.key === 'Y') { e.preventDefault(); runUndo(true); return; }
-    }
-    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-
-    switch (e.key) {
-      case ' ': e.preventDefault(); player.toggle(); break;
-      case 'ArrowRight': e.preventDefault(); player.seek(player.state.time + (e.shiftKey ? 30 : 5)); break;
-      case 'ArrowLeft': e.preventDefault(); player.seek(player.state.time - (e.shiftKey ? 30 : 5)); break;
-      case 'ArrowUp': e.preventDefault(); player.setVolume(player.state.volume + 0.05); break;
-      case 'ArrowDown': e.preventDefault(); player.setVolume(player.state.volume - 0.05); break;
-      case 'n': case 'N': player.next(false); break;
-      case 'p': case 'P': player.prev(); break;
-      case 's': case 'S': player.setShuffle(); toast(player.state.shuffle ? 'Shuffle on' : 'Shuffle off'); break;
-      case 'r': case 'R': player.cycleRepeat(); toast('Repeat: ' + player.state.repeat); break;
-      case 'm': case 'M': player.toggleMute(); break;
-      case 'f': case 'F': {
-        const track = player.state.current;
-        if (!track) { toast('Nothing playing to favourite'); break; }
-        toast(lib.toggleFavourite(track.id)
-          ? `Favourited “${track.title}”`
-          : `Removed “${track.title}” from favourites`);
-        break;
-      }
-      case 'q': case 'Q': toggleQueuePane(); break;
-      case 'v': case 'V': toggleStage(backdrop); break;
-      // A/B the whole rack from anywhere: the only way to hear what an
-      // equaliser is actually doing is to take it out and put it back.
-      case 'b': case 'B':
-        rack.set({ on: !rack.state.on });
-        toast(rack.state.on ? 'Rack in' : 'Rack bypassed');
-        break;
-      case 'e': case 'E': location.hash = '#/sound'; break;
-      default: break;
-    }
+    /* The dispatcher does not preventDefault — deciding whether the browser
+       keeps a keystroke is this layer's business, not the table's. Everything
+       matched here is claimed, because every one of them means something in the
+       application that it should not also mean in the page. */
+    if (keys.dispatch(e, { typing })) e.preventDefault();
   });
 }
 

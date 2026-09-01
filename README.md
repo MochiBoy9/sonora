@@ -136,13 +136,22 @@ When an import merges something, the summary says so by name.
 | `⌘Z` / `⌘⇧Z` | undo / redo |
 | `?` | the whole list, on screen |
 
-`?` puts that list on screen. It is a second list rather than a projection of
-the key handler — this README claimed otherwise until recently and it was not
-true. Making them one source means rewriting the key handling to be
-data-driven, which is a bigger change than it sounds and not obviously better
-than a switch on a keystroke. The palette below is the practical mitigation: it
-prints each shortcut next to the action it belongs to, where a mismatch is
-visible rather than hiding in a table nobody cross-checks.
+`?` puts that list on screen, and it is now a projection of the key handler
+rather than a second list beside it. This README used to claim they were one
+source, then corrected itself to admit they were not, and said that making them
+one meant rewriting the key handling to be data-driven — "a bigger change than
+it sounds". It was worth it, because in the meantime they had drifted again:
+`⌘Y` ran redo, and appeared in neither the overlay nor the table above.
+
+`js/keys.js` holds the table. A binding is an id, a combo, a group, a label and
+something to run; `bind()` registers one, the handler dispatches from it and the
+overlay renders from it, so a shortcut that is not in the table does not exist
+and one that is cannot go undocumented. The immersive view registers its own two
+at module load with an `active` predicate, which is what lets `L` and `D` be
+inert while the stage is shut and still appear in the list — the list is the
+whole list, not the list of what happens to be on screen. `Mod` means ⌘ on a Mac
+and Ctrl everywhere else. Overrides are stored per id, which is what the
+remapping in Settings writes to.
 
 Right-click any track, album or artist for play-next, add-to-queue, favourite,
 add-to-playlist and go-to-album. Drag rows in the queue to reorder. Drag the
@@ -187,6 +196,40 @@ returns every track that satisfies both.
 
 `suspect` is only ever true of a track that has actually been analysed. It
 finds what is known rather than implying that everything else is clean.
+
+## Ordering, and finding
+
+Songs has had sortable columns since the first release. Albums had four *view
+modes* and not one sort; Artists had neither — so the wall was always in
+whatever order the index happened to hold, and there was no way to ask for
+1978, or for the longest record, or for the one nobody has ever played. Both
+pages have a sort control now: artist, title, year, recently added, length,
+track count, times played, last played on Albums; name, albums, tracks, length
+and the same two listening figures on Artists. The choice is remembered per
+page. The Floor orders itself by release year — that is the whole of what it is
+— so the control is hidden there rather than offered and ignored.
+
+**Play count and last played are on screen.** Both have been counted since the
+first release and neither had anywhere to appear, which meant the app was
+keeping a record of your listening and not showing it to you. They are two more
+columns in Songs, two more sorts, and two more things the smart shelves can ask
+about. A never-played row prints a dash rather than a nought: the point of the
+column is which rows are blank.
+
+**A letter rail, and type-to-jump.** A fifty-thousand track list is virtualised
+so it costs nothing to draw, and the only way to reach the S's was to throw the
+scrollbar and watch. Letters down the right edge jump to the first row under
+each; letters the collection has nothing under are still drawn and dimmed,
+because a rail that changes shape as the library grows is one your hand cannot
+learn. Typing does the same thing more precisely — "bea" finds *Beacon* rather
+than stopping at the first B — and matches on whichever column the list is
+ordered by, since jumping alphabetically through a list sorted by length is not
+a feature.
+
+**Recently played is a page now.** The last sixty tracks have been kept since
+the first release and the only thing that read them was one button on Home,
+which makes "what was that?" a question the app could not answer. Newest first
+and deliberately not sortable: it is a log, and the order is the information.
 
 ## Shelves that describe themselves
 
@@ -566,6 +609,7 @@ css/
   aero.css          the material: atmosphere, glass, sheen, specular edges
 js/
   app.js            routing, navigation, search, shortcuts, theming, ingestion
+  keys.js           the one table of shortcuts, dispatched and drawn from
   library.js        the collection: scanning, indexes, album merging, playlists,
                     favourites
   player.js         playback, queue, Web Audio graph, spectrum analysis
@@ -917,11 +961,43 @@ node tools/layout.mjs       /tmp/testlib ./shots   # 8 widths × 8 routes: overf
                                                    # overlapping regions, unreachable
                                                    # controls, off-centre glyphs
 node tools/audio.mjs        /tmp/testlib           # does the rack change the sound
+node tools/looks.mjs        /tmp/testlib ./shots-looks --accept   # first run: bless the goldens
+node tools/looks.mjs        /tmp/testlib ./shots-looks            # after that: does it still look like that
 ```
 
 `layout.mjs` is the one that found the off-centre transport icons, the one-pixel
 sideways scroll and the 768px overflow; it now reports the app clean at 360, 414,
 620, 768, 1024, 1280, 1680 and 2400 pixels on every route.
+
+`looks.mjs` asks the other question — not *is the geometry sound* but *is this
+what it should look like* — because the first time anybody ran this application
+at a size they could see, it had nine faults in it and `layout.mjs` had reported
+none of them. Not one was a geometry fault. A tracklist squeezed to four pixels
+fits its box; a tonearm drawn at a fifteenth of its length overlaps nothing.
+
+It works in two halves. A **lint** of five rules, each the shape of a real
+defect: a flex child squeezed below the height its content needs, `overflow:
+hidden` cutting content where no mask says it should, text under seven effective
+pixels — measured across the cross axis too, which is how a vertical spine four
+pixels wide gets caught — two text boxes on top of each other, and an
+interactive control under the transport. A box that overflows must have a
+*visible* child doing it, or it is the immersive stage's own chrome sliding out
+of the way and not a fault at all. `data-clips` on an element is that element
+saying the cut is deliberate; the crate carries it, because a crate that fits
+inside its box is a shelf.
+
+And **goldens**: 57 surfaces — every route, all four album views, the album page
+and its back, the queue, the immersive stage, the turntable, the shortcut
+overlay — photographed in dark and light at 1440 and again at 620, and compared
+pixel for pixel against the last accepted run. A change to one design token was
+caught on nineteen of them. Anything that moves on its own is stopped first: the
+canvases are hidden, repeating animations are parked, entrances are *finished*
+rather than paused (paused at zero photographs the state a page is leaving,
+which is a state nobody looks at), playback is loaded and stopped, and the
+tonearm — which is the playhead, and therefore never twice the same — is pinned
+to a fixed angle so the golden checks how the arm is drawn rather than what time
+it is. `--accept` blesses the current state as the new truth, which is how you
+start and how you take a change you meant.
 
 `audio.mjs` does not check that the sliders move. It plays a tone, reads the
 app's own analyser — which sits *after* the rack — and checks that boosting the
@@ -973,6 +1049,15 @@ displacement and the turntable in front of somebody who can see them.
   app never writes to your music folder.
 - Light, dark and system themes; the theme is applied before first paint so there
   is no flash.
+- **Nothing Sonora keeps is written to your files, which is also the risk.** The
+  index, your playlists, favourites, corrections, chosen covers and every hour of
+  listening live in IndexedDB — and without a persistence grant that is
+  *best-effort* storage a browser short of room may evict without asking, with no
+  server copy to come back from because there is no server. Sonora asks for that
+  grant once there is something to lose, rather than at boot, and
+  **Settings → Storage** reports the answer it got instead of assuming one. The
+  same section says how much of the browser's allowance the library is using, and
+  warns past four fifths of it.
 - The visualiser style, the backdrop and the artwork tint are all switchable in
   **Settings → Appearance** and **Visualiser**; the choice follows every canvas
   in the app at once. Everything else about how it looks is in **Settings →

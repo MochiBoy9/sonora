@@ -1,0 +1,2673 @@
+From cd81bbfcb13ab984e0016fe5c0e62d568c98e035 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 1 Sep 2026 19:59:30 +0000
+Subject: [PATCH 1/3] T1: a suite that looks at the application
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+`layout.mjs` asks whether the geometry is sound. It is a good suite, and the
+first time anybody ran this application at a size they could see it had nine
+faults in it and `layout.mjs` had reported none of them — because not one was a
+geometry fault. A tracklist squeezed to four pixels fits its box. A tonearm
+drawn at a fifteenth of its length overlaps nothing. Two spans that set on one
+line when they were meant to stack are, geometrically, in perfect order.
+
+So `looks.mjs` asks the other question, in two halves.
+
+A LINT of five rules, each one the shape of a defect that actually shipped: a
+flex child squeezed below the height its own content needs; `overflow: hidden`
+cutting content where no mask says it should; text under seven effective
+pixels, measured across the cross axis as well, which is how a vertical spine
+four pixels wide is caught; two text boxes on top of each other; an interactive
+control under the transport.
+
+Three things separate it from a rule that cries wolf, and each cost a round to
+learn. A rectangle is where an element *would* be — inside a virtualised list
+that is hundreds of pixels past the fold, so every rect is intersected with its
+clipping ancestors first, or every list in the app reports controls buried
+under the transport. `text-overflow: ellipsis` is a promise the cut is
+deliberate, but only along the inline axis, which a vertical writing mode turns
+on its side. And a box that overflows must have a *visible* child doing it: the
+immersive stage hides its own chrome by sliding it ten pixels down at zero
+opacity, and reported ten pixels of overflow for a whole run before that rule
+was right. `data-clips` is an element saying the cut is the point — the crate
+carries it, because a crate that fits inside its own box is a shelf.
+
+And GOLDENS: 57 surfaces — every route, all four album views, the album page
+and its back, the queue, the stage, the turntable, the shortcut overlay — in
+dark and light at 1440 and again at 620, compared pixel for pixel with the last
+accepted run. Changing one design token is caught on nineteen of them.
+
+A golden is only worth having if it is stable, and three separate things in
+here move on their own. Canvases are hidden and repeating animations parked.
+Entrances are *finished*, not paused: paused at zero photographs the state a
+page is leaving, which is a state nobody ever looks at, and it was reporting a
+heading still sitting where it had begun as ten pixels of overflow. Playback is
+loaded and then stopped, because a run that keeps playing lights a different row
+of the songs list in every sweep. And the tonearm is pinned, because it *is* the
+playhead and is therefore never twice the same — the golden checks how the arm
+is drawn, and where it ought to be at a given moment is arithmetic, checked
+elsewhere. Three consecutive runs are identical; a one-token colour change
+fails nineteen surfaces.
+
+PNG comes in by hand, since Node has no decoder: 8-bit non-interlaced, RGB or
+RGBA — Chromium picks per shot depending on whether the page is opaque, and
+decoding only one of them is a crash halfway through the second run.
+
+Four faults it found on its first pass, all at 620px, all fixed here:
+
+- The collapsed sidebar's Add button kept `padding: 0 18px` around a 15px icon
+  in a 40px box, because `.btn` in components.css sets the same property at the
+  same specificity and loads later. Two classes deep, and it means what it says.
+- The album hero's four controls and three gaps come to exactly the width of a
+  620px hero, and `nowrap` spent the shortfall on the only button with a label:
+  Shuffle lost fifteen pixels of its own name. They wrap now, as the home hero
+  already did.
+- The metadata line wrapped between a fact and the separator belonging to it,
+  leaving "AMBROSE VALE · 2020 ·" hanging at the end of a line. Year, tracks and
+  runtime travel as one unit now, so the only break is after the artist, and the
+  separator that joined them is hidden where the wrap happens.
+- The back cover's guarantees were written in absolute pixels for a 232px
+  sleeve, and needed 213px of the 168px square it gets on a narrow screen.
+  Everything gives a little there: two tracks and three rows of fine print, and
+  the rest runs out under the fades it already has.
+
+Verified: looks clean at 57 surfaces over three runs; layout clean at every
+width; smoke and interactions unchanged and green.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01JjdT29yrXTcWsnnPfvxBD9
+---
+ .gitignore      |   1 +
+ README.md       |  32 +++
+ css/layout.css  |   5 +-
+ css/views.css   |  27 ++-
+ js/views.js     |  19 +-
+ tools/looks.mjs | 532 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 607 insertions(+), 9 deletions(-)
+ create mode 100644 tools/looks.mjs
+
+diff --git a/.gitignore b/.gitignore
+index 06d6d46..ea8e942 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -6,6 +6,7 @@ package-lock.json
+ 
+ # test artefacts
+ shots/
++shots-*/
+ 
+ # Windows shell metadata
+ desktop.ini
+diff --git a/README.md b/README.md
+index bc94b55..6fd1bd5 100644
+--- a/README.md
++++ b/README.md
+@@ -917,12 +917,44 @@ node tools/layout.mjs       /tmp/testlib ./shots   # 8 widths × 8 routes: overf
+                                                    # overlapping regions, unreachable
+                                                    # controls, off-centre glyphs
+ node tools/audio.mjs        /tmp/testlib           # does the rack change the sound
++node tools/looks.mjs        /tmp/testlib ./shots-looks --accept   # first run: bless the goldens
++node tools/looks.mjs        /tmp/testlib ./shots-looks            # after that: does it still look like that
+ ```
+ 
+ `layout.mjs` is the one that found the off-centre transport icons, the one-pixel
+ sideways scroll and the 768px overflow; it now reports the app clean at 360, 414,
+ 620, 768, 1024, 1280, 1680 and 2400 pixels on every route.
+ 
++`looks.mjs` asks the other question — not *is the geometry sound* but *is this
++what it should look like* — because the first time anybody ran this application
++at a size they could see, it had nine faults in it and `layout.mjs` had reported
++none of them. Not one was a geometry fault. A tracklist squeezed to four pixels
++fits its box; a tonearm drawn at a fifteenth of its length overlaps nothing.
++
++It works in two halves. A **lint** of five rules, each the shape of a real
++defect: a flex child squeezed below the height its content needs, `overflow:
++hidden` cutting content where no mask says it should, text under seven effective
++pixels — measured across the cross axis too, which is how a vertical spine four
++pixels wide gets caught — two text boxes on top of each other, and an
++interactive control under the transport. A box that overflows must have a
++*visible* child doing it, or it is the immersive stage's own chrome sliding out
++of the way and not a fault at all. `data-clips` on an element is that element
++saying the cut is deliberate; the crate carries it, because a crate that fits
++inside its box is a shelf.
++
++And **goldens**: 57 surfaces — every route, all four album views, the album page
++and its back, the queue, the immersive stage, the turntable, the shortcut
++overlay — photographed in dark and light at 1440 and again at 620, and compared
++pixel for pixel against the last accepted run. A change to one design token was
++caught on nineteen of them. Anything that moves on its own is stopped first: the
++canvases are hidden, repeating animations are parked, entrances are *finished*
++rather than paused (paused at zero photographs the state a page is leaving,
++which is a state nobody looks at), playback is loaded and stopped, and the
++tonearm — which is the playhead, and therefore never twice the same — is pinned
++to a fixed angle so the golden checks how the arm is drawn rather than what time
++it is. `--accept` blesses the current state as the new truth, which is how you
++start and how you take a change you meant.
++
+ `audio.mjs` does not check that the sliders move. It plays a tone, reads the
+ app's own analyser — which sits *after* the rack — and checks that boosting the
+ low bands raises the low end, that cutting them lowers it, that bypass gives the
+diff --git a/css/layout.css b/css/layout.css
+index 749dc74..04fe4f4 100644
+--- a/css/layout.css
++++ b/css/layout.css
+@@ -526,7 +526,10 @@ body.is-ready .app { opacity: 1; }
+   .nav { width: 100%; }
+   .nav-item { justify-content: center; padding: 0; }
+   .side-foot { width: 100%; align-items: center; padding: 12px 8px 0; }
+-  .add-btn { justify-content: center; padding: 0; width: 40px; height: 40px; }
++  /* Two classes deep, because `.btn` in components.css sets the same padding
++     at the same specificity and loads later — at one class this reads
++     `padding: 0 18px` around a 15px icon in a 40px box. */
++  .side-foot .add-btn { justify-content: center; padding: 0; width: 40px; height: 40px; }
+   .side-foot .nav-item { justify-content: center; }
+   .route-tag { display: none; }
+ }
+diff --git a/css/views.css b/css/views.css
+index 290f143..86fc1a5 100644
+--- a/css/views.css
++++ b/css/views.css
+@@ -134,7 +134,7 @@
+ 
+ .home-hero .page-title { font-size: calc(clamp(32px, 4.4vw, 52px) * var(--scale)); letter-spacing: -.038em; }
+ .home-hero .page-sub { margin-top: 12px; color: var(--text-2); }
+-.home-hero .hero-actions { margin-top: 22px; flex-wrap: wrap; }
++.home-hero .hero-actions { margin-top: 22px; }
+ .home-hero-text { min-width: 0; }
+ 
+ /* The generated vector on the right of the home header. */
+@@ -496,6 +496,21 @@
+   .hero-show { gap: 22px; padding-top: 30px; }
+   .hero-show .sleeve-stage { --sleeve-size: 168px; padding-bottom: 0; margin-bottom: 0; }
+   .hero-show .art-floor, .hero-show .sleeve-stage::after { display: none; }
++
++  /* A 168px sleeve is three quarters of a 232px one, and the back cover's
++     guarantees were written in absolute pixels for the larger card — four rows
++     of spec and three tracks need 213px of a 168px square. Everything gives a
++     little: the card holds two tracks and three rows of fine print here, and
++     the rest runs out under the fades it already has. */
++  /* On two lines the facts open their own line, so the separator that joined
++     them to the artist would sit alone at the end of the one above. */
++  .hero-facts > .dot:first-child { display: none; }
++
++  .sleeve-back { gap: 6px; padding: 10px 11px 8px; }
++  .back-head { padding-bottom: 5px; }
++  .back-list { min-height: calc(2 * 1.4 * 10.5px * var(--scale)); }
++  .back-spec { padding-top: 5px; min-height: calc(3 * 1.28 * 8.5px * var(--scale) + 8px); }
++  .back-cat { padding-top: 4px; }
+ }
+ 
+ .hero-meta { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-bottom: 4px; }
+@@ -516,11 +531,19 @@
+   letter-spacing: .1em;
+   text-transform: uppercase;
+ }
++/* Year, track count and runtime move as one unit, so the only place the line
++   can break is after the artist — a wrapping row of dot-separated spans
++   otherwise ends a line on a bare separator, which reads as a truncation. */
++.hero-facts { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+ .hero-link { color: var(--text); font-weight: 500; transition: color var(--dur-1) linear; }
+ .hero-link:hover { color: var(--accent); }
+ .dot { width: 3px; height: 3px; background: currentColor; opacity: .45; }
+ 
+-.hero-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
++/* Wrapping rather than squeezing. Four controls and three gaps come to
++   exactly the width of a 620px hero, and `nowrap` spends the shortfall on
++   whichever button has a label — Shuffle lost fifteen pixels of its own
++   name. The home hero already wrapped; every hero does now. */
++.hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+ 
+ /* ------------------------------------------------------------------ grids */
+ 
+diff --git a/js/views.js b/js/views.js
+index 5ec80a2..4850321 100644
+--- a/js/views.js
++++ b/js/views.js
+@@ -1200,6 +1200,10 @@ function mountCrate(host) {
+   const WINDOW = 5;                       // how many either side of the middle
+   const box = el('div', {
+     class: 'crate', tabindex: '0', role: 'listbox', 'aria-label': 'Albums',
++    /* The records behind the front one recede past the right-hand edge and
++       are meant to: a crate that fits inside its own box is a shelf. Said
++       out loud so `tools/looks.mjs` does not report it every run. */
++    'data-clips': '',
+   });
+   const rail = el('div', { class: 'crate-rail' });
+   const meta = el('div', { class: 'crate-meta' },
+@@ -1326,12 +1330,15 @@ function viewAlbum(host, key) {
+     el('h1', { class: 'hero-title', text: album.title }),
+     el('p', { class: 'hero-sub' },
+       el('a', { class: 'hero-link', href: '#/artist/' + album.artistKey, text: album.artist }),
+-      el('span', { class: 'dot' }),
+-      album.year ? el('span', { text: String(album.year) }) : null,
+-      album.year ? el('span', { class: 'dot' }) : null,
+-      el('span', { text: fmtCount(album.tracks.length, 'track') }),
+-      el('span', { class: 'dot' }),
+-      el('span', { text: fmtTotal(album.duration) })));
++      /* One unit, so a narrow hero breaks after the artist rather than
++         between a fact and the separator that belongs to it. */
++      el('span', { class: 'hero-facts' },
++        el('span', { class: 'dot' }),
++        album.year ? el('span', { text: String(album.year) }) : null,
++        album.year ? el('span', { class: 'dot' }) : null,
++        el('span', { text: fmtCount(album.tracks.length, 'track') }),
++        el('span', { class: 'dot' }),
++        el('span', { text: fmtTotal(album.duration) }))));
+ 
+   const actions = el('div', { class: 'hero-actions' },
+     playFab(() => playAll(album.tracks, 0, origin)),
+diff --git a/tools/looks.mjs b/tools/looks.mjs
+new file mode 100644
+index 0000000..94c5ec5
+--- /dev/null
++++ b/tools/looks.mjs
+@@ -0,0 +1,532 @@
++/* Does it look right?
++ *
++ *   node tools/looks.mjs <library-dir> [golden-dir]
++ *
++ * `layout.mjs` next door asks whether the geometry is sound — nothing overflows,
++ * nothing overlaps, every control is reachable. It is a good suite and it caught
++ * none of the nine faults found the first time somebody ran this application at
++ * a size they could see, because not one of them was a geometry fault. A
++ * tracklist squeezed to four pixels fits its box. A tonearm drawn at a
++ * fifteenth of its length overlaps nothing. Two spans that set on one line when
++ * they were meant to stack are, geometrically, perfectly in order.
++ *
++ * So this asks a different question, in two ways.
++ *
++ * THE LINT is five rules about the gap between what the CSS says and what
++ * arrives on screen. Each one is a shape that a real defect took:
++ *
++ *   collapsed   a flex child squeezed below the height its own content needs.
++ *               The album back cover's tracklist: `flex: 1` made it the only
++ *               elastic block on the card, so it absorbed the whole shortfall
++ *               and printed its rows on top of the block below it.
++ *   clipped     `overflow: hidden` cutting real content, where no mask says it
++ *               was meant to be cut. The EQ's own axis label, reading "2"
++ *               instead of "20k".
++ *   tiny        text under seven effective pixels, transforms included. The
++ *               shelf: two vertical text columns and an 8px gap sharing 15px of
++ *               spine, four pixels each, unreadable at any zoom.
++ *   stacked     two text boxes sitting on top of each other. Whatever the
++ *               tracklist spilled onto.
++ *   buried      an interactive control under the transport. Carried over from
++ *               `layout.mjs`, which is where it was first caught.
++ *
++ * THE GOLDENS are the other half, because a lint can only find what somebody
++ * has already been bitten by. Every surface is photographed and compared with
++ * the last accepted photograph, pixel for pixel: a change that alters what is
++ * on screen fails the run and prints where. `--accept` blesses the current
++ * state as the new truth, which is the only way to start and the right way to
++ * take a deliberate change.
++ *
++ * Neither half needs a network, a service or a dependency the other tools do
++ * not already have.
++ */
++
++import { chromium } from 'playwright';
++import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
++import { inflateSync } from 'node:zlib';
++
++const LIB = process.argv[2];
++const GOLD = process.argv[3] || './shots-looks';
++const ACCEPT = process.argv.includes('--accept');
++const DIFF_DIR = `${GOLD}/_diff`;
++
++mkdirSync(GOLD, { recursive: true });
++mkdirSync(DIFF_DIR, { recursive: true });
++
++const problems = [];
++const log = (...a) => console.log(...a);
++const ok = (label, pass, extra = '') => {
++  log(`${pass ? '  PASS' : '  FAIL'}  ${label}${extra ? ' — ' + extra : ''}`);
++  if (!pass) problems.push(label + (extra ? ': ' + extra : ''));
++};
++
++/* ------------------------------------------------------------------ png
++ *
++ * Comparing two screenshots needs the pixels, and Node has no image decoder.
++ * PNG is simple enough to read by hand for the cases that matter here:
++ * whatever Chromium writes, which is 8-bit non-interlaced, in one or more IDAT
++ * chunks — RGB where the page is fully opaque and RGBA where it is not, and it
++ * picks per shot. Greyscale is handled for completeness; palettes and 16-bit
++ * are refused rather than guessed at. Everything is normalised to RGBA so the
++ * comparison never has to care which it was given.
++ */
++function decodePNG(buf) {
++  if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error('not a png');
++  let p = 8, w = 0, h = 0, bits = 0, type = 0, interlace = 0;
++  const idat = [];
++  while (p < buf.length) {
++    const len = buf.readUInt32BE(p);
++    const tag = buf.toString('ascii', p + 4, p + 8);
++    const body = buf.subarray(p + 8, p + 8 + len);
++    if (tag === 'IHDR') {
++      w = body.readUInt32BE(0); h = body.readUInt32BE(4);
++      bits = body[8]; type = body[9]; interlace = body[12];
++    } else if (tag === 'IDAT') idat.push(body);
++    else if (tag === 'IEND') break;
++    p += 12 + len;
++  }
++  const CH = { 0: 1, 2: 3, 4: 2, 6: 4 }[type];
++  if (bits !== 8 || !CH || interlace !== 0) {
++    throw new Error(`unsupported png: ${bits}-bit type ${type} interlace ${interlace}`);
++  }
++  const raw = inflateSync(Buffer.concat(idat));
++  const stride = w * CH;
++  const flat = Buffer.alloc(h * stride);
++  // Undo the per-scanline filters. Each line is prefixed with its filter byte,
++  // and the predictors look back one *pixel*, not one byte.
++  for (let y = 0; y < h; y++) {
++    const f = raw[y * (stride + 1)];
++    const line = raw.subarray(y * (stride + 1) + 1, y * (stride + 1) + 1 + stride);
++    const cur = flat.subarray(y * stride, (y + 1) * stride);
++    const prev = y ? flat.subarray((y - 1) * stride, y * stride) : null;
++    for (let x = 0; x < stride; x++) {
++      const a = x >= CH ? cur[x - CH] : 0;
++      const b = prev ? prev[x] : 0;
++      const c = prev && x >= CH ? prev[x - CH] : 0;
++      let v = line[x];
++      if (f === 1) v += a;
++      else if (f === 2) v += b;
++      else if (f === 3) v += (a + b) >> 1;
++      else if (f === 4) {
++        const q = a + b - c, pa = Math.abs(q - a), pb = Math.abs(q - b), pc = Math.abs(q - c);
++        v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
++      }
++      cur[x] = v & 255;
++    }
++  }
++  if (CH === 4) return { w, h, data: flat };
++  // Widen to RGBA so a run that wrote RGB and a run that wrote RGBA compare.
++  const out = Buffer.alloc(w * h * 4, 255);
++  for (let i = 0, j = 0; i < w * h; i++, j += CH) {
++    const g = flat[j];
++    out[i * 4] = CH >= 3 ? flat[j] : g;
++    out[i * 4 + 1] = CH >= 3 ? flat[j + 1] : g;
++    out[i * 4 + 2] = CH >= 3 ? flat[j + 2] : g;
++    out[i * 4 + 3] = CH === 2 ? flat[j + 1] : 255;
++  }
++  return { w, h, data: out };
++}
++
++/* How different are these two shots?
++ *
++ * A per-channel tolerance rather than an exact match, because text rendering
++ * is not bit-identical between runs on every machine, and a suite that cries
++ * wolf on antialiasing is a suite people turn off. */
++function comparePNG(a, b, tol = 12) {
++  const A = decodePNG(a), B = decodePNG(b);
++  if (A.w !== B.w || A.h !== B.h) return { size: [A.w, A.h, B.w, B.h], diff: -1 };
++  let diff = 0;
++  let minX = A.w, minY = A.h, maxX = -1, maxY = -1;
++  for (let y = 0; y < A.h; y++) {
++    for (let x = 0; x < A.w; x++) {
++      const i = (y * A.w + x) * 4;
++      if (Math.abs(A.data[i] - B.data[i]) > tol ||
++          Math.abs(A.data[i + 1] - B.data[i + 1]) > tol ||
++          Math.abs(A.data[i + 2] - B.data[i + 2]) > tol ||
++          Math.abs(A.data[i + 3] - B.data[i + 3]) > tol) {
++        diff++;
++        if (x < minX) minX = x; if (x > maxX) maxX = x;
++        if (y < minY) minY = y; if (y > maxY) maxY = y;
++      }
++    }
++  }
++  return { diff, total: A.w * A.h, box: maxX < 0 ? null : [minX, minY, maxX - minX + 1, maxY - minY + 1] };
++}
++
++/* ------------------------------------------------------------------ lint */
++
++const LINT = () => {
++  const out = { collapsed: [], clipped: [], tiny: [], stacked: [], buried: [] };
++  const name = (e) => {
++    const c = String(e.className?.baseVal ?? e.className ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
++    return e.tagName.toLowerCase() + (c ? '.' + c : '') + (e.id ? '#' + e.id : '');
++  };
++  const path = (e) => {
++    const p = [];
++    for (let n = e; n && n !== document.body; n = n.parentElement) p.unshift(name(n));
++    return p.slice(-3).join('>');
++  };
++  const shown = (e) => {
++    const cs = getComputedStyle(e);
++    if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return null;
++    // An ancestor faded to nothing takes its children with it — a title behind
++    // `opacity: 0` is not on screen however solid the span itself is.
++    for (let p = e.parentElement; p; p = p.parentElement) {
++      const pc = getComputedStyle(p);
++      if (pc.display === 'none' || pc.visibility === 'hidden' || +pc.opacity === 0) return null;
++    }
++    const r = e.getBoundingClientRect();
++    return r.width && r.height ? { cs, r } : null;
++  };
++  /* What of this element actually reaches the screen.
++   *
++   * A bounding rectangle is where an element *would* be. Inside a scroller the
++   * two part company constantly: the rows below the fold of a virtualised list
++   * have rectangles hundreds of pixels past the bottom of the viewport, and
++   * comparing those with a fixed transport bar reports every list in the app as
++   * having controls buried under it. Intersecting with every clipping ancestor
++   * first is the difference between a suite worth reading and one worth
++   * switching off. */
++  const visible = (e) => {
++    let r = e.getBoundingClientRect();
++    let box = { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
++    for (let p = e.parentElement; p; p = p.parentElement) {
++      const pc = getComputedStyle(p);
++      if (!/hidden|clip|auto|scroll/.test(pc.overflowY + pc.overflowX)) continue;
++      const pr = p.getBoundingClientRect();
++      box.top = Math.max(box.top, pr.top);
++      box.bottom = Math.min(box.bottom, pr.bottom);
++      box.left = Math.max(box.left, pr.left);
++      box.right = Math.min(box.right, pr.right);
++    }
++    box.top = Math.max(box.top, 0);
++    box.left = Math.max(box.left, 0);
++    box.bottom = Math.min(box.bottom, innerHeight);
++    box.right = Math.min(box.right, innerWidth);
++    if (box.bottom - box.top < 2 || box.right - box.left < 2) return null;
++    box.width = box.right - box.left;
++    box.height = box.bottom - box.top;
++    return box;
++  };
++
++  const all = [...document.querySelectorAll('body *')];
++  for (const e of all) {
++    if (e.closest('.sprite')) continue;
++    const v = shown(e);
++    if (!v) continue;
++    const { cs, r } = v;
++
++    /* `text-overflow: ellipsis` is a promise that the cut is deliberate and
++       marked — but it only applies along the *inline* axis, which a vertical
++       writing mode turns on its side. Excusing the wrong axis excuses a real
++       clip; excusing neither reports every truncated title in the app. */
++    const vertical = /vertical/.test(cs.writingMode);
++    const marked = cs.textOverflow === 'ellipsis' || /gradient/.test(cs.maskImage + cs.webkitMaskImage);
++    const excuseY = /gradient/.test(cs.maskImage + cs.webkitMaskImage) || (vertical && marked);
++    const excuseX = /gradient/.test(cs.maskImage + cs.webkitMaskImage) || (!vertical && marked);
++    /* `data-clips` is an element saying the cut is the point — the crate is
++       records receding out of frame, and a crate that fits its box is not a
++       crate. Saying so in the markup keeps the rule honest for everything else. */
++    if (e.hasAttribute('data-clips')) continue;
++    /* Which child is doing the overflowing. "This box is ten pixels short" is
++       a fact you then have to go and investigate; "this box is ten pixels short
++       and it is the heading" is a fix. */
++    /* `scrollHeight` counts children nobody can see. The immersive stage hides
++       its own chrome when the pointer goes still, by fading it out and sliding
++       it ten pixels down — so a box that is behaving perfectly reports ten
++       pixels of overflow, for ever, and the rule that cried wolf gets ignored.
++       Content is only cut off if something *visible* is being cut off, so the
++       cheap measure is the trigger and a visible child is the verdict. It also
++       names the child, which turns "this box is short" into a fix. */
++    const culprit = (axis) => {
++      const r = e.getBoundingClientRect();
++      let worst = null, by = 0;
++      for (const k of e.querySelectorAll('*')) {
++        if (!shown(k)) continue;
++        const kr = k.getBoundingClientRect();
++        const d = axis === 'y' ? Math.max(kr.bottom - r.bottom, r.top - kr.top)
++                               : Math.max(kr.right - r.right, r.left - kr.left);
++        if (d > by) { by = d; worst = k; }
++      }
++      return by > 4 ? ` (${name(worst)} by ${by.toFixed(0)}px)` : null;
++    };
++    if (/hidden|clip/.test(cs.overflowY) && e.scrollHeight > e.clientHeight + 4 && e.clientHeight > 0 && !excuseY) {
++      const who = culprit('y');
++      if (who) out.clipped.push(`${path(e)} y ${e.clientHeight}<${e.scrollHeight}${who}`);
++    }
++    if (/hidden|clip/.test(cs.overflowX) && e.scrollWidth > e.clientWidth + 4 && e.clientWidth > 0 && !excuseX) {
++      const who = culprit('x');
++      if (who) out.clipped.push(`${path(e)} x ${e.clientWidth}<${e.scrollWidth}${who}`);
++    }
++    if (e.children.length && r.height < 10 && e.scrollHeight > r.height + 12 && cs.position !== 'absolute') {
++      out.collapsed.push(`${path(e)} h=${r.height.toFixed(1)} needs ${e.scrollHeight}`);
++    }
++    const hasText = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
++    if (hasText) {
++      const m = new DOMMatrixReadOnly(cs.transform);
++      const scale = Math.min(Math.hypot(m.a, m.b) || 1, Math.hypot(m.c, m.d) || 1);
++      const eff = parseFloat(cs.fontSize) * scale;
++      // A vertical writing mode gives its text the *cross* size to sit in, so a
++      // column four pixels wide is unreadable however large the font is.
++      const cross = /vertical/.test(cs.writingMode) ? r.width : r.height;
++      if (eff > 0 && (eff < 7 || cross < 7)) {
++        out.tiny.push(`${path(e)} ${eff.toFixed(1)}px in ${cross.toFixed(1)}px "${e.textContent.trim().slice(0, 20)}"`);
++      }
++    }
++  }
++
++  const leaves = all.filter((e) => {
++    if (e.closest('.sprite, .menu, .dialog, .toast')) return false;
++    if (!/^(span|h1|h2|h3|h4|p|li|dd|dt|a|strong|em|label|small|time|b)$/.test(e.tagName.toLowerCase())) return false;
++    if (e.children.length || !e.textContent.trim()) return false;
++    const v = shown(e);
++    if (!v || v.cs.position === 'fixed') return false;
++    return !!visible(e);
++  }).map((e) => ({ e, r: visible(e) }));
++  for (let i = 0; i < leaves.length; i++) {
++    for (let j = i + 1; j < leaves.length; j++) {
++      const a = leaves[i], b = leaves[j];
++      if (a.e.contains(b.e) || b.e.contains(a.e)) continue;
++      const ox = Math.min(a.r.right, b.r.right) - Math.max(a.r.left, b.r.left);
++      const oy = Math.min(a.r.bottom, b.r.bottom) - Math.max(a.r.top, b.r.top);
++      if (ox > 6 && oy > 6) {
++        const area = ox * oy;
++        const small = Math.min(a.r.width * a.r.height, b.r.width * b.r.height);
++        if (area > small * 0.45) {
++          out.stacked.push(`${name(a.e)}"${a.e.textContent.trim().slice(0, 12)}" × ${name(b.e)}"${b.e.textContent.trim().slice(0, 12)}"`);
++        }
++      }
++    }
++  }
++
++  const bar = document.querySelector('.playerbar')?.getBoundingClientRect();
++  if (bar && bar.height) {
++    for (const el of document.querySelectorAll('#view button, #view a[href], #view input')) {
++      if (el.closest('[hidden], .toast, .menu, .dialog')) continue;
++      if (!shown(el)) continue;
++      const r = visible(el);
++      if (!r) continue;
++      if (r.top < bar.bottom && r.bottom > bar.top + 2) out.buried.push(name(el));
++    }
++  }
++
++  for (const k of Object.keys(out)) out[k] = [...new Set(out[k])].slice(0, 8);
++  return out;
++};
++
++/* ------------------------------------------------------------------ run */
++
++const browser = await chromium.launch({
++  executablePath: process.env.SONORA_CHROMIUM || undefined,
++  args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'],
++});
++
++const seenGolden = new Set();
++let shotCount = 0;
++
++async function sweep(scheme, width, height) {
++  const ctx = await browser.newContext({
++    viewport: { width, height }, colorScheme: scheme, deviceScaleFactor: 1,
++    reducedMotion: 'reduce',      // entrances mid-flight are not what is being photographed
++  });
++  const page = await ctx.newPage();
++  const errors = [];
++  page.on('pageerror', (e) => errors.push('UNCAUGHT: ' + e.message));
++  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
++
++  await page.addInitScript(() => { delete window.showDirectoryPicker; delete window.showOpenFilePicker; });
++  await page.goto('http://127.0.0.1:8123/index.html', { waitUntil: 'networkidle' });
++  await page.waitForSelector('body.is-ready', { timeout: 30000 });
++  await page.waitForSelector('#intro', { state: 'detached', timeout: 30000 });
++
++  const [chooser] = await Promise.all([
++    page.waitForEvent('filechooser'),
++    (async () => {
++      await page.locator('.side-foot .add-btn').click();
++      await page.locator('.menu-item', { hasText: 'Add a folder' }).click();
++    })(),
++  ]);
++  await chooser.setFiles(LIB);
++  await page.waitForFunction(() => document.querySelectorAll('.rail .card').length > 0, null, { timeout: 90000 });
++  await page.waitForFunction(() => document.querySelector('.scan')?.hidden !== false, null, { timeout: 90000 });
++
++  /* Something in the transport, so the bar is at full height on every surface —
++     and then stopped, because a run that keeps playing is a run whose
++     photographs are all slightly different: the playhead advances, the track
++     changes under it, and the lit row in the songs list moves down the page
++     between the sweep that wrote the goldens and the sweep that checks them.
++     Loaded and paused is a real state, and it is the same one every time. */
++  await page.evaluate(() => { location.hash = '#/songs'; });
++  await page.waitForSelector('.v-layer .trow');
++  await page.locator('.v-layer .trow:not([hidden])').first().dblclick();
++  await page.waitForTimeout(900);
++  await page.keyboard.press(' ');
++  await page.waitForFunction(() => !document.querySelector('.playerbar')?.classList.contains('is-playing'),
++                             null, { timeout: 5000 }).catch(() => {});
++  await page.waitForTimeout(400);
++
++  const tag = `${scheme}-${width}`;
++
++  const check = async (label) => {
++    const r = await page.evaluate('(' + LINT.toString() + ')()');
++    const n = Object.values(r).reduce((a, b) => a + b.length, 0);
++    if (n) {
++      for (const [k, v] of Object.entries(r)) {
++        if (v.length) ok(`${tag}/${label} ${k}`, false, v.join('; '));
++      }
++    }
++    return n;
++  };
++
++  /* A golden is only a golden if it is stable. Anything that moves on its own
++     — the world behind the interface, the spectrum, the platter — is stopped
++     before the shutter, so a diff means the drawing changed and not that the
++     photograph was taken a frame later.
++     
++     An entrance is *finished*, not paused. Pausing one at time zero freezes the
++     page in the state it was leaving, which is a state nobody ever looks at:
++     it reported the immersive stage as ten pixels of overflow for a whole run,
++     and the overflow was a heading still sitting where it had begun. Anything
++     that repeats for ever has no end to run to, so those are parked instead. */
++  const still = () => page.evaluate(() => {
++    document.querySelectorAll('canvas').forEach((c) => { c.style.visibility = 'hidden'; });
++    /* The tonearm is the playhead, which is the whole point of it and makes it
++       the one drawing that is never twice the same: four seconds into a side it
++       sits somewhere no run will reproduce, and it sweeps a big enough area to
++       trip the comparison every time. Pinned to a fixed angle the golden still
++       checks how the arm is *drawn* — its length, its pivot, the headshell,
++       where it sits against the grooves — and where it should be for a given
++       moment is arithmetic, checked in `smoke.mjs`, not a photograph. */
++    let pin = document.getElementById('looks-pin');
++    if (!pin) {
++      pin = document.createElement('style');
++      pin.id = 'looks-pin';
++      pin.textContent = '.deck-arm { rotate: 14deg !important; transition: none !important; }';
++      document.head.appendChild(pin);
++    }
++    for (const a of document.getAnimations()) {
++      try {
++        const it = a.effect?.getComputedTiming?.().iterations;
++        if (it === Infinity) { a.pause(); a.currentTime = 0; } else a.finish();
++      } catch { /* an animation that will not be told is not worth the run */ }
++    }
++  });
++
++  const golden = async (label) => {
++    await still();
++    await page.waitForTimeout(120);
++    const shot = await page.screenshot();
++    const file = `${GOLD}/${tag}-${label}.png`;
++    seenGolden.add(`${tag}-${label}.png`);
++    shotCount++;
++    if (ACCEPT || !existsSync(file)) { writeFileSync(file, shot); return; }
++    const cmp = comparePNG(readFileSync(file), shot);
++    if (cmp.diff === -1) {
++      ok(`${tag}/${label} is the size it was`, false, `${cmp.size[0]}×${cmp.size[1]} -> ${cmp.size[2]}×${cmp.size[3]}`);
++    } else if (cmp.diff > cmp.total * 0.0015) {
++      writeFileSync(`${DIFF_DIR}/${tag}-${label}.png`, shot);
++      const [x, y, w, h] = cmp.box;
++      ok(`${tag}/${label} looks like it did`, false,
++         `${cmp.diff} px changed (${(100 * cmp.diff / cmp.total).toFixed(2)}%) around ${x},${y} ${w}×${h}`);
++    }
++    // The canvases were hidden for the shot; put them back for the next route.
++    await page.evaluate(() => document.querySelectorAll('canvas').forEach((c) => { c.style.visibility = ''; }));
++  };
++
++  const surface = async (label, go) => {
++    await go();
++    await page.waitForTimeout(500);
++    await check(label);
++    await golden(label);
++  };
++
++  const route = (r) => async () => {
++    await page.evaluate((x) => { location.hash = '#/' + x; }, r);
++    await page.waitForTimeout(650);
++  };
++
++  log(`\n> ${tag}`);
++  for (const r of ['home', 'songs', 'albums', 'artists', 'playlists', 'favourites', 'files', 'circles', 'sound', 'settings']) {
++    await surface('route-' + r, route(r));
++  }
++
++  await route('albums')();
++  for (const m of ['Crate', 'Shelf', 'Floor']) {
++    await surface('albums-' + m.toLowerCase(), async () => {
++      await page.locator('.seg', { hasText: new RegExp('^' + m + '$') }).click();
++      await page.waitForTimeout(1100);
++    });
++  }
++  await page.locator('.seg', { hasText: /^Grid$/ }).click();
++  await page.waitForTimeout(500);
++
++  await surface('album', async () => {
++    await page.locator('.acard, .album-card, .card').first().click();
++    await page.waitForTimeout(1100);
++  });
++  if (await page.locator('.flip-btn').count()) {
++    await surface('album-back', async () => {
++      await page.locator('.flip-btn').first().click();
++      await page.waitForTimeout(1100);
++    });
++  }
++
++  await surface('queue', async () => {
++    await page.locator('.pb-queue').click();
++    await page.waitForTimeout(700);
++  });
++  await page.locator('.pb-queue').click();
++  await page.waitForTimeout(400);
++
++  /* The stage hides its own chrome when the pointer goes still, and in a run
++     nobody touches the mouse — so photographed as found, both stage goldens are
++     a picture of an empty screen. Nudging the pointer first is what a person
++     looking at it would have done. */
++  const wake = async () => {
++    await page.mouse.move(width / 2, height / 2);
++    await page.mouse.move(width / 2 + 4, height / 2 + 4);
++    await page.waitForTimeout(350);
++  };
++  await surface('stage', async () => {
++    await page.keyboard.press('v');
++    await page.waitForTimeout(1200);
++    await wake();
++  });
++  await surface('stage-deck', async () => {
++    await page.keyboard.press('d');
++    await page.waitForTimeout(1300);
++    await wake();
++  });
++  await page.keyboard.press('Escape');
++  await page.waitForTimeout(500);
++
++  await surface('shortcuts', async () => {
++    await page.keyboard.press('?');
++    await page.waitForTimeout(700);
++  });
++  await page.keyboard.press('Escape');
++
++  ok(`${tag} console is clean`, errors.length === 0, errors.slice(0, 2).join(' | '));
++  await ctx.close();
++}
++
++await sweep('dark', 1440, 900);
++await sweep('light', 1440, 900);
++await sweep('dark', 620, 900);
++
++await browser.close();
++
++/* A golden nobody photographed this run is a golden for a surface that no
++   longer exists, and it will quietly pass forever. Say so. */
++const stale = readdirSync(GOLD).filter((f) => f.endsWith('.png') && !seenGolden.has(f));
++if (stale.length) ok('every golden still has a surface', false, stale.join(', '));
++
++log('');
++if (problems.length) {
++  log(`${problems.length} LOOKS PROBLEM(S):`);
++  problems.forEach((p) => log('  - ' + p));
++  if (existsSync(DIFF_DIR)) log(`\nWhat it looks like now: ${DIFF_DIR}`);
++  log('If a change was intended, re-run with --accept to make it the new truth.');
++  process.exit(1);
++}
++log(`LOOKS CLEAN — ${shotCount} surfaces, lint and goldens`);
+-- 
+2.43.0
+
+
+From 78a5cfb6a239b0429d6889583ba9ee160fff77f0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 1 Sep 2026 20:15:41 +0000
+Subject: [PATCH 2/3] A5, D1 and D2: one keyboard table, and a library the
+ browser has agreed to keep
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A5 — THE KEYBOARD
+
+There were two lists: a `switch` on a keystroke that did the work, and a
+hand-written array that drew the `?` overlay. The README was honest about it —
+"a second list rather than a projection of the key handler" — and honest about
+why it stayed that way, that making them one meant rewriting the handler to be
+data-driven and that this was a bigger change than it sounds. In the meantime
+they drifted again: ⌘Y ran redo and appeared in neither the overlay nor the
+README's own table.
+
+`js/keys.js` is the table. A binding is an id, a combo, a group, a label and
+something to run; `bind()` registers one, the handler dispatches from it, the
+overlay renders from it. A shortcut not in the table does not exist, and one in
+it cannot go undocumented — ⌘Y is now printed, under Redo, as the second
+spelling it is.
+
+Four things the rewrite had to keep, all of which were load-bearing:
+
+- "?" is registered before "/" because Shift is held to type it on most layouts
+  and it arrives as Shift+"/" on the rest, which is the same physical key as
+  search. Order is priority, so this is expressed by where it sits.
+- Redo is registered before Undo, or ⌘⇧Z is swallowed by the ⌘Z that matches
+  it first.
+- Neither undo binding fires while a text field has the caret: inside the edit
+  dialog ⌘Z means "undo what I just typed", which is the browser's job.
+- A binding with no modifiers must not match when one is held, which is what the
+  old `if (typing || metaKey || ctrlKey || altKey) return` gate did in one line
+  and the combo parser now does per binding.
+
+The immersive view registers its own two, at module load rather than on open,
+with an `active` predicate. That is what lets L and D be inert while the stage
+is shut and still appear in the overlay — the list should be the whole list, not
+the list of what happens to be on screen. Group order is declared rather than
+inherited from import order, which otherwise put the visualiser above Playback.
+
+`Mod` is ⌘ on a Mac and Ctrl everywhere else. Overrides are stored per id and
+resolved over the defaults, so remapping is editing the table — which is the
+half of A4 that belongs here rather than in its own change.
+
+D1 — STORAGE THAT SURVIVES
+
+Nothing called `navigator.storage.persist()`, and everything this application
+lets you change is an overlay in IndexedDB: playlists, favourites, tag
+corrections, the covers you chose, racks bound to records, every hour of
+listening it has counted. Without that grant it is *best-effort* storage, which
+a browser short of room may evict without asking — and there is no server copy
+to come back from, because there is no server.
+
+It asks once there is something to lose, straight after the first import, rather
+than at boot: an empty index is nothing to protect and Firefox would be
+prompting before the app had shown what it is for. Settings reports what came
+back rather than assuming, and offers to ask again — Chromium decides from how
+the site is used rather than by prompting, so a refusal is a "not yet" and the
+row says so in those words.
+
+D2 — AND SAYS WHEN IT IS RUNNING OUT
+
+`db.usage()` already had the estimate; nothing did anything with the ratio. Past
+four fifths of the browser's allowance the row says so in the warn colour,
+because running out is quiet: a new import half-lands, a playlist does not save,
+and nothing about that failure names the cause.
+
+Found while wiring it: `db` was not imported in app.js at all. `node --check`
+validates syntax and not module resolution, which is a good argument for the
+suite below being the thing that says whether a change works.
+
+Verified: smoke, interactions, audio and layout all green; looks clean at 57
+surfaces — and it caught the extra overlay row this change adds, which is what
+it is for.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01JjdT29yrXTcWsnnPfvxBD9
+---
+ README.md          |  33 +++++--
+ css/components.css |   4 +
+ css/views.css      |   4 +
+ js/app.js          | 208 +++++++++++++++++++++++++--------------------
+ js/db.js           |  28 ++++++
+ js/keys.js         | 183 +++++++++++++++++++++++++++++++++++++++
+ js/stage.js        |  59 +++++++++----
+ js/views.js        |  46 ++++++++++
+ 8 files changed, 452 insertions(+), 113 deletions(-)
+ create mode 100644 js/keys.js
+
+diff --git a/README.md b/README.md
+index 6fd1bd5..eebc83f 100644
+--- a/README.md
++++ b/README.md
+@@ -136,13 +136,22 @@ When an import merges something, the summary says so by name.
+ | `⌘Z` / `⌘⇧Z` | undo / redo |
+ | `?` | the whole list, on screen |
+ 
+-`?` puts that list on screen. It is a second list rather than a projection of
+-the key handler — this README claimed otherwise until recently and it was not
+-true. Making them one source means rewriting the key handling to be
+-data-driven, which is a bigger change than it sounds and not obviously better
+-than a switch on a keystroke. The palette below is the practical mitigation: it
+-prints each shortcut next to the action it belongs to, where a mismatch is
+-visible rather than hiding in a table nobody cross-checks.
++`?` puts that list on screen, and it is now a projection of the key handler
++rather than a second list beside it. This README used to claim they were one
++source, then corrected itself to admit they were not, and said that making them
++one meant rewriting the key handling to be data-driven — "a bigger change than
++it sounds". It was worth it, because in the meantime they had drifted again:
++`⌘Y` ran redo, and appeared in neither the overlay nor the table above.
++
++`js/keys.js` holds the table. A binding is an id, a combo, a group, a label and
++something to run; `bind()` registers one, the handler dispatches from it and the
++overlay renders from it, so a shortcut that is not in the table does not exist
++and one that is cannot go undocumented. The immersive view registers its own two
++at module load with an `active` predicate, which is what lets `L` and `D` be
++inert while the stage is shut and still appear in the list — the list is the
++whole list, not the list of what happens to be on screen. `Mod` means ⌘ on a Mac
++and Ctrl everywhere else. Overrides are stored per id, which is what the
++remapping in Settings writes to.
+ 
+ Right-click any track, album or artist for play-next, add-to-queue, favourite,
+ add-to-playlist and go-to-album. Drag rows in the queue to reorder. Drag the
+@@ -566,6 +575,7 @@ css/
+   aero.css          the material: atmosphere, glass, sheen, specular edges
+ js/
+   app.js            routing, navigation, search, shortcuts, theming, ingestion
++  keys.js           the one table of shortcuts, dispatched and drawn from
+   library.js        the collection: scanning, indexes, album merging, playlists,
+                     favourites
+   player.js         playback, queue, Web Audio graph, spectrum analysis
+@@ -1005,6 +1015,15 @@ displacement and the turntable in front of somebody who can see them.
+   app never writes to your music folder.
+ - Light, dark and system themes; the theme is applied before first paint so there
+   is no flash.
++- **Nothing Sonora keeps is written to your files, which is also the risk.** The
++  index, your playlists, favourites, corrections, chosen covers and every hour of
++  listening live in IndexedDB — and without a persistence grant that is
++  *best-effort* storage a browser short of room may evict without asking, with no
++  server copy to come back from because there is no server. Sonora asks for that
++  grant once there is something to lose, rather than at boot, and
++  **Settings → Storage** reports the answer it got instead of assuming one. The
++  same section says how much of the browser's allowance the library is using, and
++  warns past four fifths of it.
+ - The visualiser style, the backdrop and the artwork tint are all switchable in
+   **Settings → Appearance** and **Visualiser**; the choice follows every canvas
+   in the app at once. Everything else about how it looks is in **Settings →
+diff --git a/css/components.css b/css/components.css
+index ef1c84f..f9f918a 100644
+--- a/css/components.css
++++ b/css/components.css
+@@ -717,6 +717,10 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
+   overflow-y: auto;
+   padding-right: 4px;
+ }
++/* The same action under a second spelling — dimmer, because it is the same
++   row said twice and should not read as two things you have to learn. */
++.keys-alt { opacity: .6; }
++
+ .keys-group {
+   font-family: var(--mono);
+   font-size: calc(10px * var(--scale));
+diff --git a/css/views.css b/css/views.css
+index 86fc1a5..9b858e6 100644
+--- a/css/views.css
++++ b/css/views.css
+@@ -712,6 +712,10 @@
+ .settings-ico .ico { width: 17px; height: 17px; }
+ .settings-text { flex: 1; min-width: 0; }
+ .settings-name { color: var(--text); font-weight: 550; font-size: calc(13.5px * var(--scale)); }
++/* A number that has crossed into the part of the range where things start to
++   fail, said in the warn colour so it reads before it is read. */
++.settings-warn { color: var(--warn); }
++
+ .settings-note { color: var(--text-3); font-size: calc(12.5px * var(--scale)); margin-top: 2px; }
+ .settings-actions {
+   display: flex;
+diff --git a/js/app.js b/js/app.js
+index 8ee05f1..69b6770 100644
+--- a/js/app.js
++++ b/js/app.js
+@@ -18,6 +18,8 @@ import { toggleStage, isOpen as stageOpen } from './stage.js';
+ import { startRelief } from './relief.js';
+ import { startOffline } from './offline.js';
+ import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
++import * as db from './db.js';
++import * as keys from './keys.js';
+ import * as peakmap from './peaks.js';
+ import * as undoStack from './undo.js';
+ 
+@@ -429,6 +431,12 @@ function paintRouteTag(route) {
+  */
+ function announceImport(report) {
+   if (!report || !report.added) return;
++  /* Now there is something worth keeping, ask the browser to keep it. Not at
++     boot: an empty index is nothing to protect and Firefox would be prompting
++     before the app had shown what it is for. Once only — `requestPersist`
++     short-circuits when the grant already exists — and silently, because the
++     answer belongs in Settings rather than in the way. */
++  db.requestPersist().catch(() => {});
+   const merged = report.merged || [];
+   if (merged.length) {
+     const names = merged.slice(0, 2).map((a) => `“${a.title}”`).join(', ');
+@@ -621,51 +629,116 @@ function applyAccent() {
+  * existing — which is the failure mode of every keyboard list ever written in
+  * a settings page by hand.
+  */
+-const SHORTCUTS = [
+-  ['Playback', [
+-    [['Space'], 'Play or pause'],
+-    [['←', '→'], 'Seek 5 seconds'],
+-    [['⇧', '←/→'], 'Seek 30 seconds'],
+-    [['↑', '↓'], 'Volume'],
+-    [['N'], 'Next track'],
+-    [['P'], 'Previous, or restart the track'],
+-    [['M'], 'Mute'],
+-    [['S'], 'Shuffle'],
+-    [['R'], 'Repeat: off, all, one'],
+-    [['F'], 'Favourite what is playing'],
+-  ]],
+-  ['Getting around', [
+-    [['/'], 'Search the library'],
+-    [['⌘', 'K'], 'Everything, by name'],
+-    [['Q'], 'Queue panel'],
+-    [['V'], 'Immersive visualiser'],
+-    [['E'], 'The Sound page'],
+-    [['?'], 'This list'],
+-    [['Esc'], 'Close whatever is open'],
+-  ]],
+-  ['The library', [
+-    [['⌘', 'Z'], 'Undo the last change'],
+-    [['⌘', '⇧', 'Z'], 'Redo it'],
+-  ]],
+-  ['Sound', [
+-    [['B'], 'Bypass the rack — A/B it'],
+-  ]],
+-  ['In the visualiser', [
+-    [['D'], 'The turntable'],
+-    [['L'], 'Lyrics, when there are any'],
+-  ]],
+-];
++/*
++ * Every shortcut in the application, registered once.
++ *
++ * This used to be two lists — a `switch` that did the work and a separate array
++ * that drew the overlay — and the README said outright that they were not the
++ * same list and could not be kept in step by hand. They had already drifted:
++ * ⌘Y ran redo and appeared in neither the overlay nor the documentation.
++ *
++ * Order is priority, and two pairs here depend on it. "?" is registered before
++ * "/" because Shift is held to type it on most layouts and arrives as Shift+"/"
++ * on the rest, which is the same physical key as search. And Redo is registered
++ * before Undo so that ⌘⇧Z is not swallowed by the ⌘Z that would otherwise
++ * match it first.
++ */
++function registerKeys() {
++  const K = keys.bind;
++
++  K({ id: 'play', group: 'Playback', combo: 'Space', label: 'Play or pause',
++      run: () => { player.toggle(); } });
++  K({ id: 'seek-fwd', group: 'Playback', combo: 'ArrowRight', label: 'Seek 5 seconds',
++      display: ['←', '→'], note: ['⇧', '←/→', 'Seek 30 seconds'],
++      run: (e) => { player.seek(player.state.time + (e.shiftKey ? 30 : 5)); } });
++  K({ id: 'seek-back', group: 'Playback', combo: 'ArrowLeft', label: 'Seek back 5 seconds', hidden: true,
++      run: (e) => { player.seek(player.state.time - (e.shiftKey ? 30 : 5)); } });
++  K({ id: 'volume-up', group: 'Playback', combo: 'ArrowUp', label: 'Volume', display: ['↑', '↓'],
++      run: () => { player.setVolume(player.state.volume + 0.05); } });
++  K({ id: 'volume-down', group: 'Playback', combo: 'ArrowDown', label: 'Volume down', hidden: true,
++      run: () => { player.setVolume(player.state.volume - 0.05); } });
++  K({ id: 'next', group: 'Playback', combo: 'N', label: 'Next track',
++      run: () => { player.next(false); } });
++  K({ id: 'prev', group: 'Playback', combo: 'P', label: 'Previous, or restart the track',
++      run: () => { player.prev(); } });
++  K({ id: 'mute', group: 'Playback', combo: 'M', label: 'Mute',
++      run: () => { player.toggleMute(); } });
++  K({ id: 'shuffle', group: 'Playback', combo: 'S', label: 'Shuffle',
++      run: () => { player.setShuffle(); toast(player.state.shuffle ? 'Shuffle on' : 'Shuffle off'); } });
++  K({ id: 'repeat', group: 'Playback', combo: 'R', label: 'Repeat: off, all, one',
++      run: () => { player.cycleRepeat(); toast('Repeat: ' + player.state.repeat); } });
++  K({ id: 'favourite', group: 'Playback', combo: 'F', label: 'Favourite what is playing',
++      run: () => {
++        const track = player.state.current;
++        if (!track) { toast('Nothing playing to favourite'); return; }
++        toast(lib.toggleFavourite(track.id)
++          ? `Favourited “${track.title}”`
++          : `Removed “${track.title}” from favourites`);
++      } });
++
++  // Before search: the same physical key produces both on a lot of layouts.
++  K({ id: 'shortcuts', group: 'Getting around', combo: ['?', 'Shift+/'], label: 'This list',
++      run: () => { showShortcuts(); } });
++  K({ id: 'search', group: 'Getting around', combo: '/', label: 'Search the library',
++      run: () => { $('#search')?.focus(); } });
++  /* The palette, not the search field. Cmd-K means "let me type what I want"
++     everywhere else, and Sonora has forty actions that were previously only
++     reachable by knowing where they lived. */
++  K({ id: 'palette', group: 'Getting around', combo: 'Mod+K', label: 'Everything, by name',
++      run: () => { togglePalette(); } });
++  K({ id: 'queue', group: 'Getting around', combo: 'Q', label: 'Queue panel',
++      run: () => { toggleQueuePane(); } });
++  K({ id: 'stage', group: 'Getting around', combo: 'V', label: 'Immersive visualiser',
++      run: () => { toggleStage(backdrop); } });
++  K({ id: 'sound', group: 'Getting around', combo: 'E', label: 'The Sound page',
++      run: () => { location.hash = '#/sound'; } });
++  K({ id: 'escape', group: 'Getting around', combo: 'Escape', label: 'Close whatever is open',
++      passive: true });
++
++  /* Redo first, so ⌘⇧Z is not taken by the ⌘Z below it. Neither fires while a
++     text field has the caret — inside the edit dialog ⌘Z has to mean "undo what
++     I just typed", which is the browser's job and not ours. */
++  /* `alt` prints the second spelling in the overlay. ⌘Y is here because Windows
++     users reach for it, and it is *shown* because a working shortcut nobody has
++     written down is exactly the drift this table exists to stop — it was in the
++     handler and in neither list for two releases. "?" carries no `alt`, because
++     its second form is Shift and the same physical key, which is how you type a
++     question mark rather than a different shortcut. */
++  K({ id: 'redo', group: 'The library', combo: ['Mod+Shift+Z', 'Mod+Y'], label: 'Redo it',
++      alt: 'Mod+Y', run: () => { runUndo(true); } });
++  K({ id: 'undo', group: 'The library', combo: 'Mod+Z', label: 'Undo the last change',
++      run: () => { runUndo(false); } });
++
++  // A/B the whole rack from anywhere: the only way to hear what an equaliser is
++  // actually doing is to take it out and put it back.
++  K({ id: 'bypass', group: 'Sound', combo: 'B', label: 'Bypass the rack — A/B it',
++      run: () => {
++        rack.set({ on: !rack.state.on });
++        toast(rack.state.on ? 'Rack in' : 'Rack bypassed');
++      } });
++}
+ 
+ let shortcutSheet = null;
+ 
+ function showShortcuts() {
+   if (shortcutSheet) { shortcutSheet.close(); shortcutSheet = null; return; }
+   const body = el('div', { class: 'keys' });
+-  for (const [group, rows] of SHORTCUTS) {
++  /* Rendered from the same table the handler dispatches from, so a shortcut
++     cannot exist without appearing here and cannot appear here without
++     existing. */
++  for (const [group, rows] of keys.groups()) {
+     const table = el('dl', { class: 'keys-list' });
+-    for (const [keys, what] of rows) {
+-      table.appendChild(el('dt', {}, keys.map((k) => el('kbd', { text: k }))));
+-      table.appendChild(el('dd', { text: what }));
++    for (const b of rows) {
++      table.appendChild(el('dt', {}, (b.display || keys.caps(b.combo)).map((k) => el('kbd', { text: k }))));
++      table.appendChild(el('dd', { text: b.label }));
++      if (b.alt) {
++        table.appendChild(el('dt', {}, keys.caps(b.alt).map((k) => el('kbd', { text: k }))));
++        table.appendChild(el('dd', { class: 'keys-alt', text: b.label }));
++      }
++      if (b.note) {
++        table.appendChild(el('dt', {}, b.note.slice(0, -1).map((k) => el('kbd', { text: k }))));
++        table.appendChild(el('dd', { text: b.note[b.note.length - 1] }));
++      }
+     }
+     body.appendChild(el('section', { class: 'keys-col' },
+       el('h3', { class: 'keys-group', text: group }), table));
+@@ -700,63 +773,16 @@ async function runUndo(redo) {
+ }
+ 
+ function bindKeys() {
++  registerKeys();
+   addEventListener('keydown', (e) => {
+     const t = e.target;
+     const typing = t instanceof HTMLElement &&
+       (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+-
+-    // "?" first, and before the modifier gate below: Shift is held to type it
+-    // on most layouts, and on the ones that report the unshifted key instead
+-    // it arrives as Shift+"/" — which is the same physical key as search, so
+-    // this has to be settled before "/" claims it.
+-    if (!typing && (e.key === '?' || (e.key === '/' && e.shiftKey))) {
+-      e.preventDefault(); showShortcuts(); return;
+-    }
+-    if (e.key === '/' && !typing) { e.preventDefault(); $('#search')?.focus(); return; }
+-    /* The palette, not the search field. Cmd-K means "let me type what I want"
+-       everywhere else, and Sonora has forty actions that were previously only
+-       reachable by knowing where they lived. "/" still goes to the search box
+-       for anyone who wants to search the library specifically. */
+-    if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); togglePalette(); return; }
+-    /* Undo, but not while a text field has the caret: inside the edit dialog
+-       ⌘Z has to mean "undo what I just typed", which is the browser's job and
+-       not ours. Ctrl-Y is here because Windows users reach for it. */
+-    if (!typing && (e.metaKey || e.ctrlKey)) {
+-      if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); runUndo(e.shiftKey); return; }
+-      if (e.key === 'y' || e.key === 'Y') { e.preventDefault(); runUndo(true); return; }
+-    }
+-    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+-
+-    switch (e.key) {
+-      case ' ': e.preventDefault(); player.toggle(); break;
+-      case 'ArrowRight': e.preventDefault(); player.seek(player.state.time + (e.shiftKey ? 30 : 5)); break;
+-      case 'ArrowLeft': e.preventDefault(); player.seek(player.state.time - (e.shiftKey ? 30 : 5)); break;
+-      case 'ArrowUp': e.preventDefault(); player.setVolume(player.state.volume + 0.05); break;
+-      case 'ArrowDown': e.preventDefault(); player.setVolume(player.state.volume - 0.05); break;
+-      case 'n': case 'N': player.next(false); break;
+-      case 'p': case 'P': player.prev(); break;
+-      case 's': case 'S': player.setShuffle(); toast(player.state.shuffle ? 'Shuffle on' : 'Shuffle off'); break;
+-      case 'r': case 'R': player.cycleRepeat(); toast('Repeat: ' + player.state.repeat); break;
+-      case 'm': case 'M': player.toggleMute(); break;
+-      case 'f': case 'F': {
+-        const track = player.state.current;
+-        if (!track) { toast('Nothing playing to favourite'); break; }
+-        toast(lib.toggleFavourite(track.id)
+-          ? `Favourited “${track.title}”`
+-          : `Removed “${track.title}” from favourites`);
+-        break;
+-      }
+-      case 'q': case 'Q': toggleQueuePane(); break;
+-      case 'v': case 'V': toggleStage(backdrop); break;
+-      // A/B the whole rack from anywhere: the only way to hear what an
+-      // equaliser is actually doing is to take it out and put it back.
+-      case 'b': case 'B':
+-        rack.set({ on: !rack.state.on });
+-        toast(rack.state.on ? 'Rack in' : 'Rack bypassed');
+-        break;
+-      case 'e': case 'E': location.hash = '#/sound'; break;
+-      default: break;
+-    }
++    /* The dispatcher does not preventDefault — deciding whether the browser
++       keeps a keystroke is this layer's business, not the table's. Everything
++       matched here is claimed, because every one of them means something in the
++       application that it should not also mean in the page. */
++    if (keys.dispatch(e, { typing })) e.preventDefault();
+   });
+ }
+ 
+diff --git a/js/db.js b/js/db.js
+index ab195b7..66f7ea4 100644
+--- a/js/db.js
++++ b/js/db.js
+@@ -140,3 +140,31 @@ export async function usage() {
+     return est ? { used: est.usage || 0, quota: est.quota || 0 } : null;
+   } catch { return null; }
+ }
++
++/*
++ * Whether the browser has promised to keep any of this.
++ *
++ * Everything Sonora lets you change is an overlay in here — playlists,
++ * favourites, tag corrections, the covers you chose, racks bound to records,
++ * every hour of listening it has ever counted. None of it is written to your
++ * files, which is the whole point and is also the risk: without a persistence
++ * grant an origin's storage is *best-effort*, and a browser short of room may
++ * evict the lot without asking and without a way back. There is no server copy,
++ * because there is no server.
++ *
++ * Asking is cheap and the answer is worth showing rather than assuming. On
++ * Firefox this prompts; on Chromium it is decided from how the site is used, so
++ * the honest thing is to ask once there is something to lose and then report
++ * whatever came back.
++ */
++export async function persisted() {
++  try { return !!(await navigator.storage?.persisted?.()); } catch { return false; }
++}
++
++export async function requestPersist() {
++  try {
++    if (!navigator.storage?.persist) return { supported: false, granted: false };
++    if (await navigator.storage.persisted()) return { supported: true, granted: true };
++    return { supported: true, granted: !!(await navigator.storage.persist()) };
++  } catch { return { supported: false, granted: false }; }
++}
+diff --git a/js/keys.js b/js/keys.js
+new file mode 100644
+index 0000000..42016fc
+--- /dev/null
++++ b/js/keys.js
+@@ -0,0 +1,183 @@
++/* keys.js — one table of shortcuts, read by both the hands and the help.
++ *
++ * There were two lists. A `switch` on a keystroke did the work, and a separate
++ * hand-written array drew the `?` overlay, and the README said so plainly:
++ * "It is a second list rather than a projection of the key handler — this
++ * README claimed otherwise until recently and it was not true." Two lists drift
++ * the moment one of them is edited, and this pair had: ⌘Y ran redo in the
++ * handler and appeared in neither the overlay nor the documentation.
++ *
++ * So the table is the truth. `bind()` registers one, the handler dispatches
++ * from it and the overlay renders from it, and a shortcut that is not in here
++ * does not exist.
++ *
++ * WHAT A BINDING IS
++ *
++ *   id      stable, and never displayed — it is the name an override is stored
++ *           under, so renaming one silently drops somebody's remapping.
++ *   combo   'Space', 'ArrowRight', 'Mod+K', 'Mod+Shift+Z'. `Mod` is ⌘ on a Mac
++ *           and Ctrl everywhere else, which is the only difference between the
++ *           two that anybody wants to think about. An array offers alternatives:
++ *           "?" arrives as itself on some layouts and as Shift+/ on others.
++ *   group   the heading it sits under in the overlay.
++ *   label   what it does, in the words the overlay will use.
++ *   run     what to do. Returns false to decline, and the next match is tried.
++ *   active  optional: whether this binding applies at all right now. The stage's
++ *           own keys are registered by the stage and are inert while it is shut,
++ *           which is what lets them live in the same table as everything else.
++ *   note    optional documentation-only row printed beneath — Shift and an
++ *           arrow is not a second binding, it is the same one told to go
++ *           further, and the overlay should still say so.
++ *   passive optional: documented but not dispatched here, for keys the platform
++ *           or a component already owns. Escape is the whole of that category.
++ *
++ * WHAT IT DELIBERATELY DOES NOT DO
++ *
++ * There is no chord support and no per-route scoping beyond `active`. Both are
++ * easy to add and neither is needed by anything here, and a dispatcher with
++ * features nothing uses is a dispatcher nobody can read.
++ */
++
++const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
++const OVERRIDES = 'sonora:keys';
++
++const bindings = [];
++let overrides = read();
++
++function read() {
++  try { return JSON.parse(localStorage.getItem(OVERRIDES) || '{}') || {}; } catch { return {}; }
++}
++function write() {
++  try { localStorage.setItem(OVERRIDES, JSON.stringify(overrides)); } catch { /* private */ }
++}
++
++/** Registers a binding. Order is priority: the first match wins. */
++export function bind(spec) {
++  bindings.push(spec);
++  return () => {
++    const i = bindings.indexOf(spec);
++    if (i >= 0) bindings.splice(i, 1);
++  };
++}
++
++/** Every binding, with its override applied — for the overlay and for remapping. */
++export function all() {
++  return bindings.map((b) => ({ ...b, combo: comboOf(b), custom: !!overrides[b.id] }));
++}
++
++/* The order the overlay reads in, declared rather than inherited from whichever
++   module happened to be imported first — the stage registers its two at module
++   load, which would otherwise put the visualiser above Playback. A group not
++   named here still appears, at the end. */
++const GROUP_ORDER = ['Playback', 'Getting around', 'The library', 'Sound', 'In the visualiser'];
++
++export function groups() {
++  const out = new Map();
++  for (const b of all()) {
++    if (b.hidden) continue;
++    if (!out.has(b.group)) out.set(b.group, []);
++    out.get(b.group).push(b);
++  }
++  const rank = (g) => { const i = GROUP_ORDER.indexOf(g); return i < 0 ? GROUP_ORDER.length : i; };
++  return [...out].sort((a, b) => rank(a[0]) - rank(b[0]));
++}
++
++const comboOf = (b) => overrides[b.id] || b.combo;
++
++/** Point a binding at a different combo, or `null` to put it back. */
++export function remap(id, combo) {
++  if (combo) overrides[id] = combo; else delete overrides[id];
++  write();
++}
++export function resetAll() { overrides = {}; write(); }
++
++/** What else is already on this combo — so a remapping UI can say so. */
++export function conflicts(id, combo) {
++  return all().filter((b) => b.id !== id && !b.passive &&
++    [].concat(b.combo).some((c) => sameCombo(c, combo)));
++}
++
++/* ------------------------------------------------------------------ parsing */
++
++/*
++ * A combo is parsed rather than pattern-matched, so that a remapping stored as
++ * a string is exactly as good as one written here by hand.
++ *
++ * Letters compare case-insensitively and printable keys compare by what the
++ * layout produced, which is the difference between a shortcut that works on an
++ * AZERTY keyboard and one that does not.
++ */
++function parse(combo) {
++  const parts = String(combo).split('+');
++  const key = parts.pop();
++  const mods = parts.map((p) => p.toLowerCase());
++  return {
++    key,
++    mod: mods.includes('mod'),
++    shift: mods.includes('shift'),
++    alt: mods.includes('alt'),
++  };
++}
++
++const sameKey = (a, b) => a === b ||
++  (a.length === 1 && b.length === 1 && a.toLowerCase() === b.toLowerCase());
++
++function sameCombo(a, b) {
++  const x = parse(a), y = parse(b);
++  return sameKey(x.key, y.key) && x.mod === y.mod && x.shift === y.shift && x.alt === y.alt;
++}
++
++function matches(combo, e) {
++  const c = parse(combo);
++  const key = e.key === ' ' ? 'Space' : e.key;
++  if (!sameKey(c.key, key)) return false;
++  const mod = e.metaKey || e.ctrlKey;
++  if (c.mod !== mod) return false;
++  if (c.alt !== e.altKey) return false;
++  /* Shift is only required to be *absent* where the binding says nothing about
++     it and the key is one Shift does not change. Demanding it be absent for
++     "?" would reject the layouts that need Shift to type a "?" at all. */
++  if (c.shift && !e.shiftKey) return false;
++  if (!c.shift && e.shiftKey && c.key.length > 1) return false;
++  return true;
++}
++
++/* ------------------------------------------------------------------ display */
++
++const GLYPH = {
++  Mod: MAC ? '⌘' : 'Ctrl',
++  Shift: '⇧',
++  Alt: MAC ? '⌥' : 'Alt',
++  ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓',
++  Escape: 'Esc',
++};
++
++/** A combo as a list of keycap strings, or whatever the binding says instead.
++ *  Seek is one binding that reads Shift to decide how far — printing only "→"
++ *  for it is accurate and useless, so it may say "← →" and mean it. */
++export function caps(combo) {
++  const first = [].concat(combo)[0];
++  return String(first).split('+').map((p) => {
++    const k = p === 'Mod' || p === 'Shift' || p === 'Alt' ? p : p;
++    return GLYPH[k] || (k.length === 1 ? k.toUpperCase() : k);
++  });
++}
++
++/* ----------------------------------------------------------------- dispatch */
++
++/**
++ * Runs the first binding that matches. Returns true if one did, so the caller
++ * owns the decision to preventDefault — the handler here should not be deciding
++ * whether the browser gets to keep a keystroke.
++ */
++export function dispatch(e, { typing }) {
++  for (const b of bindings) {
++    if (b.passive) continue;
++    if (typing && !b.allowTyping) continue;
++    if (b.active && !b.active()) continue;
++    if (![].concat(comboOf(b)).some((c) => matches(c, e))) continue;
++    if (b.run(e) === false) continue;
++    return b;
++  }
++  return null;
++}
+diff --git a/js/stage.js b/js/stage.js
+index ba3c242..3c66099 100644
+--- a/js/stage.js
++++ b/js/stage.js
+@@ -18,6 +18,7 @@ import * as lyrics from './lyrics.js';
+ import * as peakmap from './peaks.js';
+ import { tick, animate, spring, draggable, settled, ease, reduceMotion } from './motion.js';
+ import * as rack from './audio.js';
++import * as keys from './keys.js';
+ 
+ const MODE_KEY = 'sonora:viz';
+ const DECK_KEY = 'sonora:deck';
+@@ -32,6 +33,12 @@ export const storedMode = () => {
+ 
+ let open = null;                 // teardown for the live stage, or null
+ 
++/* What an open stage lets the two shared shortcuts do. Null while it is shut,
++   which is how bindings registered once at module load stay inert until there
++   is a stage for them to act on — and stay in the `?` overlay meanwhile, so the
++   list is the whole list rather than the list of what happens to be on screen. */
++let handlers = null;
++
+ export const isOpen = () => !!open;
+ 
+ export function toggleStage(backdrop) {
+@@ -601,25 +608,24 @@ export function openStage(backdrop) {
+     if (t) { paintArt(artImg, t.albumKey); paintArt(label, t.albumKey); }
+   });
+ 
++  /* Escape stays a private handler on the capture phase, because closing the
++     thing in front of you has to beat whatever is behind it and that is a
++     question of ordering rather than of binding. */
+   const onKey = (e) => {
+-    if (e.key === 'Escape') { e.stopPropagation(); closeStage(); return; }
+-    // Only while the stage is open, and only when there is something to show:
+-    // a key that does nothing on most tracks is a key nobody learns.
+-    if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey && !e.altKey && words) {
+-      e.stopPropagation();
+-      lyricBtn.click();
+-      return;
+-    }
+-    /* Not gated on anything, unlike L: the deck is there for every track,
+-       and the arrow keys the arm answers to are handled on the arm itself
+-       so they only apply when it has the focus. */
+-    if ((e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+-      e.stopPropagation();
+-      setDeck(!deckOn);
+-    }
++    if (e.key === 'Escape') { e.stopPropagation(); closeStage(); }
+   };
+   document.addEventListener('keydown', onKey, true);
+ 
++  /* The two stage keys live in the shared table and are registered once, at
++     module load — see the bottom of this file. All an open stage does is hand
++     them something to call. */
++  handlers = {
++    // Only while there is something to show: a key that does nothing on most
++    // tracks is a key nobody learns.
++    lyrics: () => (words ? (lyricBtn.click(), true) : false),
++    deck: () => { setDeck(!deckOn); return true; },
++  };
++
+   paint();
+   paintState();
+   /* Restored, because which face the stage shows is a way of listening rather
+@@ -641,6 +647,7 @@ export function openStage(backdrop) {
+     offTrack(); offState(); offArt(); offLyrics(); offSpec();
+     offPeaks();
+     document.removeEventListener('keydown', onKey, true);
++    handlers = null;
+     arm.removeEventListener('pointerdown', onArmDown);
+     arm.removeEventListener('pointermove', onArmMove);
+     arm.removeEventListener('pointerup', onArmUp);
+@@ -656,3 +663,25 @@ export function openStage(backdrop) {
+     $('#playerbar')?.querySelector('.pb-stage')?.focus?.();
+   };
+ }
++
++/* ------------------------------------------------------------------ keys
++ *
++ * Registered at module load rather than when a stage opens, so that both appear
++ * in the keyboard overlay whether or not the immersive view is up. `active`
++ * decides whether either one does anything; `run` returning false declines the
++ * keystroke and lets the next binding have it. */
++keys.bind({
++  id: 'stage-lyrics', group: 'In the visualiser', combo: 'L',
++  label: 'Lyrics, when there are any',
++  active: () => !!handlers,
++  run: () => handlers.lyrics(),
++});
++keys.bind({
++  id: 'stage-deck', group: 'In the visualiser', combo: 'D',
++  label: 'The turntable',
++  /* Not gated on anything, unlike L: the deck is there for every track, and the
++     arrow keys the arm answers to are handled on the arm itself so they only
++     apply when it has the focus. */
++  active: () => !!handlers,
++  run: () => handlers.deck(),
++});
+diff --git a/js/views.js b/js/views.js
+index 4850321..aecb0c0 100644
+--- a/js/views.js
++++ b/js/views.js
+@@ -2626,7 +2626,53 @@ function viewSettings(host) {
+     note.textContent = u
+       ? `${fmtBytes(u.used)} used${u.quota ? ` of ${fmtBytes(u.quota)} available` : ''}`
+       : `${fmtCount(lib.trackCount(), 'track')} indexed`;
++    /* Room runs out quietly. An origin at its ceiling stops being able to write
++       — a new import half-lands, a playlist does not save — and nothing about
++       that failure names the cause unless somebody says so first. */
++    if (u && u.quota && u.used / u.quota > 0.8) {
++      note.appendChild(el('span', { class: 'settings-warn',
++        text: ` · ${Math.round(100 * u.used / u.quota)}% of what this browser allows` }));
++    }
++  });
++
++  /*
++   * Whether the browser has promised to keep any of it.
++   *
++   * This is the row that matters most on this page and it is the one that did
++   * not exist. Everything Sonora lets you change lives in IndexedDB and nowhere
++   * else — playlists, favourites, tag corrections, chosen covers, bound racks,
++   * every hour of listening. Without a persistence grant that is *best-effort*
++   * storage, which a browser short of room may evict without asking, and there
++   * is no server copy to come back from, because there is no server.
++   */
++  const keepNote = el('div', { class: 'settings-note', text: 'Checking…' });
++  const keepBtn = el('button', { class: 'btn ghost sm', text: 'Ask to keep it', hidden: true });
++  storage.appendChild(el('div', { class: 'settings-row' },
++    el('div', { class: 'settings-ico', html: ico('cube') }),
++    el('div', { class: 'settings-text' },
++      el('div', { class: 'settings-name', text: 'Kept when the browser is short of room' }), keepNote),
++    el('div', { class: 'settings-actions' }, keepBtn)));
++
++  async function paintKeep() {
++    if (!navigator.storage?.persist) {
++      keepNote.textContent = 'This browser does not say either way.';
++      return;
++    }
++    const on = await db.persisted();
++    keepNote.textContent = on
++      ? 'Yes. Your library will not be evicted to make room.'
++      : 'Not yet — this browser may clear the library if it runs short of space.';
++    keepBtn.hidden = on;
++  }
++  keepBtn.addEventListener('click', async () => {
++    const r = await db.requestPersist();
++    // Chromium decides from how the site is used rather than by asking, so a
++    // refusal is a "not yet" rather than a no, and saying so is the honest form.
++    toast(r.granted ? 'The browser will keep your library'
++                    : 'The browser has not granted it yet — it often does once the app has been used a few times');
++    paintKeep();
+   });
++  paintKeep();
+ 
+   /* Whether the application itself opens without a network.
+    *
+-- 
+2.43.0
+
+
+From 91a5af32620b10a0b4c74665703368c3ecd4ea97 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 1 Sep 2026 21:05:46 +0000
+Subject: [PATCH 3/3] L1, L2, L3, L5, L6 and L16: ordering a wall, and finding
+ a row in it
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Six library changes, and two framework faults found by building them.
+
+L1 — SORTING ALBUMS AND ARTISTS
+
+Songs has had sortable column headers since the first release, because a table
+has somewhere to put them. Albums had four *view modes* and not one sort, and
+Artists had neither — so a wall of records was always in whatever order the
+index happened to hold it, and there was no way to ask for 1978, or the longest
+record, or the one nobody has played.
+
+A menu rather than a row of segmented buttons: eight keys in a segmented
+control is a wall of words competing with the four view modes beside it, where
+a menu is one button that says what the order currently is. Choosing the key
+that is already on turns it round, which is what a column header does and the
+thing people try first. Remembered per page. Hidden on the Floor, which orders
+itself by release year — that is the whole of what it is, and offering a
+control there that does nothing is worse than not offering one.
+
+L2 — PLAY COUNT AND LAST PLAYED
+
+Both counted since the first release, read by the smart shelves, and displayed
+nowhere: the application has been keeping a record of your listening and not
+showing it to you. Two columns in Songs, two sorts, and two more figures rolled
+up onto albums and artists during the reindex that already walks every track.
+
+A never-played row prints a dash and not a nought — "0" invites comparison with
+the numbers above it and there is nothing to compare; the point of the column is
+which rows are blank. `fmtAgo` writes the date as an age, because twenty rows of
+"14/03/2025" is not something anybody can scan; the exact date is in the title.
+
+L3 — RECENTLY PLAYED
+
+`history.recent` — sixty ids, newest first, written on every play and restored
+from IndexedDB — has existed since the first release and the only thing that
+ever read it was one button on Home. There was no page to go to, which makes
+"what was that?" a question this could not answer. Newest first and deliberately
+not sortable: it is a log, and the order is the information.
+
+L5 and L6 — GETTING TO A ROW
+
+A letter rail down the right edge, and typing. Letters the collection has
+nothing under stay drawn and go quiet: a rail that changes shape as a library
+grows is one nobody's hand can learn, and the gaps are information — a
+collection with no Q in it looks like one. Typing accumulates for three quarters
+of a second so "bea" finds Beacon rather than stopping at the first B, and it
+only takes over on the *second* character, because the single-letter transport
+shortcuts live on the same keys: "n" is next track, "no" is looking for
+Nocturne. Both match on whichever column the list is ordered by; jumping
+alphabetically through a list sorted by length is not a feature.
+
+The rail hangs on `.main` rather than inside `#view`, because a navigation aid
+appended to the scroller scrolls away with the thing it steers.
+
+L16 — TWO MORE SHELVES THE LIBRARY WRITES
+
+"Never played", oldest first, so the records that have been waiting longest come
+up — on a large collection that is the most useful question there is, and
+nothing had ever asked it. And "You used to play these": five plays or more and
+untouched for a year, which reads as a suggestion rather than an accusation. A
+record with two plays a year ago is one you tried; one with twenty is one you
+loved and forgot.
+
+TWO FAULTS FOUND WHILE BUILDING THEM
+
+`VirtualGrid.setItems` did not re-render. It called `measure()`, which only
+rebuilds when the *geometry* changes — and reordering a list of the same length
+at the same width changes neither the column count nor the row height, so the
+cells kept their old contents and a re-sorted grid showed the old order. The
+list next door has always recycled on new data; the grid had only ever been
+handed a different *count*, so nothing had noticed. Sorting Artists is the first
+thing that asked it to.
+
+`scrollToIndex` landed short, twice over. It computed `i * rowHeight` as an
+absolute scroll position while `update()` had always subtracted the sizer's
+offset within the scroller — so a jump missed by however much page sits above
+the list, about four rows on Songs. And it took no account of a sticky column
+header, so the row it did reach arrived forty pixels underneath the thing naming
+its columns: scrolled to, and invisible. A sticky element pins at the
+scrollport's padding edge plus its own offset, so that is what is measured —
+rather than assumed, because the album page has no header and the queue has a
+different one.
+
+Verified: smoke, interactions, audio and layout green; looks clean at 57
+surfaces over two runs, with the lint reporting nothing on any of the new
+surfaces.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01JjdT29yrXTcWsnnPfvxBD9
+---
+ README.md          |  34 +++++
+ css/components.css |  74 ++++++++++
+ css/views.css      |   6 +
+ js/app.js          |   1 +
+ js/library.js      |  55 +++++++
+ js/ui.js           |  24 ++-
+ js/util.js         |  24 +++
+ js/views.js        | 356 ++++++++++++++++++++++++++++++++++++++++++---
+ js/virtual.js      |  60 +++++++-
+ 9 files changed, 610 insertions(+), 24 deletions(-)
+
+diff --git a/README.md b/README.md
+index eebc83f..9b9c36f 100644
+--- a/README.md
++++ b/README.md
+@@ -197,6 +197,40 @@ returns every track that satisfies both.
+ `suspect` is only ever true of a track that has actually been analysed. It
+ finds what is known rather than implying that everything else is clean.
+ 
++## Ordering, and finding
++
++Songs has had sortable columns since the first release. Albums had four *view
++modes* and not one sort; Artists had neither — so the wall was always in
++whatever order the index happened to hold, and there was no way to ask for
++1978, or for the longest record, or for the one nobody has ever played. Both
++pages have a sort control now: artist, title, year, recently added, length,
++track count, times played, last played on Albums; name, albums, tracks, length
++and the same two listening figures on Artists. The choice is remembered per
++page. The Floor orders itself by release year — that is the whole of what it is
++— so the control is hidden there rather than offered and ignored.
++
++**Play count and last played are on screen.** Both have been counted since the
++first release and neither had anywhere to appear, which meant the app was
++keeping a record of your listening and not showing it to you. They are two more
++columns in Songs, two more sorts, and two more things the smart shelves can ask
++about. A never-played row prints a dash rather than a nought: the point of the
++column is which rows are blank.
++
++**A letter rail, and type-to-jump.** A fifty-thousand track list is virtualised
++so it costs nothing to draw, and the only way to reach the S's was to throw the
++scrollbar and watch. Letters down the right edge jump to the first row under
++each; letters the collection has nothing under are still drawn and dimmed,
++because a rail that changes shape as the library grows is one your hand cannot
++learn. Typing does the same thing more precisely — "bea" finds *Beacon* rather
++than stopping at the first B — and matches on whichever column the list is
++ordered by, since jumping alphabetically through a list sorted by length is not
++a feature.
++
++**Recently played is a page now.** The last sixty tracks have been kept since
++the first release and the only thing that read them was one button on Home,
++which makes "what was that?" a question the app could not answer. Newest first
++and deliberately not sortable: it is a log, and the order is the information.
++
+ ## Shelves that describe themselves
+ 
+ `+` beside Playlists → **Smart shelf…**
+diff --git a/css/components.css b/css/components.css
+index f9f918a..025ac1a 100644
+--- a/css/components.css
++++ b/css/components.css
+@@ -1222,6 +1222,80 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
+ 
+ @media (max-width: 860px) { .trow-dr { display: none; } }
+ 
++/* What you have done with the file, next to what the file is.
++ *
++ * Both are counted from the first release and neither had anywhere to appear.
++ * A never-played row prints an em dash in the dim ink rather than a nought:
++ * "0" invites you to compare it with the numbers above and there is nothing to
++ * compare — the point of the column is which rows are blank. */
++.trow-plays, .trow-played {
++  flex: none;
++  text-align: right;
++  font-family: var(--mono);
++  font-size: calc(11px * var(--scale));
++  letter-spacing: .04em;
++  color: var(--text-2);
++  font-variant-numeric: tabular-nums;
++}
++.trow-plays { width: 40px; }
++.trow-played { width: 44px; }
++.trow-plays.is-none, .trow-played.is-none { color: var(--text-3); opacity: .55; }
++.thead .trow-plays, .thead .trow-played { font-size: calc(10px * var(--scale)); }
++
++/* They are the first thing to go: what a track is beats what you did with it
++   when there is only room for one. */
++@media (max-width: 1180px) { .trow-played { display: none; } }
++@media (max-width: 1040px) { .trow-plays { display: none; } }
++
++/* ---------------------------------------------------------------- letter rail
++
++   Pinned against the right edge of the list it steers, vertically centred, and
++   out of the way: the whole thing is 20px wide and sits at a third opacity
++   until the pointer is near it. A navigation aid that competes with the
++   library for attention is one people turn off.
++
++   It lives on `.main` rather than inside the scroller, so it stays put while
++   the list moves past it. */
++.az-rail {
++  position: absolute;
++  right: 4px;
++  top: 50%;
++  transform: translateY(-50%);
++  z-index: 4;
++  display: flex;
++  flex-direction: column;
++  align-items: stretch;
++  gap: 1px;
++  padding: 6px 3px;
++  opacity: .34;
++  transition: opacity var(--dur-2) var(--ease);
++}
++.az-rail:hover, .az-rail:focus-within { opacity: 1; }
++
++.az-key {
++  appearance: none;
++  border: 0;
++  background: none;
++  cursor: pointer;
++  width: 16px;
++  padding: 0;
++  font-family: var(--mono);
++  font-size: calc(9px * var(--scale));
++  line-height: 1.25;
++  letter-spacing: 0;
++  color: var(--text-2);
++  transition: color var(--dur-1) linear;
++}
++.az-key:hover { color: var(--accent); }
++.az-key:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 1px; }
++/* Letters the collection has nothing under stay drawn and go quiet: the gaps
++   are information, and a rail that changes shape as the library grows is one
++   nobody's hand can learn. */
++.az-key.is-empty { color: var(--text-3); opacity: .35; cursor: default; }
++
++/* No room beside the list, and a 16px target is not a phone control anyway. */
++@media (max-width: 900px) { .az-rail { display: none; } }
++
+ /* ---------------------------------------------------------------- rule builder
+ 
+    One row per rule: a field, a condition, a value. The operators offered
+diff --git a/css/views.css b/css/views.css
+index 9b858e6..d90dd66 100644
+--- a/css/views.css
++++ b/css/views.css
+@@ -543,6 +543,12 @@
+    exactly the width of a 620px hero, and `nowrap` spends the shortfall on
+    whichever button has a label — Shuffle lost fifteen pixels of its own
+    name. The home hero already wrapped; every hero does now. */
++/* The sort button sits to the right of whatever else the toolbar holds — the
++   view modes on Albums, nothing at all on Artists — so it is pushed rather
++   than placed, and the toolbar reads the same on both. */
++.toolbar .sort-btn { margin-left: auto; }
++.sort-btn .sort-dir { font-family: var(--mono); opacity: .7; margin-left: -3px; }
++
+ .hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+ 
+ /* ------------------------------------------------------------------ grids */
+diff --git a/js/app.js b/js/app.js
+index 69b6770..e973082 100644
+--- a/js/app.js
++++ b/js/app.js
+@@ -31,6 +31,7 @@ const NAV = [
+   { route: 'albums', label: 'Albums', icon: 'album' },
+   { route: 'artists', label: 'Artists', icon: 'artist' },
+   { route: 'favourites', label: 'Favourites', icon: 'star' },
++  { route: 'recent', label: 'Recently played', icon: 'clock' },
+   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
+   { route: 'files', label: 'Files', icon: 'folder' },
+   { route: 'circles', label: 'Analysis', icon: 'circles' },
+diff --git a/js/library.js b/js/library.js
+index 00ee950..f00aec1 100644
+--- a/js/library.js
++++ b/js/library.js
+@@ -435,6 +435,9 @@ export function reindex() {
+         artistKey: t.artistKey, year: t.year || 0, tracks: [],
+         duration: 0, addedAt: 0, sort: norm(t.album), accent: null,
+         named: false,
++        // Rolled up from the tracks below, so a wall of records can be ordered
++        // by listening without walking every track again per sort.
++        plays: 0, lastPlayed: 0,
+       });
+     }
+     // `named` records whether any file in the album actually claimed this
+@@ -446,6 +449,8 @@ export function reindex() {
+     if (!al.accent && t.accent) al.accent = t.accent;
+     if (t.year && (!al.year || t.year < al.year)) al.year = t.year;
+     if (t.addedAt > al.addedAt) al.addedAt = t.addedAt;
++    al.plays += t.playCount || 0;
++    if ((t.lastPlayed || 0) > al.lastPlayed) al.lastPlayed = t.lastPlayed;
+   }
+ 
+   // Albums fold together before artists are counted, because folding one in
+@@ -460,11 +465,17 @@ export function reindex() {
+       artistBy.set(t.artistKey, ar = {
+         key: t.artistKey, name: t.albumArtist, tracks: [],
+         albums: new Set(), duration: 0, sort: norm(sortName(t.albumArtist)),
++        // Rolled up here rather than recomputed per sort: every list that wants
++        // to order by listening asks the same question of the same objects, and
++        // the reindex is already walking every track.
++        plays: 0, lastPlayed: 0,
+       });
+     }
+     ar.tracks.push(t);
+     ar.albums.add(t.albumKey);
+     ar.duration += t.duration || 0;
++    ar.plays += t.playCount || 0;
++    if ((t.lastPlayed || 0) > ar.lastPlayed) ar.lastPlayed = t.lastPlayed;
+   }
+ 
+   for (const al of albumBy.values()) {
+@@ -602,10 +613,54 @@ export function sortTracks(list, key, dir = 1) {
+     // ascending and out of the way descending — either is better than
+     // pretending they are the most squashed masters in the library.
+     dr:     (a, b) => (a.dr || 0) - (b.dr || 0),
++    /* Both of these were counted from the first release and shown nowhere. A
++       never-played track and a never-played *anything* sort as zero, which puts
++       the untouched part of a collection together at one end — which is the
++       question people are usually asking when they sort by either. */
++    plays:  (a, b) => (a.playCount || 0) - (b.playCount || 0),
++    played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
+   }[key] || ((a, b) => cmpText(a.title, b.title));
+   return list.slice().sort((a, b) => by(a, b) * dir);
+ }
+ 
++/*
++ * Ordering a wall of records, and a page of artists.
++ *
++ * Songs has had sortable columns since the first release; Albums had four
++ * *view modes* and not one sort, and Artists had neither — so the wall was
++ * always in whatever order the index happened to hold it and there was no way
++ * to ask for 1978, or for the longest record, or for the one nobody has played.
++ *
++ * The comparators are written so that a missing value sorts as zero rather than
++ * dropping the row: an album with no year is a real album, and hiding it because
++ * a tag is absent would be the library lying about what is in it.
++ */
++export function sortAlbums(list, key, dir = 1) {
++  const by = {
++    artist: (a, b) => cmpText(a.artist, b.artist) || (a.year - b.year) || cmpText(a.title, b.title),
++    title:  (a, b) => cmpText(a.title, b.title),
++    year:   (a, b) => (a.year || 0) - (b.year || 0) || cmpText(a.artist, b.artist),
++    added:  (a, b) => (a.addedAt || 0) - (b.addedAt || 0),
++    length: (a, b) => (a.duration || 0) - (b.duration || 0),
++    tracks: (a, b) => a.tracks.length - b.tracks.length,
++    plays:  (a, b) => (a.plays || 0) - (b.plays || 0),
++    played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
++  }[key] || ((a, b) => cmpText(a.artist, b.artist));
++  return list.slice().sort((a, b) => by(a, b) * dir || cmpText(a.title, b.title));
++}
++
++export function sortArtists(list, key, dir = 1) {
++  const by = {
++    name:   (a, b) => cmpText(a.sort, b.sort),
++    albums: (a, b) => a.albums.size - b.albums.size,
++    tracks: (a, b) => a.tracks.length - b.tracks.length,
++    length: (a, b) => (a.duration || 0) - (b.duration || 0),
++    plays:  (a, b) => (a.plays || 0) - (b.plays || 0),
++    played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
++  }[key] || ((a, b) => cmpText(a.sort, b.sort));
++  return list.slice().sort((a, b) => by(a, b) * dir || cmpText(a.sort, b.sort));
++}
++
+ /**
+  * Ranked search across tracks, albums and artists. One linear pass with
+  * precomputed haystacks; ~2 ms over 50k tracks, so it runs on every keystroke.
+diff --git a/js/ui.js b/js/ui.js
+index 66361c7..cc7c65a 100644
+--- a/js/ui.js
++++ b/js/ui.js
+@@ -1,6 +1,6 @@
+ /* ui.js — shared widgets: artwork, track rows, menus, dialogs, toasts. */
+ 
+-import { el, ico, fmtTime, clamp, canDecode } from './util.js';
++import { el, ico, fmtTime, fmtAgo, clamp, canDecode } from './util.js';
+ import * as lib from './library.js';
+ import * as player from './player.js';
+ import { animate, ease, enter, spring, settled } from './motion.js';
+@@ -261,6 +261,11 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
+        almost nobody opens — it is the most useful number about a file that is
+        not its title, and a library sorted by it is a different library. */
+     if (columns.includes('dr')) html += '<div class="trow-dr"></div>';
++    /* Both counted since the first release and shown nowhere until now. A play
++       count is the only thing in the index that is a record of *you* rather
++       than of the file, which is a reason to be able to see it. */
++    if (columns.includes('plays')) html += '<div class="trow-plays"></div>';
++    if (columns.includes('played')) html += '<div class="trow-played"></div>';
+     if (columns.includes('duration')) html += '<div class="trow-time"></div>';
+     html += '<div class="trow-actions">' +
+       `<button class="icon-btn ghost trow-fav" aria-label="Favourite" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>` +
+@@ -335,6 +340,23 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
+       dr.classList.toggle('is-open', v >= 14);
+     }
+ 
++    const plays = row.querySelector('.trow-plays');
++    if (plays) {
++      const n = track.playCount || 0;
++      const text = n ? String(n) : '—';
++      if (plays.textContent !== text) plays.textContent = text;
++      plays.title = n ? `Played ${n} ${n === 1 ? 'time' : 'times'}` : 'Never played';
++      plays.classList.toggle('is-none', !n);
++    }
++
++    const played = row.querySelector('.trow-played');
++    if (played) {
++      const text = track.lastPlayed ? fmtAgo(track.lastPlayed) : '—';
++      if (played.textContent !== text) played.textContent = text;
++      played.title = track.lastPlayed ? new Date(track.lastPlayed).toLocaleString() : 'Never played';
++      played.classList.toggle('is-none', !track.lastPlayed);
++    }
++
+     const time = row.querySelector('.trow-time');
+     if (time) {
+       const text = track.duration ? fmtTime(track.duration) : '--:--';
+diff --git a/js/util.js b/js/util.js
+index e492a2e..243dbce 100644
+--- a/js/util.js
++++ b/js/util.js
+@@ -202,6 +202,30 @@ export const canDecode = (name) => !UNDECODABLE.has(ext(name));
+ /** "FLAC", "M4A" — the format's name, for saying what went wrong. */
+ export const formatName = (name) => (ext(name) || 'audio').toUpperCase();
+ 
++/**
++ * How long ago, in a column two characters wide.
++ *
++ * A list of dates is unreadable — twenty rows of "14/03/2025" tell you nothing
++ * you can compare at a glance. A list of ages is a shape: everything from this
++ * week reads as days, everything from a while back reads as months, and the
++ * gap between the two is what somebody scanning the column is looking for. The
++ * exact date is in the tooltip for when it is actually wanted.
++ */
++export function fmtAgo(ts) {
++  if (!ts) return '—';
++  const s = Math.max(0, (Date.now() - ts) / 1000);
++  if (s < 90) return 'now';
++  const m = s / 60;
++  if (m < 60) return Math.round(m) + 'm';
++  const h = m / 60;
++  if (h < 24) return Math.round(h) + 'h';
++  const d = h / 24;
++  if (d < 7) return Math.round(d) + 'd';
++  if (d < 60) return Math.round(d / 7) + 'w';
++  if (d < 730) return Math.round(d / 30.44) + 'mo';
++  return Math.round(d / 365.25) + 'y';
++}
++
+ export function fmtBytes(n) {
+   if (!n) return '0 B';
+   const u = ['B', 'KB', 'MB', 'GB'], i = Math.min(3, Math.floor(Math.log(n) / Math.log(1024)));
+diff --git a/js/views.js b/js/views.js
+index aecb0c0..c1e0527 100644
+--- a/js/views.js
++++ b/js/views.js
+@@ -5,7 +5,7 @@
+  * rendered directly, because 12 nodes are cheaper than the machinery.
+  */
+ 
+-import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText, formatName, norm } from './util.js';
++import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, fmtAgo, cmpText, formatName, norm } from './util.js';
+ import * as lib from './library.js';
+ import * as player from './player.js';
+ import * as db from './db.js';
+@@ -107,7 +107,7 @@ export const hasLiveSelection = () => {
+   return false;
+ };
+ 
+-function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel } = {}) {
++function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel, sortKey } = {}) {
+   let tracks = getTracks();
+ 
+   /* Building a thirty-track playlist used to be thirty right-clicks. Rows can
+@@ -177,6 +177,38 @@ function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel }
+     );
+   }
+ 
++  /*
++   * Type the name of the thing you want.
++   *
++   * Every file manager and every media player for thirty years has done this,
++   * and typing in a list here did nothing at all — on a fifty-thousand track
++   * library that means the only way to reach the S's is to throw the scrollbar
++   * and look. Letters accumulate for three quarters of a second, so "bea"
++   * finds *Beacon* rather than stopping at the first B, and the buffer clears
++   * on a pause the way everybody expects it to.
++   *
++   * It matches on whichever column the list is currently ordered by, because
++   * jumping alphabetically through a list sorted by length is not a feature,
++   * it is a bug that happens to move the scrollbar.
++   */
++  let buffer = '';
++  let bufferAt = 0;
++  const jumpKey = (t) => {
++    const k = sortKey && sortKey();
++    if (k === 'album') return t.album || '';
++    if (k === 'artist') return t.artist || '';
++    return t.title || '';
++  };
++  const jumpTo = (prefix) => {
++    const p = prefix.toLowerCase();
++    const i = tracks.findIndex((t) => norm(jumpKey(t)).startsWith(p));
++    if (i < 0) return false;
++    // Top of the viewport, not the middle: a jump is "show me from here", and
++    // centring buries the row you asked for under the ones before it.
++    list.scrollToIndex(i, 'start');
++    return true;
++  };
++
+   /* Escape clears; ctrl-A takes the lot — but only when the pointer is not in
+      a text field, or select-all in the search box would select the library. */
+   const onKey = (e) => {
+@@ -187,7 +219,21 @@ function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel }
+     if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey) && !typing) {
+       e.preventDefault();
+       selection.all(tracks);
++      return;
+     }
++    /* One printable character, no modifiers, nothing focused that wants it.
++       The single-letter transport shortcuts live on the same keys, so this
++       only takes over once a *second* character arrives inside the window —
++       "n" is next track, "no" is looking for Nocturne. */
++    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
++    if (e.key.length !== 1 || e.key === ' ') return;
++    const now = performance.now();
++    if (now - bufferAt > 750) buffer = '';
++    bufferAt = now;
++    const next = buffer + e.key;
++    if (next.length < 2) { buffer = next; return; }
++    if (jumpTo(next)) { buffer = next; e.preventDefault(); e.stopPropagation(); }
++    else buffer = next;
+   };
+   document.addEventListener('keydown', onKey);
+ 
+@@ -229,6 +275,8 @@ function columnHeader(columns, sortState, onSort) {
+   html += '<div class="trow-main"><button class="sortable" data-sort="title">Title</button></div>';
+   if (columns.includes('album')) html += '<div class="trow-album"><button class="sortable" data-sort="album">Album</button></div>';
+   if (columns.includes('dr')) html += '<div class="trow-dr"><button class="sortable" data-sort="dr" title="Dynamic range">DR</button></div>';
++  if (columns.includes('plays')) html += '<div class="trow-plays"><button class="sortable" data-sort="plays" title="How many times you have played it">Plays</button></div>';
++  if (columns.includes('played')) html += '<div class="trow-played"><button class="sortable" data-sort="played" title="When you last played it">Last</button></div>';
+   if (columns.includes('duration')) html += `<div class="trow-time"><button class="sortable" data-sort="duration">${ico('clock')}</button></div>`;
+   html += '<div class="trow-actions"></div>';
+   head.innerHTML = html;
+@@ -253,6 +301,117 @@ function columnHeader(columns, sortState, onSort) {
+   return head;
+ }
+ 
++/*
++ * The control that orders a wall.
++ *
++ * Songs has had sortable column headers since the first release, because a
++ * table has somewhere to put them. A grid of records has no columns, so the
++ * order was whatever the index happened to hold — and there was no way to ask
++ * for 1978, or the longest record, or the one nobody has ever played.
++ *
++ * A menu rather than a row of segmented buttons: eight keys in a segmented
++ * control is a wall of words competing with the four view modes beside it,
++ * where a menu is one button that says what the order currently is. Choosing
++ * the key that is already on turns it round, which is what a column header
++ * does and is the thing people try first.
++ *
++ * The choice is remembered per list, because how you like to look at your
++ * records is a way of working rather than a decision to retake every visit.
++ */
++function sortControl({ store, keys, fallback, onChange }) {
++  let state = { key: fallback, dir: 1 };
++  try {
++    const saved = JSON.parse(localStorage.getItem(store) || 'null');
++    if (saved && keys.some(([k]) => k === saved.key)) state = { key: saved.key, dir: saved.dir === -1 ? -1 : 1 };
++  } catch { /* private */ }
++
++  const labelOf = (k) => (keys.find(([key]) => key === k) || keys[0])[1];
++  const btn = el('button', { class: 'btn ghost sm sort-btn', 'aria-haspopup': 'menu' });
++
++  const paint = () => {
++    btn.innerHTML = ico('sliders') +
++      `<span>${labelOf(state.key)}</span>` +
++      `<span class="sort-dir" aria-hidden="true">${state.dir > 0 ? '↑' : '↓'}</span>`;
++    btn.setAttribute('aria-label',
++      `Sorted by ${labelOf(state.key).toLowerCase()}, ${state.dir > 0 ? 'ascending' : 'descending'}. Change`);
++    try { localStorage.setItem(store, JSON.stringify(state)); } catch { /* private */ }
++  };
++
++  btn.addEventListener('click', (e) => {
++    menu(keys.map(([k, label]) => ({
++      label,
++      checked: k === state.key,
++      // The arrow is on the row that is already chosen, because that is the
++      // one where picking it again means "the other way round".
++      hint: k === state.key ? (state.dir > 0 ? '↑' : '↓') : '',
++      onSelect: () => {
++        if (state.key === k) state.dir *= -1; else { state.key = k; state.dir = 1; }
++        paint();
++        onChange(state);
++      },
++    })), { anchor: e.currentTarget });
++  });
++
++  paint();
++  return { node: btn, get state() { return state; } };
++}
++
++/*
++ * The letter rail.
++ *
++ * A fifty-thousand track list is virtualised so it costs nothing to draw, and
++ * until now the only way to reach the S's was to throw the scrollbar and watch
++ * the rows go past. The rail is the oldest answer to that and it is still the
++ * right one — and it is nearly free here, because the sorted array already
++ * knows the index of the first row under every letter, so a jump is one
++ * `scrollTo` and no search.
++ *
++ * Letters the library has nothing under are still drawn, and dimmed. A rail
++ * that only shows the letters you own changes shape as the collection grows,
++ * which makes it something you have to read rather than something your hand
++ * learns — and the gaps are information: a collection with no Q in it looks
++ * like one.
++ */
++const RAIL_LETTERS = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
++
++function letterRail({ getItems, keyOf, onJump }) {
++  const node = el('div', { class: 'az-rail', role: 'navigation', 'aria-label': 'Jump to a letter' });
++  const buttons = new Map();
++  for (const ch of RAIL_LETTERS) {
++    const b = el('button', { class: 'az-key', text: ch, 'aria-label': `Jump to ${ch === '#' ? 'numbers' : ch}` });
++    b.addEventListener('click', () => {
++      const i = indexOf(ch);
++      if (i >= 0) onJump(i);
++    });
++    buttons.set(ch, b);
++    node.appendChild(b);
++  }
++
++  // A leading digit, a leading symbol and a leading article all belong under
++  // "#" rather than under whatever character happens to be first: the list is
++  // sorted by the same normalised key, so this has to agree with it.
++  const bucket = (v) => {
++    const c = norm(v).trim().charAt(0).toUpperCase();
++    return c >= 'A' && c <= 'Z' ? c : '#';
++  };
++
++  let first = new Map();
++  function indexOf(ch) { return first.has(ch) ? first.get(ch) : -1; }
++
++  function measure() {
++    const items = getItems();
++    first = new Map();
++    for (let i = 0; i < items.length; i++) {
++      const ch = bucket(keyOf(items[i]));
++      if (!first.has(ch)) first.set(ch, i);
++    }
++    for (const [ch, b] of buttons) b.classList.toggle('is-empty', !first.has(ch));
++  }
++
++  measure();
++  return { node, measure };
++}
++
+ /* ------------------------------------------------------------------ cards */
+ 
+ export function albumCard(album, { onOpen } = {}) {
+@@ -561,6 +720,38 @@ function viewHome(host) {
+     (a) => albumCard(a));
+   if (shelfOne) frag.appendChild(shelfOne);
+ 
++  /* Records you have never once played.
++   *
++   * `playCount` has been counted since the first release and nothing had ever
++   * asked it this question, which is a shame, because on a large collection it
++   * is the most useful one there is: not "what do you like" — every other shelf
++   * on this page answers that — but "what is in here that you have never
++   * heard". A local library accumulates records the way a shelf accumulates
++   * books, and the unplayed ones are invisible precisely because nothing ever
++   * surfaces them.
++   *
++   * Oldest first, so the ones that have been waiting longest come up.
++   */
++  const untouched = lib.state.albums
++    .filter((al) => !al.plays && al.tracks.length)
++    .sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
++  const shelfNew = shelf('Never played', untouched.slice(0, 10), (a) => albumCard(a));
++  if (shelfNew) frag.appendChild(shelfNew);
++
++  /* And records you used to play and have not been back to.
++   *
++   * The other half of the same idea, and the one that reads as a suggestion
++   * rather than as an accusation: something you played enough to mean it and
++   * have not touched in a year. A record with two plays a year ago is a record
++   * you tried; one with twenty is one you loved and forgot.
++   */
++  const YEAR = 365 * 24 * 3600 * 1000;
++  const lapsed = lib.state.albums
++    .filter((al) => al.plays >= 5 && al.lastPlayed && Date.now() - al.lastPlayed > YEAR)
++    .sort((a, b) => b.plays - a.plays);
++  const shelfBack = shelf('You used to play these', lapsed.slice(0, 10), (a) => albumCard(a));
++  if (shelfBack) frag.appendChild(shelfBack);
++
+   // A compact "surprise me" strip: random albums, reshuffled on every visit.
+   const pool = lib.state.albums.slice();
+   for (let i = pool.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [pool[i], pool[j]] = [pool[j], pool[i]]; }
+@@ -589,7 +780,7 @@ function viewHome(host) {
+ const songSort = { key: 'title', dir: 1 };
+ 
+ function viewSongs(host) {
+-  const columns = ['index', 'art', 'title', 'album', 'dr', 'duration'];
++  const columns = ['index', 'art', 'title', 'album', 'dr', 'plays', 'played', 'duration'];
+   const all = lib.allTracks();
+   const head = el('header', { class: 'page-head' },
+     el('p', { class: 'eyebrow', text: 'Library' }),
+@@ -605,14 +796,41 @@ function viewSongs(host) {
+   host.appendChild(bar);
+   decode(head.querySelector('.page-title'), 'Songs');
+ 
+-  const header = columnHeader(columns, songSort, () => table.update());
++  const header = columnHeader(columns, songSort, () => { table.update(); syncRail(); });
+   host.appendChild(header);
+ 
+-  const table = trackTable(host, get, { origin: { type: 'all', label: 'All songs' }, columns });
++  const table = trackTable(host, get, {
++    origin: { type: 'all', label: 'All songs' }, columns,
++    sortKey: () => songSort.key,
++  });
++
++  /* Only where the order is alphabetical. A rail down a list sorted by length
++     would move the scrollbar and land nowhere, which is worse than not
++     offering it — so it is hidden rather than left to mislead. */
++  const LETTERED = new Set(['title', 'artist', 'album']);
++  const rail = letterRail({
++    getItems: () => table.tracks,
++    keyOf: (t) => (songSort.key === 'album' ? t.album : songSort.key === 'artist' ? t.artist : t.title),
++    onJump: (i) => table.list.scrollToIndex(i, 'start'),
++  });
++  /* On `.main`, not inside `#view`.
++     The rail must stay put while the list it steers scrolls past it, and
++     anything appended to the scroller scrolls with it. `.main` is the frame
++     around the scroller and is already positioned, so the rail sits against
++     the right edge of whatever width the view currently has — which changes
++     when the queue pane opens, and should. */
++  const frame = host.parentElement || host;
++  frame.appendChild(rail.node);
++  const syncRail = () => {
++    rail.node.hidden = !LETTERED.has(songSort.key) || table.tracks.length < 40;
++    if (!rail.node.hidden) rail.measure();
++  };
++  syncRail();
++
+   enter([head, bar], { y: 10 });
+ 
+-  const off = lib.events.on('change', () => table.update());
+-  return () => { off(); table.destroy(); };
++  const off = lib.events.on('change', () => { table.update(); syncRail(); });
++  return () => { off(); rail.node.remove(); table.destroy(); };
+ }
+ 
+ /* ------------------------------------------------------------------ ALBUMS */
+@@ -650,14 +868,26 @@ function viewAlbums(host) {
+       onclick: () => setMode(id),
+     }));
+   }
++  /* The Floor orders itself by release year — that is the whole of what it is —
++     so the control is hidden there rather than offered and ignored. */
++  const sorter = sortControl({
++    store: ALBUM_SORT,
++    fallback: 'artist',
++    keys: [['artist', 'Artist'], ['title', 'Title'], ['year', 'Year'], ['added', 'Recently added'],
++           ['length', 'Length'], ['tracks', 'Track count'], ['plays', 'Times played'], ['played', 'Last played']],
++    onChange: () => { setMode(mode, true); },
++  });
++  bar.appendChild(sorter.node);
+   host.appendChild(bar);
+ 
++  const ordered = () => lib.sortAlbums(lib.state.albums, sorter.state.key, sorter.state.dir);
++
+   const slot = el('div', { class: 'album-slot' });
+   host.appendChild(slot);
+ 
+   let teardown = () => {};
+-  function setMode(next) {
+-    if (next === mode && slot.firstChild) return;
++  function setMode(next, force) {
++    if (next === mode && slot.firstChild && !force) return;
+     mode = next;
+     try { localStorage.setItem(ALBUM_VIEW, mode); } catch { /* private */ }
+     for (const b of seg.children) {
+@@ -668,8 +898,9 @@ function viewAlbums(host) {
+     try { teardown(); } catch (err) { console.warn(err); }
+     slot.textContent = '';
+     host.classList.toggle('albums-floor', mode === 'floor');
+-    teardown = mode === 'crate' ? mountCrate(slot)
+-             : mode === 'shelf' ? mountShelf(slot)
++    sorter.node.hidden = mode === 'floor';
++    teardown = mode === 'crate' ? mountCrate(slot, ordered)
++             : mode === 'shelf' ? mountShelf(slot, ordered)
+              : mode === 'floor' ? mountFloor(slot, host)
+              : mountGrid(slot);
+   }
+@@ -680,8 +911,8 @@ function viewAlbums(host) {
+       create: () => albumCard(null),
+       render: (node, album) => renderAlbumCard(node, album),
+     });
+-    grid.setItems(lib.state.albums);
+-    const off = lib.events.on('change', () => grid.setItems(lib.state.albums));
++    grid.setItems(ordered());
++    const off = lib.events.on('change', () => grid.setItems(ordered()));
+     const offArt = lib.events.on('art', () => grid.refresh());
+     void into;
+     return () => { off(); offArt(); grid.destroy(); };
+@@ -693,6 +924,8 @@ function viewAlbums(host) {
+ }
+ 
+ const ALBUM_VIEW = 'sonora:albumview';
++const ALBUM_SORT = 'sonora:albumsort';
++const ARTIST_SORT = 'sonora:artistsort';
+ 
+ /* ------------------------------------------------------------------ shelf */
+ 
+@@ -713,7 +946,7 @@ const ALBUM_VIEW = 'sonora:albumview';
+  * The spine turns to face you as you point at it, which is what a hand does to
+  * a record it is considering.
+  */
+-function mountShelf(host) {
++function mountShelf(host, ordered) {
+   /*
+    * Windowed, like the crate is.
+    *
+@@ -746,7 +979,7 @@ function mountShelf(host) {
+   const live = new Map();    // album key -> element, for what is on screen now
+ 
+   function measure() {
+-    albums = lib.state.albums;
++    albums = ordered ? ordered() : lib.state.albums;
+     offsets = new Array(albums.length);
+     let x = 0;
+     for (let i = 0; i < albums.length; i++) { offsets[i] = x; x += widthOf(albums[i]); }
+@@ -1196,7 +1429,7 @@ function mountFloor(host, viewport) {
+  * scroll. CSS then eases each record to where it was put, which is what makes
+  * the whole rack swing rather than jump.
+  */
+-function mountCrate(host) {
++function mountCrate(host, ordered) {
+   const WINDOW = 5;                       // how many either side of the middle
+   const box = el('div', {
+     class: 'crate', tabindex: '0', role: 'listbox', 'aria-label': 'Albums',
+@@ -1213,12 +1446,12 @@ function mountCrate(host) {
+   box.append(rail, meta, hint);
+   host.appendChild(box);
+ 
+-  let albums = lib.state.albums;
++  let albums = ordered ? ordered() : lib.state.albums;
+   let at = 0;
+   const cards = new Map();                // offset -> node, recycled in place
+ 
+   function paint() {
+-    albums = lib.state.albums;
++    albums = ordered ? ordered() : lib.state.albums;
+     if (!albums.length) return;
+     at = Math.max(0, Math.min(albums.length - 1, at));
+ 
+@@ -1723,15 +1956,27 @@ function viewArtists(host) {
+     return () => {};
+   }
+ 
++  const sorter = sortControl({
++    store: ARTIST_SORT,
++    fallback: 'name',
++    keys: [['name', 'Name'], ['albums', 'Albums'], ['tracks', 'Tracks'],
++           ['length', 'Length'], ['plays', 'Times played'], ['played', 'Last played']],
++    onChange: () => grid.setItems(ordered()),
++  });
++  const bar = el('div', { class: 'toolbar' }, sorter.node);
++  host.appendChild(bar);
++
++  const ordered = () => lib.sortArtists(lib.state.artists, sorter.state.key, sorter.state.dir);
++
+   const grid = new VirtualGrid({
+     viewport: host, minCell: 156, gap: 22, aspect: 1, footer: 64,
+     create: () => artistCard(null),
+     render: (node, artist) => renderArtistCard(node, artist),
+   });
+-  grid.setItems(artists);
+-  enter([head], { y: 10 });
++  grid.setItems(ordered());
++  enter([head, bar], { y: 10 });
+ 
+-  const off = lib.events.on('change', () => grid.setItems(lib.state.artists));
++  const off = lib.events.on('change', () => grid.setItems(ordered()));
+   const offArt = lib.events.on('art', () => grid.refresh());
+   return () => { off(); offArt(); grid.destroy(); };
+ }
+@@ -1807,6 +2052,74 @@ function viewArtist(host, key) {
+ 
+ /* ------------------------------------------------------------------ PLAYLISTS */
+ 
++/*
++ * What you have just been listening to.
++ *
++ * `history.recent` has been kept since the first release — sixty ids, newest
++ * first, written on every play and restored from IndexedDB — and the only thing
++ * that ever read it was one button on Home. There was no page to go to and no
++ * way to see past the top of it, which makes the single most common question a
++ * music player is asked ("what was that?") one it could not answer.
++ *
++ * Newest first and *not* sortable: this is a log, and the order is the
++ * information. Sorting it by title would turn it back into the library.
++ */
++function viewRecent(host) {
++  // `fmtAgo` is written for a narrow column, where "now" is the whole answer.
++  // In a sentence it needs the rest of the words around it.
++  const ago = (ts) => { const a = fmtAgo(ts); return a === 'now' ? 'just now' : a + ' ago'; };
++  const origin = { type: 'recent', label: 'Recently played' };
++  const get = () => lib.recentTracks();
++  const tracks0 = get();
++
++  const head = el('header', { class: 'page-head' },
++    el('p', { class: 'eyebrow', text: 'Library' }),
++    el('h1', { class: 'page-title', text: 'Recently played' }),
++    el('p', { class: 'page-sub' }));
++  host.appendChild(head);
++  decode(head.querySelector('.page-title'), 'Recently played');
++
++  const paintSub = () => {
++    const list = get();
++    head.querySelector('.page-sub').textContent = list.length
++      ? `${fmtCount(list.length, 'track')} · last played ${ago(list[0].lastPlayed)}`
++      : 'Nothing played yet';
++  };
++  paintSub();
++
++  if (!tracks0.length) {
++    host.appendChild(emptyState({
++      icon: 'clock',
++      title: 'Nothing played yet',
++      note: 'Everything you play lands here, newest first — the last sixty tracks.',
++      action: { label: 'Browse songs', onSelect: () => (location.hash = '#/songs') },
++    }));
++    enter([head], { y: 10 });
++    const off = lib.events.on('history', () => {
++      if (get().length) document.dispatchEvent(new CustomEvent('sonora:refresh'));
++    });
++    return () => off();
++  }
++
++  const bar = el('div', { class: 'toolbar' },
++    el('button', { class: 'btn primary', html: ico('play') + '<span>Play all</span>', onclick: () => playAll(get(), 0, origin) }),
++    el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(get(), origin) }));
++  host.appendChild(bar);
++
++  const table = trackTable(host, get, {
++    origin,
++    columns: ['index', 'art', 'title', 'album', 'played', 'duration'],
++  });
++  enter([head, bar], { y: 10 });
++
++  /* The list reorders under you as you listen, which is correct and would be
++     unreadable if it happened while you were reading it — so the repaint waits
++     for the track to change rather than following the playhead. */
++  const off = lib.events.on('history', () => { table.update(); paintSub(); });
++  const offChange = lib.events.on('change', () => { table.update(); paintSub(); });
++  return () => { off(); offChange(); table.destroy(); };
++}
++
+ function viewPlaylists(host) {
+   const head = el('header', { class: 'page-head' },
+     el('p', { class: 'eyebrow', text: 'Library' }),
+@@ -3339,6 +3652,7 @@ const ROUTES = {
+   artists: viewArtists,
+   artist: viewArtist,
+   favourites: viewFavourites,
++  recent: viewRecent,
+   playlists: viewPlaylists,
+   playlist: viewPlaylist,
+   search: viewSearch,
+diff --git a/js/virtual.js b/js/virtual.js
+index 8e478e8..f723933 100644
+--- a/js/virtual.js
++++ b/js/virtual.js
+@@ -117,12 +117,54 @@ export class VirtualList {
+ 
+   scrollToIndex(i, align = 'center') {
+     if (i < 0 || i >= this.items.length) return;
++    /* Plus where the list starts inside the scroller.
++     *
++     * `update()` has always subtracted `sizer.offsetTop` when working out which
++     * rows are visible, and this did not add it back — so a jump landed short
++     * by however much page sits above the list, which on Songs is a heading, a
++     * toolbar and a column header, or about four rows. Nothing noticed while
++     * the only caller was a list that starts at the top of its own page. */
++    const from = this.sizer.offsetTop - this.stickyInset();
+     const target = align === 'center'
+-      ? i * this.rowHeight - (this.viewport.clientHeight - this.rowHeight) / 2
+-      : i * this.rowHeight;
++      ? from + i * this.rowHeight - (this.viewport.clientHeight - this.rowHeight) / 2
++      : from + i * this.rowHeight;
+     this.viewport.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+   }
+ 
++  /**
++   * How much of the top of the scroller something else is already occupying.
++   *
++   * The songs list has a sticky column header pinned above it, so a row put at
++   * the very top of the viewport arrives forty pixels underneath the thing
++   * naming its columns — scrolled to, and invisible. Anything sticky sitting
++   * between the top of the scroller and the list is measured rather than
++   * assumed, because the album page has no header and the queue has a different
++   * one, and a hard-coded inset would be wrong on two pages out of three.
++   */
++  stickyInset() {
++    /* Where it will be once pinned, not where it is now.
++     *
++     * Reading the header's rectangle only works if it is already stuck, and at
++     * the top of a page it is still in flow two hundred pixels down — so a jump
++     * from the top would overshoot by the height of the page heading. A sticky
++     * element pins at the scrollport's *padding* edge plus whatever `top` it
++     * declares, so that is the sum: the scroller's own top padding, the
++     * element's offset, and its height.
++     *
++     * Measured rather than assumed because the album page has no header at all
++     * and the queue has a different one; a hard-coded inset would be wrong on
++     * two pages out of three. */
++    const pad = parseFloat(getComputedStyle(this.viewport).paddingTop) || 0;
++    let inset = 0;
++    for (let el = this.sizer.previousElementSibling; el; el = el.previousElementSibling) {
++      const cs = getComputedStyle(el);
++      if (cs.position !== 'sticky') continue;
++      const offset = parseFloat(cs.top) || 0;
++      inset = Math.max(inset, pad + offset + el.getBoundingClientRect().height);
++    }
++    return inset;
++  }
++
+   destroy() {
+     this.viewport.removeEventListener('scroll', this.onScroll);
+     this.ro.disconnect();
+@@ -178,6 +220,20 @@ export class VirtualGrid {
+ 
+   setItems(items) {
+     this.items = items || [];
++    /* Every visible cell, again.
++     *
++     * `measure()` alone is not enough, and the reason is easy to miss: it only
++     * rebuilds when the *geometry* changes, and reordering a list of the same
++     * length at the same width changes neither the column count nor the row
++     * height. So the rows stayed exactly as they were and a re-sorted grid
++     * showed the old order — which is what happened the first time the Artists
++     * page was given something to sort by. The list next door has always done
++     * this; the grid only ever had new data handed to it when the count
++     * changed, so nothing had noticed.
++     *
++     * It costs one re-render of what is on screen, which is a couple of dozen
++     * cells however large the library is. */
++    this.recycleAll();
+     this.measure();
+   }
+ 
+-- 
+2.43.0
+

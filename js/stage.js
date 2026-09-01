@@ -18,6 +18,7 @@ import * as lyrics from './lyrics.js';
 import * as peakmap from './peaks.js';
 import { tick, animate, spring, draggable, settled, ease, reduceMotion } from './motion.js';
 import * as rack from './audio.js';
+import * as keys from './keys.js';
 
 const MODE_KEY = 'sonora:viz';
 const DECK_KEY = 'sonora:deck';
@@ -31,6 +32,12 @@ export const storedMode = () => {
 };
 
 let open = null;                 // teardown for the live stage, or null
+
+/* What an open stage lets the two shared shortcuts do. Null while it is shut,
+   which is how bindings registered once at module load stay inert until there
+   is a stage for them to act on — and stay in the `?` overlay meanwhile, so the
+   list is the whole list rather than the list of what happens to be on screen. */
+let handlers = null;
 
 export const isOpen = () => !!open;
 
@@ -601,24 +608,23 @@ export function openStage(backdrop) {
     if (t) { paintArt(artImg, t.albumKey); paintArt(label, t.albumKey); }
   });
 
+  /* Escape stays a private handler on the capture phase, because closing the
+     thing in front of you has to beat whatever is behind it and that is a
+     question of ordering rather than of binding. */
   const onKey = (e) => {
-    if (e.key === 'Escape') { e.stopPropagation(); closeStage(); return; }
-    // Only while the stage is open, and only when there is something to show:
-    // a key that does nothing on most tracks is a key nobody learns.
-    if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey && !e.altKey && words) {
-      e.stopPropagation();
-      lyricBtn.click();
-      return;
-    }
-    /* Not gated on anything, unlike L: the deck is there for every track,
-       and the arrow keys the arm answers to are handled on the arm itself
-       so they only apply when it has the focus. */
-    if ((e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      e.stopPropagation();
-      setDeck(!deckOn);
-    }
+    if (e.key === 'Escape') { e.stopPropagation(); closeStage(); }
   };
   document.addEventListener('keydown', onKey, true);
+
+  /* The two stage keys live in the shared table and are registered once, at
+     module load — see the bottom of this file. All an open stage does is hand
+     them something to call. */
+  handlers = {
+    // Only while there is something to show: a key that does nothing on most
+    // tracks is a key nobody learns.
+    lyrics: () => (words ? (lyricBtn.click(), true) : false),
+    deck: () => { setDeck(!deckOn); return true; },
+  };
 
   paint();
   paintState();
@@ -641,6 +647,7 @@ export function openStage(backdrop) {
     offTrack(); offState(); offArt(); offLyrics(); offSpec();
     offPeaks();
     document.removeEventListener('keydown', onKey, true);
+    handlers = null;
     arm.removeEventListener('pointerdown', onArmDown);
     arm.removeEventListener('pointermove', onArmMove);
     arm.removeEventListener('pointerup', onArmUp);
@@ -656,3 +663,25 @@ export function openStage(backdrop) {
     $('#playerbar')?.querySelector('.pb-stage')?.focus?.();
   };
 }
+
+/* ------------------------------------------------------------------ keys
+ *
+ * Registered at module load rather than when a stage opens, so that both appear
+ * in the keyboard overlay whether or not the immersive view is up. `active`
+ * decides whether either one does anything; `run` returning false declines the
+ * keystroke and lets the next binding have it. */
+keys.bind({
+  id: 'stage-lyrics', group: 'In the visualiser', combo: 'L',
+  label: 'Lyrics, when there are any',
+  active: () => !!handlers,
+  run: () => handlers.lyrics(),
+});
+keys.bind({
+  id: 'stage-deck', group: 'In the visualiser', combo: 'D',
+  label: 'The turntable',
+  /* Not gated on anything, unlike L: the deck is there for every track, and the
+     arrow keys the arm answers to are handled on the arm itself so they only
+     apply when it has the focus. */
+  active: () => !!handlers,
+  run: () => handlers.deck(),
+});

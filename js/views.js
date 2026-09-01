@@ -5,7 +5,7 @@
  * rendered directly, because 12 nodes are cheaper than the machinery.
  */
 
-import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, cmpText, formatName, norm } from './util.js';
+import { el, ico, fmtTime, fmtTotal, fmtCount, fmtBytes, fmtAgo, cmpText, formatName, norm } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import * as db from './db.js';
@@ -107,7 +107,7 @@ export const hasLiveSelection = () => {
   return false;
 };
 
-function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel } = {}) {
+function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel, sortKey } = {}) {
   let tracks = getTracks();
 
   /* Building a thirty-track playlist used to be thirty right-clicks. Rows can
@@ -177,6 +177,38 @@ function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel } 
     );
   }
 
+  /*
+   * Type the name of the thing you want.
+   *
+   * Every file manager and every media player for thirty years has done this,
+   * and typing in a list here did nothing at all — on a fifty-thousand track
+   * library that means the only way to reach the S's is to throw the scrollbar
+   * and look. Letters accumulate for three quarters of a second, so "bea"
+   * finds *Beacon* rather than stopping at the first B, and the buffer clears
+   * on a pause the way everybody expects it to.
+   *
+   * It matches on whichever column the list is currently ordered by, because
+   * jumping alphabetically through a list sorted by length is not a feature,
+   * it is a bug that happens to move the scrollbar.
+   */
+  let buffer = '';
+  let bufferAt = 0;
+  const jumpKey = (t) => {
+    const k = sortKey && sortKey();
+    if (k === 'album') return t.album || '';
+    if (k === 'artist') return t.artist || '';
+    return t.title || '';
+  };
+  const jumpTo = (prefix) => {
+    const p = prefix.toLowerCase();
+    const i = tracks.findIndex((t) => norm(jumpKey(t)).startsWith(p));
+    if (i < 0) return false;
+    // Top of the viewport, not the middle: a jump is "show me from here", and
+    // centring buries the row you asked for under the ones before it.
+    list.scrollToIndex(i, 'start');
+    return true;
+  };
+
   /* Escape clears; ctrl-A takes the lot — but only when the pointer is not in
      a text field, or select-all in the search box would select the library. */
   const onKey = (e) => {
@@ -187,7 +219,21 @@ function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel } 
     if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey) && !typing) {
       e.preventDefault();
       selection.all(tracks);
+      return;
     }
+    /* One printable character, no modifiers, nothing focused that wants it.
+       The single-letter transport shortcuts live on the same keys, so this
+       only takes over once a *second* character arrives inside the window —
+       "n" is next track, "no" is looking for Nocturne. */
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key.length !== 1 || e.key === ' ') return;
+    const now = performance.now();
+    if (now - bufferAt > 750) buffer = '';
+    bufferAt = now;
+    const next = buffer + e.key;
+    if (next.length < 2) { buffer = next; return; }
+    if (jumpTo(next)) { buffer = next; e.preventDefault(); e.stopPropagation(); }
+    else buffer = next;
   };
   document.addEventListener('keydown', onKey);
 
@@ -229,6 +275,8 @@ function columnHeader(columns, sortState, onSort) {
   html += '<div class="trow-main"><button class="sortable" data-sort="title">Title</button></div>';
   if (columns.includes('album')) html += '<div class="trow-album"><button class="sortable" data-sort="album">Album</button></div>';
   if (columns.includes('dr')) html += '<div class="trow-dr"><button class="sortable" data-sort="dr" title="Dynamic range">DR</button></div>';
+  if (columns.includes('plays')) html += '<div class="trow-plays"><button class="sortable" data-sort="plays" title="How many times you have played it">Plays</button></div>';
+  if (columns.includes('played')) html += '<div class="trow-played"><button class="sortable" data-sort="played" title="When you last played it">Last</button></div>';
   if (columns.includes('duration')) html += `<div class="trow-time"><button class="sortable" data-sort="duration">${ico('clock')}</button></div>`;
   html += '<div class="trow-actions"></div>';
   head.innerHTML = html;
@@ -251,6 +299,117 @@ function columnHeader(columns, sortState, onSort) {
   });
   paint();
   return head;
+}
+
+/*
+ * The control that orders a wall.
+ *
+ * Songs has had sortable column headers since the first release, because a
+ * table has somewhere to put them. A grid of records has no columns, so the
+ * order was whatever the index happened to hold — and there was no way to ask
+ * for 1978, or the longest record, or the one nobody has ever played.
+ *
+ * A menu rather than a row of segmented buttons: eight keys in a segmented
+ * control is a wall of words competing with the four view modes beside it,
+ * where a menu is one button that says what the order currently is. Choosing
+ * the key that is already on turns it round, which is what a column header
+ * does and is the thing people try first.
+ *
+ * The choice is remembered per list, because how you like to look at your
+ * records is a way of working rather than a decision to retake every visit.
+ */
+function sortControl({ store, keys, fallback, onChange }) {
+  let state = { key: fallback, dir: 1 };
+  try {
+    const saved = JSON.parse(localStorage.getItem(store) || 'null');
+    if (saved && keys.some(([k]) => k === saved.key)) state = { key: saved.key, dir: saved.dir === -1 ? -1 : 1 };
+  } catch { /* private */ }
+
+  const labelOf = (k) => (keys.find(([key]) => key === k) || keys[0])[1];
+  const btn = el('button', { class: 'btn ghost sm sort-btn', 'aria-haspopup': 'menu' });
+
+  const paint = () => {
+    btn.innerHTML = ico('sliders') +
+      `<span>${labelOf(state.key)}</span>` +
+      `<span class="sort-dir" aria-hidden="true">${state.dir > 0 ? '↑' : '↓'}</span>`;
+    btn.setAttribute('aria-label',
+      `Sorted by ${labelOf(state.key).toLowerCase()}, ${state.dir > 0 ? 'ascending' : 'descending'}. Change`);
+    try { localStorage.setItem(store, JSON.stringify(state)); } catch { /* private */ }
+  };
+
+  btn.addEventListener('click', (e) => {
+    menu(keys.map(([k, label]) => ({
+      label,
+      checked: k === state.key,
+      // The arrow is on the row that is already chosen, because that is the
+      // one where picking it again means "the other way round".
+      hint: k === state.key ? (state.dir > 0 ? '↑' : '↓') : '',
+      onSelect: () => {
+        if (state.key === k) state.dir *= -1; else { state.key = k; state.dir = 1; }
+        paint();
+        onChange(state);
+      },
+    })), { anchor: e.currentTarget });
+  });
+
+  paint();
+  return { node: btn, get state() { return state; } };
+}
+
+/*
+ * The letter rail.
+ *
+ * A fifty-thousand track list is virtualised so it costs nothing to draw, and
+ * until now the only way to reach the S's was to throw the scrollbar and watch
+ * the rows go past. The rail is the oldest answer to that and it is still the
+ * right one — and it is nearly free here, because the sorted array already
+ * knows the index of the first row under every letter, so a jump is one
+ * `scrollTo` and no search.
+ *
+ * Letters the library has nothing under are still drawn, and dimmed. A rail
+ * that only shows the letters you own changes shape as the collection grows,
+ * which makes it something you have to read rather than something your hand
+ * learns — and the gaps are information: a collection with no Q in it looks
+ * like one.
+ */
+const RAIL_LETTERS = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
+
+function letterRail({ getItems, keyOf, onJump }) {
+  const node = el('div', { class: 'az-rail', role: 'navigation', 'aria-label': 'Jump to a letter' });
+  const buttons = new Map();
+  for (const ch of RAIL_LETTERS) {
+    const b = el('button', { class: 'az-key', text: ch, 'aria-label': `Jump to ${ch === '#' ? 'numbers' : ch}` });
+    b.addEventListener('click', () => {
+      const i = indexOf(ch);
+      if (i >= 0) onJump(i);
+    });
+    buttons.set(ch, b);
+    node.appendChild(b);
+  }
+
+  // A leading digit, a leading symbol and a leading article all belong under
+  // "#" rather than under whatever character happens to be first: the list is
+  // sorted by the same normalised key, so this has to agree with it.
+  const bucket = (v) => {
+    const c = norm(v).trim().charAt(0).toUpperCase();
+    return c >= 'A' && c <= 'Z' ? c : '#';
+  };
+
+  let first = new Map();
+  function indexOf(ch) { return first.has(ch) ? first.get(ch) : -1; }
+
+  function measure() {
+    const items = getItems();
+    first = new Map();
+    for (let i = 0; i < items.length; i++) {
+      const ch = bucket(keyOf(items[i]));
+      if (!first.has(ch)) first.set(ch, i);
+    }
+    for (const [ch, b] of buttons) b.classList.toggle('is-empty', !first.has(ch));
+  }
+
+  measure();
+  return { node, measure };
 }
 
 /* ------------------------------------------------------------------ cards */
@@ -561,6 +720,38 @@ function viewHome(host) {
     (a) => albumCard(a));
   if (shelfOne) frag.appendChild(shelfOne);
 
+  /* Records you have never once played.
+   *
+   * `playCount` has been counted since the first release and nothing had ever
+   * asked it this question, which is a shame, because on a large collection it
+   * is the most useful one there is: not "what do you like" — every other shelf
+   * on this page answers that — but "what is in here that you have never
+   * heard". A local library accumulates records the way a shelf accumulates
+   * books, and the unplayed ones are invisible precisely because nothing ever
+   * surfaces them.
+   *
+   * Oldest first, so the ones that have been waiting longest come up.
+   */
+  const untouched = lib.state.albums
+    .filter((al) => !al.plays && al.tracks.length)
+    .sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
+  const shelfNew = shelf('Never played', untouched.slice(0, 10), (a) => albumCard(a));
+  if (shelfNew) frag.appendChild(shelfNew);
+
+  /* And records you used to play and have not been back to.
+   *
+   * The other half of the same idea, and the one that reads as a suggestion
+   * rather than as an accusation: something you played enough to mean it and
+   * have not touched in a year. A record with two plays a year ago is a record
+   * you tried; one with twenty is one you loved and forgot.
+   */
+  const YEAR = 365 * 24 * 3600 * 1000;
+  const lapsed = lib.state.albums
+    .filter((al) => al.plays >= 5 && al.lastPlayed && Date.now() - al.lastPlayed > YEAR)
+    .sort((a, b) => b.plays - a.plays);
+  const shelfBack = shelf('You used to play these', lapsed.slice(0, 10), (a) => albumCard(a));
+  if (shelfBack) frag.appendChild(shelfBack);
+
   // A compact "surprise me" strip: random albums, reshuffled on every visit.
   const pool = lib.state.albums.slice();
   for (let i = pool.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [pool[i], pool[j]] = [pool[j], pool[i]]; }
@@ -589,7 +780,7 @@ function viewHome(host) {
 const songSort = { key: 'title', dir: 1 };
 
 function viewSongs(host) {
-  const columns = ['index', 'art', 'title', 'album', 'dr', 'duration'];
+  const columns = ['index', 'art', 'title', 'album', 'dr', 'plays', 'played', 'duration'];
   const all = lib.allTracks();
   const head = el('header', { class: 'page-head' },
     el('p', { class: 'eyebrow', text: 'Library' }),
@@ -605,14 +796,41 @@ function viewSongs(host) {
   host.appendChild(bar);
   decode(head.querySelector('.page-title'), 'Songs');
 
-  const header = columnHeader(columns, songSort, () => table.update());
+  const header = columnHeader(columns, songSort, () => { table.update(); syncRail(); });
   host.appendChild(header);
 
-  const table = trackTable(host, get, { origin: { type: 'all', label: 'All songs' }, columns });
+  const table = trackTable(host, get, {
+    origin: { type: 'all', label: 'All songs' }, columns,
+    sortKey: () => songSort.key,
+  });
+
+  /* Only where the order is alphabetical. A rail down a list sorted by length
+     would move the scrollbar and land nowhere, which is worse than not
+     offering it — so it is hidden rather than left to mislead. */
+  const LETTERED = new Set(['title', 'artist', 'album']);
+  const rail = letterRail({
+    getItems: () => table.tracks,
+    keyOf: (t) => (songSort.key === 'album' ? t.album : songSort.key === 'artist' ? t.artist : t.title),
+    onJump: (i) => table.list.scrollToIndex(i, 'start'),
+  });
+  /* On `.main`, not inside `#view`.
+     The rail must stay put while the list it steers scrolls past it, and
+     anything appended to the scroller scrolls with it. `.main` is the frame
+     around the scroller and is already positioned, so the rail sits against
+     the right edge of whatever width the view currently has — which changes
+     when the queue pane opens, and should. */
+  const frame = host.parentElement || host;
+  frame.appendChild(rail.node);
+  const syncRail = () => {
+    rail.node.hidden = !LETTERED.has(songSort.key) || table.tracks.length < 40;
+    if (!rail.node.hidden) rail.measure();
+  };
+  syncRail();
+
   enter([head, bar], { y: 10 });
 
-  const off = lib.events.on('change', () => table.update());
-  return () => { off(); table.destroy(); };
+  const off = lib.events.on('change', () => { table.update(); syncRail(); });
+  return () => { off(); rail.node.remove(); table.destroy(); };
 }
 
 /* ------------------------------------------------------------------ ALBUMS */
@@ -650,14 +868,26 @@ function viewAlbums(host) {
       onclick: () => setMode(id),
     }));
   }
+  /* The Floor orders itself by release year — that is the whole of what it is —
+     so the control is hidden there rather than offered and ignored. */
+  const sorter = sortControl({
+    store: ALBUM_SORT,
+    fallback: 'artist',
+    keys: [['artist', 'Artist'], ['title', 'Title'], ['year', 'Year'], ['added', 'Recently added'],
+           ['length', 'Length'], ['tracks', 'Track count'], ['plays', 'Times played'], ['played', 'Last played']],
+    onChange: () => { setMode(mode, true); },
+  });
+  bar.appendChild(sorter.node);
   host.appendChild(bar);
+
+  const ordered = () => lib.sortAlbums(lib.state.albums, sorter.state.key, sorter.state.dir);
 
   const slot = el('div', { class: 'album-slot' });
   host.appendChild(slot);
 
   let teardown = () => {};
-  function setMode(next) {
-    if (next === mode && slot.firstChild) return;
+  function setMode(next, force) {
+    if (next === mode && slot.firstChild && !force) return;
     mode = next;
     try { localStorage.setItem(ALBUM_VIEW, mode); } catch { /* private */ }
     for (const b of seg.children) {
@@ -668,8 +898,9 @@ function viewAlbums(host) {
     try { teardown(); } catch (err) { console.warn(err); }
     slot.textContent = '';
     host.classList.toggle('albums-floor', mode === 'floor');
-    teardown = mode === 'crate' ? mountCrate(slot)
-             : mode === 'shelf' ? mountShelf(slot)
+    sorter.node.hidden = mode === 'floor';
+    teardown = mode === 'crate' ? mountCrate(slot, ordered)
+             : mode === 'shelf' ? mountShelf(slot, ordered)
              : mode === 'floor' ? mountFloor(slot, host)
              : mountGrid(slot);
   }
@@ -680,8 +911,8 @@ function viewAlbums(host) {
       create: () => albumCard(null),
       render: (node, album) => renderAlbumCard(node, album),
     });
-    grid.setItems(lib.state.albums);
-    const off = lib.events.on('change', () => grid.setItems(lib.state.albums));
+    grid.setItems(ordered());
+    const off = lib.events.on('change', () => grid.setItems(ordered()));
     const offArt = lib.events.on('art', () => grid.refresh());
     void into;
     return () => { off(); offArt(); grid.destroy(); };
@@ -693,6 +924,8 @@ function viewAlbums(host) {
 }
 
 const ALBUM_VIEW = 'sonora:albumview';
+const ALBUM_SORT = 'sonora:albumsort';
+const ARTIST_SORT = 'sonora:artistsort';
 
 /* ------------------------------------------------------------------ shelf */
 
@@ -713,7 +946,7 @@ const ALBUM_VIEW = 'sonora:albumview';
  * The spine turns to face you as you point at it, which is what a hand does to
  * a record it is considering.
  */
-function mountShelf(host) {
+function mountShelf(host, ordered) {
   /*
    * Windowed, like the crate is.
    *
@@ -746,7 +979,7 @@ function mountShelf(host) {
   const live = new Map();    // album key -> element, for what is on screen now
 
   function measure() {
-    albums = lib.state.albums;
+    albums = ordered ? ordered() : lib.state.albums;
     offsets = new Array(albums.length);
     let x = 0;
     for (let i = 0; i < albums.length; i++) { offsets[i] = x; x += widthOf(albums[i]); }
@@ -1196,10 +1429,14 @@ function mountFloor(host, viewport) {
  * scroll. CSS then eases each record to where it was put, which is what makes
  * the whole rack swing rather than jump.
  */
-function mountCrate(host) {
+function mountCrate(host, ordered) {
   const WINDOW = 5;                       // how many either side of the middle
   const box = el('div', {
     class: 'crate', tabindex: '0', role: 'listbox', 'aria-label': 'Albums',
+    /* The records behind the front one recede past the right-hand edge and
+       are meant to: a crate that fits inside its own box is a shelf. Said
+       out loud so `tools/looks.mjs` does not report it every run. */
+    'data-clips': '',
   });
   const rail = el('div', { class: 'crate-rail' });
   const meta = el('div', { class: 'crate-meta' },
@@ -1209,12 +1446,12 @@ function mountCrate(host) {
   box.append(rail, meta, hint);
   host.appendChild(box);
 
-  let albums = lib.state.albums;
+  let albums = ordered ? ordered() : lib.state.albums;
   let at = 0;
   const cards = new Map();                // offset -> node, recycled in place
 
   function paint() {
-    albums = lib.state.albums;
+    albums = ordered ? ordered() : lib.state.albums;
     if (!albums.length) return;
     at = Math.max(0, Math.min(albums.length - 1, at));
 
@@ -1326,12 +1563,15 @@ function viewAlbum(host, key) {
     el('h1', { class: 'hero-title', text: album.title }),
     el('p', { class: 'hero-sub' },
       el('a', { class: 'hero-link', href: '#/artist/' + album.artistKey, text: album.artist }),
-      el('span', { class: 'dot' }),
-      album.year ? el('span', { text: String(album.year) }) : null,
-      album.year ? el('span', { class: 'dot' }) : null,
-      el('span', { text: fmtCount(album.tracks.length, 'track') }),
-      el('span', { class: 'dot' }),
-      el('span', { text: fmtTotal(album.duration) })));
+      /* One unit, so a narrow hero breaks after the artist rather than
+         between a fact and the separator that belongs to it. */
+      el('span', { class: 'hero-facts' },
+        el('span', { class: 'dot' }),
+        album.year ? el('span', { text: String(album.year) }) : null,
+        album.year ? el('span', { class: 'dot' }) : null,
+        el('span', { text: fmtCount(album.tracks.length, 'track') }),
+        el('span', { class: 'dot' }),
+        el('span', { text: fmtTotal(album.duration) }))));
 
   const actions = el('div', { class: 'hero-actions' },
     playFab(() => playAll(album.tracks, 0, origin)),
@@ -1716,15 +1956,27 @@ function viewArtists(host) {
     return () => {};
   }
 
+  const sorter = sortControl({
+    store: ARTIST_SORT,
+    fallback: 'name',
+    keys: [['name', 'Name'], ['albums', 'Albums'], ['tracks', 'Tracks'],
+           ['length', 'Length'], ['plays', 'Times played'], ['played', 'Last played']],
+    onChange: () => grid.setItems(ordered()),
+  });
+  const bar = el('div', { class: 'toolbar' }, sorter.node);
+  host.appendChild(bar);
+
+  const ordered = () => lib.sortArtists(lib.state.artists, sorter.state.key, sorter.state.dir);
+
   const grid = new VirtualGrid({
     viewport: host, minCell: 156, gap: 22, aspect: 1, footer: 64,
     create: () => artistCard(null),
     render: (node, artist) => renderArtistCard(node, artist),
   });
-  grid.setItems(artists);
-  enter([head], { y: 10 });
+  grid.setItems(ordered());
+  enter([head, bar], { y: 10 });
 
-  const off = lib.events.on('change', () => grid.setItems(lib.state.artists));
+  const off = lib.events.on('change', () => grid.setItems(ordered()));
   const offArt = lib.events.on('art', () => grid.refresh());
   return () => { off(); offArt(); grid.destroy(); };
 }
@@ -1799,6 +2051,74 @@ function viewArtist(host, key) {
 }
 
 /* ------------------------------------------------------------------ PLAYLISTS */
+
+/*
+ * What you have just been listening to.
+ *
+ * `history.recent` has been kept since the first release — sixty ids, newest
+ * first, written on every play and restored from IndexedDB — and the only thing
+ * that ever read it was one button on Home. There was no page to go to and no
+ * way to see past the top of it, which makes the single most common question a
+ * music player is asked ("what was that?") one it could not answer.
+ *
+ * Newest first and *not* sortable: this is a log, and the order is the
+ * information. Sorting it by title would turn it back into the library.
+ */
+function viewRecent(host) {
+  // `fmtAgo` is written for a narrow column, where "now" is the whole answer.
+  // In a sentence it needs the rest of the words around it.
+  const ago = (ts) => { const a = fmtAgo(ts); return a === 'now' ? 'just now' : a + ' ago'; };
+  const origin = { type: 'recent', label: 'Recently played' };
+  const get = () => lib.recentTracks();
+  const tracks0 = get();
+
+  const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
+    el('h1', { class: 'page-title', text: 'Recently played' }),
+    el('p', { class: 'page-sub' }));
+  host.appendChild(head);
+  decode(head.querySelector('.page-title'), 'Recently played');
+
+  const paintSub = () => {
+    const list = get();
+    head.querySelector('.page-sub').textContent = list.length
+      ? `${fmtCount(list.length, 'track')} · last played ${ago(list[0].lastPlayed)}`
+      : 'Nothing played yet';
+  };
+  paintSub();
+
+  if (!tracks0.length) {
+    host.appendChild(emptyState({
+      icon: 'clock',
+      title: 'Nothing played yet',
+      note: 'Everything you play lands here, newest first — the last sixty tracks.',
+      action: { label: 'Browse songs', onSelect: () => (location.hash = '#/songs') },
+    }));
+    enter([head], { y: 10 });
+    const off = lib.events.on('history', () => {
+      if (get().length) document.dispatchEvent(new CustomEvent('sonora:refresh'));
+    });
+    return () => off();
+  }
+
+  const bar = el('div', { class: 'toolbar' },
+    el('button', { class: 'btn primary', html: ico('play') + '<span>Play all</span>', onclick: () => playAll(get(), 0, origin) }),
+    el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(get(), origin) }));
+  host.appendChild(bar);
+
+  const table = trackTable(host, get, {
+    origin,
+    columns: ['index', 'art', 'title', 'album', 'played', 'duration'],
+  });
+  enter([head, bar], { y: 10 });
+
+  /* The list reorders under you as you listen, which is correct and would be
+     unreadable if it happened while you were reading it — so the repaint waits
+     for the track to change rather than following the playhead. */
+  const off = lib.events.on('history', () => { table.update(); paintSub(); });
+  const offChange = lib.events.on('change', () => { table.update(); paintSub(); });
+  return () => { off(); offChange(); table.destroy(); };
+}
 
 function viewPlaylists(host) {
   const head = el('header', { class: 'page-head' },
@@ -2619,7 +2939,53 @@ function viewSettings(host) {
     note.textContent = u
       ? `${fmtBytes(u.used)} used${u.quota ? ` of ${fmtBytes(u.quota)} available` : ''}`
       : `${fmtCount(lib.trackCount(), 'track')} indexed`;
+    /* Room runs out quietly. An origin at its ceiling stops being able to write
+       — a new import half-lands, a playlist does not save — and nothing about
+       that failure names the cause unless somebody says so first. */
+    if (u && u.quota && u.used / u.quota > 0.8) {
+      note.appendChild(el('span', { class: 'settings-warn',
+        text: ` · ${Math.round(100 * u.used / u.quota)}% of what this browser allows` }));
+    }
   });
+
+  /*
+   * Whether the browser has promised to keep any of it.
+   *
+   * This is the row that matters most on this page and it is the one that did
+   * not exist. Everything Sonora lets you change lives in IndexedDB and nowhere
+   * else — playlists, favourites, tag corrections, chosen covers, bound racks,
+   * every hour of listening. Without a persistence grant that is *best-effort*
+   * storage, which a browser short of room may evict without asking, and there
+   * is no server copy to come back from, because there is no server.
+   */
+  const keepNote = el('div', { class: 'settings-note', text: 'Checking…' });
+  const keepBtn = el('button', { class: 'btn ghost sm', text: 'Ask to keep it', hidden: true });
+  storage.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('cube') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Kept when the browser is short of room' }), keepNote),
+    el('div', { class: 'settings-actions' }, keepBtn)));
+
+  async function paintKeep() {
+    if (!navigator.storage?.persist) {
+      keepNote.textContent = 'This browser does not say either way.';
+      return;
+    }
+    const on = await db.persisted();
+    keepNote.textContent = on
+      ? 'Yes. Your library will not be evicted to make room.'
+      : 'Not yet — this browser may clear the library if it runs short of space.';
+    keepBtn.hidden = on;
+  }
+  keepBtn.addEventListener('click', async () => {
+    const r = await db.requestPersist();
+    // Chromium decides from how the site is used rather than by asking, so a
+    // refusal is a "not yet" rather than a no, and saying so is the honest form.
+    toast(r.granted ? 'The browser will keep your library'
+                    : 'The browser has not granted it yet — it often does once the app has been used a few times');
+    paintKeep();
+  });
+  paintKeep();
 
   /* Whether the application itself opens without a network.
    *
@@ -3286,6 +3652,7 @@ const ROUTES = {
   artists: viewArtists,
   artist: viewArtist,
   favourites: viewFavourites,
+  recent: viewRecent,
   playlists: viewPlaylists,
   playlist: viewPlaylist,
   search: viewSearch,

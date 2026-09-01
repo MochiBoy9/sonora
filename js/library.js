@@ -435,6 +435,9 @@ export function reindex() {
         artistKey: t.artistKey, year: t.year || 0, tracks: [],
         duration: 0, addedAt: 0, sort: norm(t.album), accent: null,
         named: false,
+        // Rolled up from the tracks below, so a wall of records can be ordered
+        // by listening without walking every track again per sort.
+        plays: 0, lastPlayed: 0,
       });
     }
     // `named` records whether any file in the album actually claimed this
@@ -446,6 +449,8 @@ export function reindex() {
     if (!al.accent && t.accent) al.accent = t.accent;
     if (t.year && (!al.year || t.year < al.year)) al.year = t.year;
     if (t.addedAt > al.addedAt) al.addedAt = t.addedAt;
+    al.plays += t.playCount || 0;
+    if ((t.lastPlayed || 0) > al.lastPlayed) al.lastPlayed = t.lastPlayed;
   }
 
   // Albums fold together before artists are counted, because folding one in
@@ -460,11 +465,17 @@ export function reindex() {
       artistBy.set(t.artistKey, ar = {
         key: t.artistKey, name: t.albumArtist, tracks: [],
         albums: new Set(), duration: 0, sort: norm(sortName(t.albumArtist)),
+        // Rolled up here rather than recomputed per sort: every list that wants
+        // to order by listening asks the same question of the same objects, and
+        // the reindex is already walking every track.
+        plays: 0, lastPlayed: 0,
       });
     }
     ar.tracks.push(t);
     ar.albums.add(t.albumKey);
     ar.duration += t.duration || 0;
+    ar.plays += t.playCount || 0;
+    if ((t.lastPlayed || 0) > ar.lastPlayed) ar.lastPlayed = t.lastPlayed;
   }
 
   for (const al of albumBy.values()) {
@@ -602,8 +613,52 @@ export function sortTracks(list, key, dir = 1) {
     // ascending and out of the way descending — either is better than
     // pretending they are the most squashed masters in the library.
     dr:     (a, b) => (a.dr || 0) - (b.dr || 0),
+    /* Both of these were counted from the first release and shown nowhere. A
+       never-played track and a never-played *anything* sort as zero, which puts
+       the untouched part of a collection together at one end — which is the
+       question people are usually asking when they sort by either. */
+    plays:  (a, b) => (a.playCount || 0) - (b.playCount || 0),
+    played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
   }[key] || ((a, b) => cmpText(a.title, b.title));
   return list.slice().sort((a, b) => by(a, b) * dir);
+}
+
+/*
+ * Ordering a wall of records, and a page of artists.
+ *
+ * Songs has had sortable columns since the first release; Albums had four
+ * *view modes* and not one sort, and Artists had neither — so the wall was
+ * always in whatever order the index happened to hold it and there was no way
+ * to ask for 1978, or for the longest record, or for the one nobody has played.
+ *
+ * The comparators are written so that a missing value sorts as zero rather than
+ * dropping the row: an album with no year is a real album, and hiding it because
+ * a tag is absent would be the library lying about what is in it.
+ */
+export function sortAlbums(list, key, dir = 1) {
+  const by = {
+    artist: (a, b) => cmpText(a.artist, b.artist) || (a.year - b.year) || cmpText(a.title, b.title),
+    title:  (a, b) => cmpText(a.title, b.title),
+    year:   (a, b) => (a.year || 0) - (b.year || 0) || cmpText(a.artist, b.artist),
+    added:  (a, b) => (a.addedAt || 0) - (b.addedAt || 0),
+    length: (a, b) => (a.duration || 0) - (b.duration || 0),
+    tracks: (a, b) => a.tracks.length - b.tracks.length,
+    plays:  (a, b) => (a.plays || 0) - (b.plays || 0),
+    played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
+  }[key] || ((a, b) => cmpText(a.artist, b.artist));
+  return list.slice().sort((a, b) => by(a, b) * dir || cmpText(a.title, b.title));
+}
+
+export function sortArtists(list, key, dir = 1) {
+  const by = {
+    name:   (a, b) => cmpText(a.sort, b.sort),
+    albums: (a, b) => a.albums.size - b.albums.size,
+    tracks: (a, b) => a.tracks.length - b.tracks.length,
+    length: (a, b) => (a.duration || 0) - (b.duration || 0),
+    plays:  (a, b) => (a.plays || 0) - (b.plays || 0),
+    played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
+  }[key] || ((a, b) => cmpText(a.sort, b.sort));
+  return list.slice().sort((a, b) => by(a, b) * dir || cmpText(a.sort, b.sort));
 }
 
 /**

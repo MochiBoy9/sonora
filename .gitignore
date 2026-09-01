@@ -6,6 +6,7 @@ package-lock.json
 
 # test artefacts
 shots/
+shots-*/
 
 # Windows shell metadata
 desktop.ini

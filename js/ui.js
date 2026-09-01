@@ -1,6 +1,6 @@
 /* ui.js — shared widgets: artwork, track rows, menus, dialogs, toasts. */
 
-import { el, ico, fmtTime, clamp, canDecode } from './util.js';
+import { el, ico, fmtTime, fmtAgo, clamp, canDecode } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { animate, ease, enter, spring, settled } from './motion.js';
@@ -261,6 +261,11 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
        almost nobody opens — it is the most useful number about a file that is
        not its title, and a library sorted by it is a different library. */
     if (columns.includes('dr')) html += '<div class="trow-dr"></div>';
+    /* Both counted since the first release and shown nowhere until now. A play
+       count is the only thing in the index that is a record of *you* rather
+       than of the file, which is a reason to be able to see it. */
+    if (columns.includes('plays')) html += '<div class="trow-plays"></div>';
+    if (columns.includes('played')) html += '<div class="trow-played"></div>';
     if (columns.includes('duration')) html += '<div class="trow-time"></div>';
     html += '<div class="trow-actions">' +
       `<button class="icon-btn ghost trow-fav" aria-label="Favourite" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>` +
@@ -333,6 +338,23 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
          verdict somebody wants to read at a glance, not a heat map. */
       dr.classList.toggle('is-squashed', v > 0 && v < 8);
       dr.classList.toggle('is-open', v >= 14);
+    }
+
+    const plays = row.querySelector('.trow-plays');
+    if (plays) {
+      const n = track.playCount || 0;
+      const text = n ? String(n) : '—';
+      if (plays.textContent !== text) plays.textContent = text;
+      plays.title = n ? `Played ${n} ${n === 1 ? 'time' : 'times'}` : 'Never played';
+      plays.classList.toggle('is-none', !n);
+    }
+
+    const played = row.querySelector('.trow-played');
+    if (played) {
+      const text = track.lastPlayed ? fmtAgo(track.lastPlayed) : '—';
+      if (played.textContent !== text) played.textContent = text;
+      played.title = track.lastPlayed ? new Date(track.lastPlayed).toLocaleString() : 'Never played';
+      played.classList.toggle('is-none', !track.lastPlayed);
     }
 
     const time = row.querySelector('.trow-time');

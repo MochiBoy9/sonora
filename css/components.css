@@ -717,6 +717,10 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   overflow-y: auto;
   padding-right: 4px;
 }
+/* The same action under a second spelling — dimmer, because it is the same
+   row said twice and should not read as two things you have to learn. */
+.keys-alt { opacity: .6; }
+
 .keys-group {
   font-family: var(--mono);
   font-size: calc(10px * var(--scale));
@@ -1217,6 +1221,80 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .thead .trow-dr { font-size: calc(10px * var(--scale)); }
 
 @media (max-width: 860px) { .trow-dr { display: none; } }
+
+/* What you have done with the file, next to what the file is.
+ *
+ * Both are counted from the first release and neither had anywhere to appear.
+ * A never-played row prints an em dash in the dim ink rather than a nought:
+ * "0" invites you to compare it with the numbers above and there is nothing to
+ * compare — the point of the column is which rows are blank. */
+.trow-plays, .trow-played {
+  flex: none;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  letter-spacing: .04em;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.trow-plays { width: 40px; }
+.trow-played { width: 44px; }
+.trow-plays.is-none, .trow-played.is-none { color: var(--text-3); opacity: .55; }
+.thead .trow-plays, .thead .trow-played { font-size: calc(10px * var(--scale)); }
+
+/* They are the first thing to go: what a track is beats what you did with it
+   when there is only room for one. */
+@media (max-width: 1180px) { .trow-played { display: none; } }
+@media (max-width: 1040px) { .trow-plays { display: none; } }
+
+/* ---------------------------------------------------------------- letter rail
+
+   Pinned against the right edge of the list it steers, vertically centred, and
+   out of the way: the whole thing is 20px wide and sits at a third opacity
+   until the pointer is near it. A navigation aid that competes with the
+   library for attention is one people turn off.
+
+   It lives on `.main` rather than inside the scroller, so it stays put while
+   the list moves past it. */
+.az-rail {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 6px 3px;
+  opacity: .34;
+  transition: opacity var(--dur-2) var(--ease);
+}
+.az-rail:hover, .az-rail:focus-within { opacity: 1; }
+
+.az-key {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  width: 16px;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  line-height: 1.25;
+  letter-spacing: 0;
+  color: var(--text-2);
+  transition: color var(--dur-1) linear;
+}
+.az-key:hover { color: var(--accent); }
+.az-key:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 1px; }
+/* Letters the collection has nothing under stay drawn and go quiet: the gaps
+   are information, and a rail that changes shape as the library grows is one
+   nobody's hand can learn. */
+.az-key.is-empty { color: var(--text-3); opacity: .35; cursor: default; }
+
+/* No room beside the list, and a 16px target is not a phone control anyway. */
+@media (max-width: 900px) { .az-rail { display: none; } }
 
 /* ---------------------------------------------------------------- rule builder
 

@@ -134,7 +134,7 @@
 
 .home-hero .page-title { font-size: calc(clamp(32px, 4.4vw, 52px) * var(--scale)); letter-spacing: -.038em; }
 .home-hero .page-sub { margin-top: 12px; color: var(--text-2); }
-.home-hero .hero-actions { margin-top: 22px; flex-wrap: wrap; }
+.home-hero .hero-actions { margin-top: 22px; }
 .home-hero-text { min-width: 0; }
 
 /* The generated vector on the right of the home header. */
@@ -496,6 +496,21 @@
   .hero-show { gap: 22px; padding-top: 30px; }
   .hero-show .sleeve-stage { --sleeve-size: 168px; padding-bottom: 0; margin-bottom: 0; }
   .hero-show .art-floor, .hero-show .sleeve-stage::after { display: none; }
+
+  /* A 168px sleeve is three quarters of a 232px one, and the back cover's
+     guarantees were written in absolute pixels for the larger card — four rows
+     of spec and three tracks need 213px of a 168px square. Everything gives a
+     little: the card holds two tracks and three rows of fine print here, and
+     the rest runs out under the fades it already has. */
+  /* On two lines the facts open their own line, so the separator that joined
+     them to the artist would sit alone at the end of the one above. */
+  .hero-facts > .dot:first-child { display: none; }
+
+  .sleeve-back { gap: 6px; padding: 10px 11px 8px; }
+  .back-head { padding-bottom: 5px; }
+  .back-list { min-height: calc(2 * 1.4 * 10.5px * var(--scale)); }
+  .back-spec { padding-top: 5px; min-height: calc(3 * 1.28 * 8.5px * var(--scale) + 8px); }
+  .back-cat { padding-top: 4px; }
 }
 
 .hero-meta { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-bottom: 4px; }
@@ -516,11 +531,25 @@
   letter-spacing: .1em;
   text-transform: uppercase;
 }
+/* Year, track count and runtime move as one unit, so the only place the line
+   can break is after the artist — a wrapping row of dot-separated spans
+   otherwise ends a line on a bare separator, which reads as a truncation. */
+.hero-facts { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
 .hero-link { color: var(--text); font-weight: 500; transition: color var(--dur-1) linear; }
 .hero-link:hover { color: var(--accent); }
 .dot { width: 3px; height: 3px; background: currentColor; opacity: .45; }
 
-.hero-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+/* Wrapping rather than squeezing. Four controls and three gaps come to
+   exactly the width of a 620px hero, and `nowrap` spends the shortfall on
+   whichever button has a label — Shuffle lost fifteen pixels of its own
+   name. The home hero already wrapped; every hero does now. */
+/* The sort button sits to the right of whatever else the toolbar holds — the
+   view modes on Albums, nothing at all on Artists — so it is pushed rather
+   than placed, and the toolbar reads the same on both. */
+.toolbar .sort-btn { margin-left: auto; }
+.sort-btn .sort-dir { font-family: var(--mono); opacity: .7; margin-left: -3px; }
+
+.hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 
 /* ------------------------------------------------------------------ grids */
 
@@ -689,6 +718,10 @@
 .settings-ico .ico { width: 17px; height: 17px; }
 .settings-text { flex: 1; min-width: 0; }
 .settings-name { color: var(--text); font-weight: 550; font-size: calc(13.5px * var(--scale)); }
+/* A number that has crossed into the part of the range where things start to
+   fail, said in the warn colour so it reads before it is read. */
+.settings-warn { color: var(--warn); }
+
 .settings-note { color: var(--text-3); font-size: calc(12.5px * var(--scale)); margin-top: 2px; }
 .settings-actions {
   display: flex;
