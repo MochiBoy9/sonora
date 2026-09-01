@@ -863,17 +863,32 @@ function mountShelf(host) {
  *   never the only way to see the library.
  */
 function mountFloor(host, viewport) {
-  const PER_ROW = 4;                  // albums across
-  const ROW_DEPTH = 210;              // px of Z between rows
+  const ROW_DEPTH = 210;              // px of Z between one row and the next
   const FAR = 6;                      // rows past which nothing recedes further
   const NEAR_ROWS = 3;                // rows that still get a readable title
+  const SLOT = 194;                   // px of X per album, cover plus its gap
 
-  const stage = el('div', { class: 'floor', 'aria-label': 'Albums on the floor' });
+  /* An empty year still costs something to walk past, because the emptiness is
+     information — a collection with nothing between 1979 and 1994 should feel
+     like it. Not a full row each, though: at full depth a fifteen-year gap is
+     a corridor with nothing in it, and the point is to notice the gap, not to
+     be punished for it. A quarter of a row, and the run is capped. */
+  const GAP_DEPTH = 0.28;
+  const GAP_MAX = 2.2;                // rows, however long the drought
+
+  const stage = el('div', {
+    class: 'floor', tabindex: '0', role: 'group',
+    'aria-label': 'Albums by year. Scroll to walk through the years, left and right arrows to walk sideways.',
+  });
   const camera = el('div', { class: 'floor-camera' });
   stage.appendChild(camera);
 
   let rowCount = 0;
   let items = [];
+  let rows = [];                      // { year, albums, depth, label }
+  let camX = 0;                       // where along the floor you are standing
+  let maxX = 0;
+  let depthSpan = 0;                  // rows of walking from the first year to the last
 
   /* Rows exist only while the camera can see them.
    *
@@ -890,11 +905,23 @@ function mountFloor(host, viewport) {
   const liveRows = new Map();       // row index -> element
 
   function buildRow(r) {
-    const row = el('div', { class: 'floor-row' });
-    for (const album of items.slice(r * PER_ROW, r * PER_ROW + PER_ROW)) {
+    const lane = rows[r];
+    const row = el('div', { class: 'floor-row' + (lane.undated ? ' is-undated' : '') });
+
+    /* The year, lying on the ground in front of its records. On the floor
+       rather than upright, because a label standing up would be a sign in the
+       room and this is a marking on it — and because a decade you are walking
+       over reads as a place rather than as a caption. Only decades are called
+       out: a marker per year would be a wall of numbers, and the decade is the
+       unit people actually think in. */
+    if (lane.mark) {
+      row.appendChild(el('span', { class: 'floor-mark', 'aria-hidden': 'true', text: lane.mark }));
+    }
+
+    for (const album of lane.albums) {
       const card = el('a', {
         class: 'floor-card', href: '#/album/' + album.key,
-        'aria-label': `${album.title} by ${album.artist}`,
+        'aria-label': `${album.title} by ${album.artist}${album.year ? ', ' + album.year : ''}`,
       },
         el('span', { class: 'floor-art', style: { background: placeholderStyle(album.key) } },
           el('img', { class: 'art-img', alt: '', decoding: 'async', loading: 'lazy' })),
@@ -909,11 +936,71 @@ function mountFloor(host, viewport) {
     return row;
   }
 
+  /* ------------------------------------------------------------- the axis
+   *
+   * Depth is the release year, oldest nearest, so walking forward is walking
+   * forward through time and the decade markers count up as you go. Counting
+   * down would have been the other option — newest first, like everything else
+   * in the app — and it reads wrong on a floor: a timeline that runs backwards
+   * as you advance makes every marker a subtraction.
+   *
+   * Records with no year are a real and common case, not an edge one: a rip
+   * with no tags, a bootleg, anything ripped before somebody cared. They are
+   * not guessed into a year and not dropped. They go past the end of the axis
+   * behind a wider gap, so the timeline stays honest about what it is showing
+   * and the undated pile is somewhere you can still walk to.
+   */
+  function lanesFor(albums) {
+    const byYear = new Map();
+    const undated = [];
+    for (const a of albums) {
+      if (a.year > 0) {
+        if (!byYear.has(a.year)) byYear.set(a.year, []);
+        byYear.get(a.year).push(a);
+      } else undated.push(a);
+    }
+
+    const years = [...byYear.keys()].sort((x, y) => x - y);
+    const out = [];
+    let prev = null;
+    let lastDecade = null;
+    for (const y of years) {
+      // Distance to walk before this year, from however long the drought was.
+      const gap = prev === null ? 0 : Math.min(GAP_MAX, (y - prev - 1) * GAP_DEPTH);
+      const decade = Math.floor(y / 10) * 10;
+      out.push({
+        year: y,
+        albums: byYear.get(y),
+        gap,
+        mark: decade !== lastDecade ? `${decade}s` : '',
+      });
+      lastDecade = decade;
+      prev = y;
+    }
+    if (undated.length) {
+      out.push({ year: 0, albums: undated, gap: years.length ? 1.4 : 0, mark: 'No year', undated: true });
+    }
+    return out;
+  }
+
   function build() {
     items = lib.state.albums;
+    rows = lanesFor(items);
     camera.textContent = '';
     liveRows.clear();
-    rowCount = Math.ceil(items.length / PER_ROW);
+    rowCount = rows.length;
+
+    /* Where each lane sits in depth, accumulated once rather than derived per
+       frame: the gaps make a lane's position depend on every lane before it,
+       and recomputing that on every scroll frame would be the one O(n) thing
+       in a view that is otherwise bounded by what you can see. */
+    let at = 0;
+    for (const lane of rows) { at += 1 + lane.gap; lane.at = at - 1; }
+    depthSpan = at;
+
+    // The widest year decides how far there is to walk sideways.
+    maxX = Math.max(0, rows.reduce((m, l) => Math.max(m, l.albums.length), 0) * SLOT - SLOT);
+    camX = Math.min(camX, maxX);
     place();
   }
 
@@ -931,10 +1018,25 @@ function mountFloor(host, viewport) {
     // One row per this many pixels of scroll.
     const advance = scrolled / ROW_DEPTH;
 
+    /* Walking sideways.
+     *
+     * One translate on the camera, and perspective does the rest: a fixed
+     * distance in world space projects to a smaller distance on screen the
+     * further away it is, so the near year slides past quickly and the far
+     * ones drift. That parallax is the whole reason this reads as walking
+     * rather than as a list scrolling horizontally, and it costs nothing —
+     * the browser is already dividing by z for every one of these rows. */
+    camera.style.transform = `translate3d(${(-camX).toFixed(1)}px, 0, 0)`;
+
     // Which rows the camera can see: one behind, and as far ahead as the far
     // plane plus a little. Everything outside this does not exist.
-    const first = Math.max(0, Math.ceil(advance - 1.2));
-    const last = Math.min(rowCount - 1, Math.floor(advance + FAR + 3));
+    let first = 0, last = -1;
+    for (let i = 0; i < rowCount; i++) {
+      const d = rows[i].at - advance;
+      if (d < -1.2) first = i + 1;
+      if (d <= FAR + 3) last = i;
+    }
+    first = Math.min(first, rowCount - 1);
 
     for (const [i, row] of liveRows) {
       if (i < first || i > last) { row.remove(); liveRows.delete(i); }
@@ -942,23 +1044,108 @@ function mountFloor(host, viewport) {
 
     for (let i = first; i <= last; i++) {
       const row = liveRows.get(i) || buildRow(i);
-      const d = i - advance;                       // rows ahead of the camera
+      const d = rows[i].at - advance;              // rows ahead of the camera
       // Bounded: past the far plane rows stop receding, so a long library is a
       // long list rather than an infinitely compressed corridor.
       const z = -Math.min(d, FAR) * ROW_DEPTH;
-      row.style.transform = `translate3d(-50%, 0, ${z.toFixed(1)}px)`;
+      /* Every lane starts at the same X, rather than each being centred on
+         itself. A centred row would put 1974's four records and 1991's twenty
+         over different ground, so walking right would arrive somewhere
+         different in each year and the sideways axis would mean nothing.
+         Left-aligned, one step sideways is the same step in every year. */
+      row.style.transform = `translate3d(${(-SLOT / 2).toFixed(1)}px, 0, ${z.toFixed(1)}px)`;
       // Depth fade, so the far end goes into the room rather than stopping.
       row.style.opacity = String(Math.max(0, Math.min(1, 1 - Math.max(0, d) / (FAR + 2.5))).toFixed(3));
       row.classList.toggle('is-near', d < NEAR_ROWS);
     }
   }
 
+  /** Steps sideways, clamped to the floor's own width. */
+  function walk(dx) {
+    const next = Math.max(0, Math.min(maxX, camX + dx));
+    if (next === camX) return false;
+    camX = next;
+    if (!raf) raf = requestAnimationFrame(place);
+    return true;
+  }
+
   const onScroll = () => { if (!raf) raf = requestAnimationFrame(place); };
   viewport.addEventListener('scroll', onScroll, { passive: true });
 
+  /* Three ways to walk sideways, because there is no one gesture everybody
+     has: a trackpad's second axis, a drag, and the arrow keys. The keys are
+     not a courtesy — a view that can only be moved by dragging is a view some
+     people cannot move at all. */
+  const onWheel = (e) => {
+    // A horizontal wheel, or a vertical one with Shift — the pair every
+    // horizontally-scrolling thing on the web already answers to.
+    const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : (e.shiftKey ? e.deltaY : 0);
+    if (!dx) return;
+    if (walk(dx)) e.preventDefault();
+  };
+  stage.addEventListener('wheel', onWheel, { passive: false });
+
+  const onKey = (e) => {
+    const step = e.shiftKey ? SLOT * 3 : SLOT;
+    if (e.key === 'ArrowLeft') { if (walk(-step)) e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { if (walk(step)) e.preventDefault(); }
+    else if (e.key === 'Home') { camX = 0; e.preventDefault(); place(); }
+    else if (e.key === 'End') { camX = maxX; e.preventDefault(); place(); }
+  };
+  stage.addEventListener('keydown', onKey);
+
+  /* Dragging. The cards are links, so a drag that ends on one would otherwise
+     navigate — past a few pixels of movement this stops being a click and the
+     next one is swallowed. */
+  let drag = null;
+  /* Set when a drag ends past the threshold, cleared by the click it swallows
+     or by the next press. A flag rather than a one-shot listener taken back
+     off on a timer: the click follows the release in the same sequence of
+     tasks *usually*, and "usually" is how you get a view that occasionally
+     opens an album because the pointer was busy. */
+  let swallowClick = false;
+  const onClick = (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  stage.addEventListener('click', onClick, true);
+
+  const onDown = (e) => {
+    if (e.button !== 0) return;
+    swallowClick = false;
+    drag = { x: e.clientX, from: camX, moved: 0 };
+    stage.setPointerCapture?.(e.pointerId);
+  };
+  const onDragMove = (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    drag.moved = Math.max(drag.moved, Math.abs(dx));
+    camX = Math.max(0, Math.min(maxX, drag.from - dx));
+    if (drag.moved > 6) stage.classList.add('is-walking');
+    if (!raf) raf = requestAnimationFrame(place);
+  };
+  const onUp = (e) => {
+    if (!drag) return;
+    const moved = drag.moved;
+    drag = null;
+    stage.classList.remove('is-walking');
+    stage.releasePointerCapture?.(e.pointerId);
+    swallowClick = moved > 6;
+  };
+  stage.addEventListener('pointerdown', onDown);
+  stage.addEventListener('pointermove', onDragMove);
+  stage.addEventListener('pointerup', onUp);
+  stage.addEventListener('pointercancel', onUp);
+
   // The stage has to be tall enough to scroll through every row.
   function resize() {
-    stage.style.height = `${Math.max(1, Math.ceil(items.length / PER_ROW)) * ROW_DEPTH + viewport.clientHeight * 0.4}px`;
+    // Guarded for the same reason the virtualiser's is: this runs from a
+    // ResizeObserver on the viewport, and making the stage taller can bring a
+    // scrollbar in, which resizes the viewport, which runs this again.
+    const h = `${Math.max(1, depthSpan) * ROW_DEPTH + viewport.clientHeight * 0.4}px`;
+    if (stage.style.height !== h) stage.style.height = h;
   }
   const ro = new ResizeObserver(() => { resize(); place(); });
   ro.observe(viewport);
@@ -981,6 +1168,13 @@ function mountFloor(host, viewport) {
   return () => {
     off(); offArt(); ro.disconnect();
     viewport.removeEventListener('scroll', onScroll);
+    stage.removeEventListener('wheel', onWheel);
+    stage.removeEventListener('keydown', onKey);
+    stage.removeEventListener('pointerdown', onDown);
+    stage.removeEventListener('pointermove', onDragMove);
+    stage.removeEventListener('pointerup', onUp);
+    stage.removeEventListener('pointercancel', onUp);
+    stage.removeEventListener('click', onClick, true);
     if (raf) cancelAnimationFrame(raf);
   };
 }

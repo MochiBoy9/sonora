@@ -1566,3 +1566,38 @@
   padding-left: 12px;
   border-left: 2px solid var(--accent-line);
 }
+
+/* ------------------------------------------------------- the year axis
+
+   Depth is the release year. The marker lies on the ground in front of its
+   records rather than standing up beside them: a sign in a room is a caption,
+   and a decade you walk over is a place. */
+.floor { touch-action: pan-y; cursor: grab; }
+.floor:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 6px; }
+.floor.is-walking { cursor: grabbing; }
+.floor.is-walking .floor-card { pointer-events: none; }
+
+.floor-mark {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 26px;
+  transform: rotateX(74deg);
+  transform-origin: 0 0;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(46px * var(--scale));
+  font-weight: 600;
+  letter-spacing: .08em;
+  line-height: 1;
+  color: rgb(var(--accent-rgb) / .16);
+  pointer-events: none;
+  user-select: none;
+}
+/* The undated pile is off the end of the axis and says so — the same marking,
+   in the neutral ink, because it is a label rather than a date. */
+.floor-row.is-undated .floor-mark {
+  color: var(--text-3);
+  opacity: .3;
+  font-size: calc(34px * var(--scale));
+}
