@@ -438,17 +438,26 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
   right: -2%;
   top: 4%;
   width: 22px;
-  height: 22px;
 }
 .deck-pivot {
+  height: 22px;
   border-radius: 50%;
   background: radial-gradient(circle at 38% 32%, #4a5460, #1a1f26 70%);
   box-shadow: 0 4px 12px -4px rgb(0 0 0 / .8), inset 0 0 0 var(--hair) rgb(160 220 255 / .2);
 }
 
 .deck-arm {
-  --arm: -34deg;
-  transform-origin: 50% 50%;
+  /* The arm is as long as the deck says, which is what the percentage was
+     always for. It used to be sized on the 22px pivot box, where the tube's
+     `min(62%, 210px)` resolved to 13.6px — so the whole arm, tube and
+     headshell together, drew as a grey stub beside the spindle and the 210px
+     ceiling never once applied. Given its length here, `height` resolves
+     against the deck, the tube fills it, and the geometry below (see the arm
+     angles in stage.js) holds at every size the deck is drawn at. */
+  height: 62%;
+  --arm: -3deg;
+  /* The pivot's own centre, which is the point the arm actually turns about. */
+  transform-origin: 11px 11px;
   rotate: var(--arm);
   transition: rotate 260ms var(--ease);
   cursor: grab;
@@ -464,9 +473,9 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
 .deck-arm-tube {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: 11px;
   width: 5px;
-  height: min(62%, 210px);
+  height: calc(100% - 11px);
   margin-left: -2.5px;
   background: linear-gradient(90deg, #2b323b, #6b7683 42%, #333b45);
   border-radius: 3px;
@@ -476,7 +485,7 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
 .deck-head {
   position: absolute;
   left: 50%;
-  top: calc(50% + min(62%, 210px) - 6px);
+  top: calc(100% - 14px);
   width: 15px;
   height: 20px;
   margin-left: -7.5px;
@@ -492,9 +501,9 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
   content: "";
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: 11px;
   width: 42px;
-  height: calc(min(62%, 210px) + 24px);
+  height: calc(100% - 11px + 20px);
   margin-left: -21px;
 }
 

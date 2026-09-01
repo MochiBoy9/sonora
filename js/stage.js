@@ -477,9 +477,16 @@ export function openStage(backdrop) {
    * this uses, so the arm sits where a real one would at the same point in a
    * side rather than sweeping some arbitrary arc chosen to look busy.
    */
-  const ARM_START = -20;            // dropped on the lead-in groove
-  const ARM_END = 2;                // run-out, near the label
-  const ARM_REST = -34;             // parked on its rest, nothing playing
+  /* Measured against where the arm actually is. The pivot sits 0.49 of the
+     deck to the right of the spindle and 0.44 above it, and the arm is 0.62 of
+     the deck long, so the angles that put the stylus on the lead-in groove and
+     on the run-out follow from the cosine rule rather than from taste. The old
+     pair (-20 and 2) were written for an arm that never drew at its real
+     length: at 210px they put the stylus off the edge of the record at the
+     start of a side and barely inside it at the end. */
+  const ARM_START = 6;              // dropped on the lead-in groove
+  const ARM_END = 32;               // run-out, near the label
+  const ARM_REST = -3;              // parked on its rest, nothing playing
 
   let deckOn = false;
   let scrubAt = null;               // fraction being dragged to, or null
@@ -508,8 +515,12 @@ export function openStage(backdrop) {
     const pivot = deck.querySelector('.deck-pivot').getBoundingClientRect();
     const cx = pivot.left + pivot.width / 2;
     const cy = pivot.top + pivot.height / 2;
-    // The arm hangs down-left from the pivot at rest; measure from straight down.
-    const deg = Math.atan2(e.clientX - cx, e.clientY - cy) * 180 / Math.PI;
+    /* Measured from straight down, in the same sense the arm is rotated in.
+       A positive CSS rotation is clockwise, which carries the tip to the
+       *left*, so the horizontal term is negated — without that the drag ran
+       backwards against the paint and grabbing the arm where it stood reported
+       the far end of the side. */
+    const deg = Math.atan2(cx - e.clientX, e.clientY - cy) * 180 / Math.PI;
     return Math.max(0, Math.min(1, (deg - ARM_START) / (ARM_END - ARM_START)));
   }
 

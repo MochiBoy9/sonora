@@ -630,24 +630,52 @@ body.is-ready .app { opacity: 1; }
   background: rgb(var(--surface-3-rgb) / .5);
   box-shadow: inset 0 0 0 var(--hair) var(--line);
 }
-/* The scale: ticks struck through the arc, dimmer past the top of the range. */
-.vu::before {
-  content: "";
-  position: absolute;
-  inset: 3px 3px auto;
-  height: 13px;
-  background:
-    repeating-conic-gradient(from -46deg at 50% 130%,
-      var(--line-2) 0 .6deg, transparent .6deg 8deg);
-  opacity: .9;
-}
+/* The scale: ticks struck through the arc, dimmer past the top of the range.
+ *
+ * The cone has to be struck from the needle's own pivot or the two are
+ * drawings of different instruments. The needle turns about `50% 130%` of the
+ * meter — its own bottom, 30% below the box — and this layer was inset three
+ * pixels and cut to 13px tall, so the same `130%` landed fourteen pixels
+ * higher and the ticks fanned out of a point the hand never touched. At .6deg
+ * they were also thinner than a pixel at that radius, so what actually reached
+ * the screen was a scatter of dust with a stray blue stroke through it.
+ *
+ * Full box, so the percentage means what the needle means by it; wide enough
+ * to survive rasterising; and masked to the band the needle sweeps, because a
+ * cone with no inner radius fills the pivot with ink. */
+.vu::before,
 .vu::after {
   content: "";
   position: absolute;
-  right: 3px; top: 3px;
-  width: 34%; height: 13px;
-  background: linear-gradient(90deg, transparent, rgb(255 120 120 / .16));
+  inset: 0;
   pointer-events: none;
+  -webkit-mask-image: radial-gradient(circle 21px at 50% 130%,
+    transparent 0 14px, #000 15.5px 20px, transparent 21px);
+  mask-image: radial-gradient(circle 21px at 50% 130%,
+    transparent 0 14px, #000 15.5px 20px, transparent 21px);
+}
+.vu::before {
+  background:
+    /* The ticks, struck through the arc. A 46px meter puts the scale at a
+       radius of about eighteen pixels, where one degree is a fifth of a pixel:
+       the original .6deg wedges could not land on the grid at all and came out
+       as dust. Four degrees every fourteen is a mark wide enough to draw and
+       six of them across the sweep, which is as much scale as a meter this
+       size can carry. */
+    repeating-conic-gradient(from -46deg at 50% 130%,
+      var(--line-2) 0 4deg, transparent 4deg 14deg),
+    /* The arc they are struck through. */
+    radial-gradient(circle 21px at 50% 130%,
+      transparent 0 18.6px, var(--line-2) 19px 19.9px, transparent 20.3px);
+  opacity: .9;
+}
+/* The red end, on the arc rather than as a rectangle in the corner: it marks
+   the last stretch of the sweep, which is what "over" means on a meter. The
+   band starts where `vu-hot` does, so the needle reddens as it enters it. */
+.vu::after {
+  background:
+    conic-gradient(from 0deg at 50% 130%,
+      transparent 0 26deg, rgb(255 120 120 / .30) 30deg 44deg, transparent 47deg);
 }
 .vu-needle, .vu-peak {
   position: absolute;

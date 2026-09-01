@@ -172,8 +172,11 @@ export function mountSound(host) {
 
   const overlay = el('div', { class: 'eq-overlay' });
   for (const f of HZ_MARKS) {
+    // The last gridline is all but against the right edge, so its label is set
+    // back from the line rather than out past it.
+    const end = f === HZ_MARKS[HZ_MARKS.length - 1];
     overlay.appendChild(el('span', {
-      class: 'eq-mark eq-mark-x', text: hz(f),
+      class: 'eq-mark eq-mark-x' + (end ? ' is-end' : ''), text: hz(f),
       style: `left:${(xOf(f) / W) * 100}%`,
     }));
   }

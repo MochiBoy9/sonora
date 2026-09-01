@@ -78,15 +78,26 @@ function swapView() {
      every page afterwards inherited it. Resetting here fixes it for every
      view at once rather than asking each one to remember. */
   host.className = 'view';
-  host.scrollTop = 0;
+  /* `#view` carries `scroll-behavior: smooth`, which is right for the anchors
+     inside a page and wrong for both of these: a route change is a new page,
+     not a journey across the old one. Assigning `scrollTop` obeys the CSS and
+     animates, so both of these have to say what they mean. */
+  host.scrollTo({ top: 0, behavior: 'instant' });
 
   teardown = renderView(host, route);
   paintNav(route);
   paintRouteTag(route);
   syncSearchInput(route);
 
+  /* Coming back to a page you have already read should put you where you left
+     it, at once. Animated, it instead scrolls the whole way down in front of
+     you every time you press Back — eight hundred milliseconds of content
+     sliding under the transport before it settles, which reads as the page
+     running away rather than as a page being restored. */
   const remembered = scrollMemory.get(currentHash);
-  if (remembered) requestAnimationFrame(() => { host.scrollTop = remembered; });
+  if (remembered) {
+    requestAnimationFrame(() => { host.scrollTo({ top: remembered, behavior: 'instant' }); });
+  }
 
   document.title = titleFor(route);
 }

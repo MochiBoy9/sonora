@@ -74,6 +74,10 @@
   white-space: nowrap;
 }
 .eq-mark-x { bottom: 5px; transform: translateX(4px); }
+/* The top of the range sits at 98.6% of the width, so a label nudged right
+   from there hangs over the edge and the box clips it: "20k" was reading as
+   "2". The last one is set back from its own gridline instead. */
+.eq-mark-x.is-end { transform: translateX(calc(-100% - 5px)); }
 .eq-mark-y { left: 7px; transform: translateY(-100%); margin-top: -3px; }
 
 .eq-handles { pointer-events: none; }
@@ -242,8 +246,18 @@
 }
 .look-swatch:hover { border-color: var(--line-3); transform: translateY(-2px); }
 .look-swatch.is-on { border-color: rgb(var(--sw-a)); }
-.look-name { font-size: calc(12px * var(--scale)); font-weight: 580; color: var(--text); }
+/* Both are spans inside the button, so both have to be told to be blocks:
+   left inline they set on one line as "AquaWet glass and a deep horizon", and
+   the `margin-top` below — which does nothing to an inline box — is the note
+   that a stacked pair was always what this wanted. */
+.look-name {
+  display: block;
+  font-size: calc(12px * var(--scale));
+  font-weight: 580;
+  color: var(--text);
+}
 .look-note {
+  display: block;
   font-size: calc(10.5px * var(--scale));
   color: var(--text-3);
   margin-top: 2px;

@@ -321,8 +321,8 @@
   transform: rotateY(180deg);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 18px 18px 14px;
+  gap: 8px;
+  padding: 15px 16px 12px;
   overflow: hidden;
   /* Printed card, not glass: the back of a sleeve is the one surface in the
      app that should look like ink on board rather than light behind glass. */
@@ -334,7 +334,9 @@
   border-radius: var(--radius);
 }
 
-.back-head { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; border-bottom: var(--hair) solid var(--line); }
+/* The two blocks that name the record never give up a pixel; the two that
+   list it are the ones that flex. */
+.back-head { flex: none; display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; border-bottom: var(--hair) solid var(--line); }
 .back-artist {
   font-family: var(--mono);
   font-size: calc(9.5px * var(--scale));
@@ -352,8 +354,14 @@
 }
 
 .back-list {
-  flex: 1;
-  min-height: 0;
+  /* `flex: 1` alone made this the only elastic block, so it absorbed every
+     pixel the three fixed blocks around it did not want — and once the spec
+     block grew past four rows that came to 4px, with the tracklist's own rows
+     spilling out of it and printing over the spec. The tracklist is what a
+     back cover is *for*, so it is the one thing here with a floor: three
+     tracks always, and the fine print below gives way instead. */
+  flex: 1 1 auto;
+  min-height: calc(3 * 1.5 * 10.5px * var(--scale));
   overflow-y: auto;
   margin: 0;
   padding: 0;
@@ -373,7 +381,7 @@
   align-items: baseline;
   font-size: calc(10.5px * var(--scale));
   color: var(--text-2);
-  line-height: 1.5;
+  line-height: 1.4;
 }
 .back-n, .back-d {
   font-family: var(--mono);
@@ -390,16 +398,29 @@
   grid-template-columns: auto minmax(0, 1fr);
   gap: 1px 10px;
   margin: 0;
-  padding-top: 8px;
+  padding-top: 6px;
   border-top: var(--hair) solid var(--line);
   font-family: var(--mono);
   font-size: calc(8.5px * var(--scale));
   letter-spacing: .06em;
+  line-height: 1.28;
+  /* Fine print, and it behaves like it. The shrink factor is what orders the
+     two: a 232px sleeve cannot hold the head, four tracks, eight rows of spec
+     and a catalogue number at once, so something has to give, and it should be
+     the technical block rather than the tracklist. Shrinking forty times as
+     readily makes it absorb the whole shortfall until it reaches its own floor
+     of four rows, and only then does the tracklist start to run out. */
+  flex: 0 40 auto;
+  min-height: calc(4 * 1.28 * 8.5px * var(--scale) + 10px);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 84%, transparent);
+  mask-image: linear-gradient(to bottom, #000 84%, transparent);
 }
 .back-spec dt { color: var(--text-3); text-transform: uppercase; letter-spacing: .16em; }
 .back-spec dd { margin: 0; color: var(--text-2); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .back-cat {
+  flex: none;
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -407,7 +428,7 @@
   font-size: calc(8.5px * var(--scale));
   letter-spacing: .18em;
   color: var(--text-3);
-  padding-top: 6px;
+  padding-top: 5px;
   border-top: var(--hair) solid var(--line);
 }
 
@@ -415,7 +436,12 @@
 .flip-btn {
   position: absolute;
   left: 50%;
-  bottom: calc(var(--floor-h) * -0.1);
+  /* On the floor, not below it. The stage overhangs the hero by the height of
+     the reflection — which is deliberate, the echo is meant to overflow — but
+     the hero clips, so a button hung under that overhang lost its bottom nine
+     pixels. Inside the floor band it sits over the reflection, which is what
+     "on the floor" meant in the first place. */
+  bottom: calc(var(--floor-h) * 0.2);
   transform: translateX(-50%);
   z-index: 4;
   display: inline-flex;
@@ -1384,7 +1410,12 @@
   position: absolute;
   inset: 34px 0 22px;
   display: flex;
-  flex-direction: column;
+  /* `row` runs along the *inline* axis, and in a vertical writing mode that is
+     down the spine — so the title and the artist follow one another along the
+     length of it, which is how a spine is printed. `column` ran them across
+     the 19px width instead: two text columns and an 8px gap in 15px of room
+     left each of them four pixels wide, and the whole shelf read as noise. */
+  flex-direction: row;
   justify-content: flex-start;
   gap: 8px;
   /* Read bottom-to-top, which is how spines are printed nearly everywhere
@@ -1443,11 +1474,6 @@
 .floor {
   position: relative;
   margin-top: 8px;
-  /* Matched to the backdrop's own camera: it looks very slightly down from a
-     little above the plane, and the interface has to agree or the two spaces
-     disagree by a few degrees and the whole illusion reads as a mistake. */
-  perspective: 1100px;
-  perspective-origin: 50% 34%;
 }
 
 .floor-camera {
@@ -1455,12 +1481,34 @@
   top: 0;
   height: 78vh;
   transform-style: preserve-3d;
+  /* The camera holds the camera.
+   *
+   * These two belonged on `.floor` and could not work there: `.floor` is the
+   * scroll range, so its height is the whole library — 2,691px for thirteen
+   * albums and far more for a real one — and a `perspective-origin` in percent
+   * resolved against *that*. The vanishing point landed 200px below the bottom
+   * of the visible frame, moved further down with every album added, and
+   * drifted against the sticky element as the page scrolled. Rows converged on
+   * a point off the bottom of the screen and each one buried the titles of the
+   * row in front.
+   *
+   * On the sticky frame the horizon is a fixed fraction of what you can
+   * actually see, whatever the library holds. It sits high, and the rows stand
+   * below it, so walking forward walks *into* the room.
+   *
+   * Matched to the backdrop's own camera: it looks very slightly down from a
+   * little above the plane, and the interface has to agree or the two spaces
+   * disagree by a few degrees and the whole illusion reads as a mistake. */
+  perspective: 1100px;
+  perspective-origin: 50% 22%;
 }
 
 .floor-row {
   position: absolute;
   left: 50%;
-  top: 22%;
+  /* Below the horizon, so the rows behind rise toward it and each one shows
+     above the one in front instead of sinking behind it. */
+  top: 46%;
   display: flex;
   gap: 26px;
   transform-style: preserve-3d;
@@ -1534,8 +1582,7 @@
 /* Someone who has asked for less motion gets the grid's honesty instead of a
    floor that moves whenever they scroll. */
 @media (prefers-reduced-motion: reduce) {
-  .floor { perspective: none; }
-  .floor-camera { position: static; height: auto; }
+  .floor-camera { perspective: none; position: static; height: auto; }
   .floor-row { position: static; transform: none !important; opacity: 1 !important; flex-wrap: wrap; justify-content: center; margin-bottom: 26px; }
   .floor-row .floor-text { opacity: 1; }
 }
