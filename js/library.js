@@ -13,7 +13,7 @@
  */
 
 import * as db from './db.js';
-import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle } from './util.js';
+import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle, ext } from './util.js';
 
 export const events = new Emitter();
 
@@ -336,7 +336,6 @@ export function census() {
   const rates = new Map();
   const depths = new Map();
   let bytes = 0, known = { rate: 0, depth: 0 }, lossless = 0;
-  const LOSSLESS = new Set(['flac', 'wav', 'wave', 'aiff', 'aif', 'ape', 'wv', 'tta']);
 
   for (const t of state.tracks.values()) {
     const e = (t.name || '').slice((t.name || '').lastIndexOf('.') + 1).toLowerCase() || '?';
@@ -554,8 +553,80 @@ export function sortTracks(list, key, dir = 1) {
  * Ranked search across tracks, albums and artists. One linear pass with
  * precomputed haystacks; ~2 ms over 50k tracks, so it runs on every keystroke.
  */
+/* Containers that hold the whole signal. Used by the census and by the
+   `lossless` search filter, which have to agree about what the word means. */
+const LOSSLESS = new Set(['flac', 'wav', 'wave', 'aiff', 'aif', 'ape', 'wv', 'tta']);
+
+/* ------------------------------------------------------------------ filters
+ *
+ * The one box people actually use only ever matched text in a title, an artist
+ * and an album, while everything else the app knows sat unreachable from it.
+ *
+ * These are the questions worth being able to ask in passing — the ones that
+ * would otherwise mean building a smart shelf for a thing you wanted to know
+ * once. Each is a single comparison over a field that is already indexed, and
+ * anything not recognised as a filter stays part of the text query, so typing
+ * an ordinary search still behaves exactly as it always did.
+ */
+const FILTERS = [
+  [/^before:(\d{4})$/, (t, m) => t.year > 0 && t.year < +m[1]],
+  [/^after:(\d{4})$/, (t, m) => t.year > 0 && t.year > +m[1]],
+  [/^year:(\d{4})$/, (t, m) => t.year === +m[1]],
+  [/^>(\d+(?:\.\d+)?)min$/, (t, m) => (t.duration || 0) > +m[1] * 60],
+  [/^<(\d+(?:\.\d+)?)min$/, (t, m) => (t.duration || 0) > 0 && t.duration < +m[1] * 60],
+  [/^dr>(\d+(?:\.\d+)?)$/, (t, m) => t.dr > 0 && t.dr > +m[1]],
+  [/^dr<(\d+(?:\.\d+)?)$/, (t, m) => t.dr > 0 && t.dr < +m[1]],
+  [/^bpm>(\d+)$/, (t, m) => t.bpm > 0 && t.bpm > +m[1]],
+  [/^bpm<(\d+)$/, (t, m) => t.bpm > 0 && t.bpm < +m[1]],
+  [/^format:([a-z0-9]+)$/, (t, m) => ext(t.name || '') === m[1]],
+  [/^fav(?:ourite)?$/, (t) => isFavourite(t.id)],
+  [/^unplayed$/, (t) => !(t.playCount > 0)],
+  [/^guessed$/, (t) => !!(t.guessed && t.guessed.length)],
+  [/^edited$/, (t) => isEdited(t)],
+  [/^lossless$/, (t) => LOSSLESS.has(ext(t.name || '')) || t.bitrate > 500],
+  /* Suspected transcodes, from the encoder shelf the analysis measures. Only
+     ever true for tracks that have actually been analysed, so this finds what
+     is known rather than implying the rest are clean. */
+  [/^suspect$/, (t) => t.truncated === true],
+];
+
+/** Splits a query into the filters it names and the words it does not. */
+export function parseQuery(query) {
+  const words = [];
+  const filters = [];
+  for (const raw of String(query || '').trim().split(/\s+/)) {
+    if (!raw) continue;
+    const token = raw.toLowerCase();
+    let claimed = false;
+    for (const [re, test] of FILTERS) {
+      const m = token.match(re);
+      if (!m) continue;
+      filters.push({ token, test: (t) => test(t, m) });
+      claimed = true;
+      break;
+    }
+    if (!claimed) words.push(raw);
+  }
+  return { words, filters, text: words.join(' ') };
+}
+
 export function search(query, limit = 60) {
-  const q = norm(query).trim();
+  const parsed = parseQuery(query);
+
+  /* A query that is nothing but filters is still a query. "unplayed dr>14"
+     names no words at all and should return every track that satisfies both,
+     rather than the empty result an all-text search would give. */
+  if (parsed.filters.length && !parsed.words.length) {
+    const hits = [...state.tracks.values()].filter((t) => parsed.filters.every((f) => f.test(t)));
+    return {
+      query,
+      tracks: sortTracks(hits, 'title', 1).slice(0, limit),
+      albums: [], artists: [],
+      filtered: parsed.filters.map((f) => f.token),
+    };
+  }
+
+  const q = norm(parsed.text).trim();
   if (!q) return { tracks: [], albums: [], artists: [], query: '' };
   const terms = q.split(/\s+/);
 
@@ -573,6 +644,8 @@ export function search(query, limit = 60) {
 
   const tracks = [];
   for (const t of state.tracks.values()) {
+    // Words and filters are an AND: "beatles unplayed" means both.
+    if (parsed.filters.length && !parsed.filters.every((f) => f.test(t))) continue;
     const s = scoreOf(t.search, t.title);
     if (s) tracks.push({ s: s + (t.playCount || 0) * 0.5, t });
   }
@@ -597,6 +670,7 @@ export function search(query, limit = 60) {
     tracks: tracks.slice(0, limit).map((x) => x.t),
     albums: albums.slice(0, 24).map((x) => x.a),
     artists: artists.slice(0, 12).map((x) => x.a),
+    filtered: parsed.filters.map((f) => f.token),
   };
 }
 

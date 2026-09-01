@@ -17,6 +17,7 @@ import { mountBackdrop } from './backdrop.js';
 import { toggleStage, isOpen as stageOpen } from './stage.js';
 import { startRelief } from './relief.js';
 import { startOffline } from './offline.js';
+import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
 import * as peakmap from './peaks.js';
 
 /* Destinations are numbered, like channels on a desk — the number is part of
@@ -672,7 +673,11 @@ function bindKeys() {
       e.preventDefault(); showShortcuts(); return;
     }
     if (e.key === '/' && !typing) { e.preventDefault(); $('#search')?.focus(); return; }
-    if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $('#search')?.focus(); return; }
+    /* The palette, not the search field. Cmd-K means "let me type what I want"
+       everywhere else, and Sonora has forty actions that were previously only
+       reachable by knowing where they lived. "/" still goes to the search box
+       for anyone who wants to search the library specifically. */
+    if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); togglePalette(); return; }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
 
     switch (e.key) {
@@ -749,6 +754,14 @@ async function boot() {
 
   document.addEventListener('sonora:add', addMusic);
   document.addEventListener('sonora:shortcuts', showShortcuts);
+  /* The palette dispatches rather than calling: it is loaded before the shell
+     is built, and holding references to functions that do not exist yet is how
+     a module graph acquires a cycle. */
+  document.addEventListener('sonora:add-music', () => addMusicMenu($('.add-btn')));
+  document.addEventListener('sonora:bypass', () => {
+    rack.set({ on: !rack.state.on });
+    toast(rack.state.on ? 'Rack in circuit' : 'Rack bypassed');
+  });
   document.addEventListener('sonora:toggle-queue', () => toggleQueuePane());
   document.addEventListener('sonora:theme', (e) => applyTheme(e.detail));
   document.addEventListener('sonora:stage', () => toggleStage(backdrop));

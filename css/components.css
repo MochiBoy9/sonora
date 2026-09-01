@@ -1294,3 +1294,130 @@ select.input { padding-right: 8px; }
   box-shadow: inset 0 0 0 var(--hair) rgb(255 200 87 / .4);
 }
 .edit-field.is-guessed .input { box-shadow: inset 0 0 0 var(--hair) rgb(255 200 87 / .34); }
+
+/* ---------------------------------------------------------------- palette
+
+   Everything the app can do, reachable by typing its name. Two lists ranked
+   into one: the actions, and whatever the library search finds — so ⌘K finds
+   "shuffle" and "Shuffle it Off" in the same box.
+
+   Sits high on the screen rather than centred: a list that grows downward from
+   a fixed point is easier to read down than one that re-centres itself as it
+   changes length. */
+.pal-scrim { align-items: flex-start; }
+
+.pal {
+  width: min(660px, calc(100vw - 32px));
+  margin-top: 12vh;
+  background: rgb(var(--surface-2-rgb) / .96);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line), 0 32px 80px -24px rgb(0 0 0 / .8);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pal-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  height: 56px;
+  border-bottom: var(--hair) solid var(--line);
+  flex: none;
+}
+.pal-ico { display: grid; place-items: center; color: var(--text-3); flex: none; }
+.pal-ico .ico { width: 17px; height: 17px; }
+
+.pal-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: calc(15.5px * var(--scale));
+}
+.pal-input::placeholder { color: var(--text-3); }
+.pal-input:focus { outline: none; }
+
+.pal-list { overflow-y: auto; max-height: min(52vh, 460px); padding: 6px; }
+.pal-empty { padding: 22px 14px; color: var(--text-3); text-align: center; }
+
+.pal-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 10px;
+  text-align: left;
+  color: var(--text-2);
+  transition: background var(--dur-1) linear, color var(--dur-1) linear;
+}
+.pal-row.is-active { background: rgb(var(--accent-rgb) / .14); color: var(--text); }
+.pal-row:hover { background: rgb(var(--accent-rgb) / .09); }
+
+.pal-row-ico { flex: none; display: grid; place-items: center; color: var(--text-3); }
+.pal-row.is-active .pal-row-ico { color: var(--accent); }
+.pal-row-ico .ico { width: 15px; height: 15px; }
+
+.pal-row-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.pal-row-text b {
+  font-weight: 500;
+  font-size: calc(14px * var(--scale));
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pal-row-text span {
+  font-size: calc(11.5px * var(--scale));
+  color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.pal-keys {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .06em;
+  color: var(--text-3);
+  padding: 2px 7px;
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+}
+.pal-meta, .pal-kind {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.pal-kind { min-width: 42px; text-align: right; opacity: .7; }
+
+.pal-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 10px 16px;
+  border-top: var(--hair) solid var(--line);
+  font-size: calc(11.5px * var(--scale));
+  color: var(--text-3);
+  flex: none;
+}
+.pal-hint code {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  color: var(--accent);
+  background: rgb(var(--accent-rgb) / .1);
+  padding: 1px 6px;
+}
+
+@media (max-width: 620px) {
+  .pal { margin-top: 6vh; }
+  .pal-keys, .pal-kind { display: none; }
+}
