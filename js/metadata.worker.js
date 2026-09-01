@@ -303,6 +303,22 @@ self.onmessage = (e) => {
     done = 0; total = 0;
   } else if (msg.type === 'knownAlbums') {
     for (const k of msg.keys) seenAlbums.add(k);
+  } else if (msg.type === 'cover') {
+    /* A picture somebody dropped on an album, through the same door as one
+       found inside a file. Same downscale, same WebP, same accent sample, same
+       relief pass — so a cover you chose behaves identically to a cover that
+       was already there: it tints its own page, lights under the pointer, and
+       sits in the backdrop, without a single thing downstream having to know
+       where it came from. `id` rides along so the caller can match the reply;
+       two drops in flight at once is unlikely but free to get right. */
+    makeThumb(msg.blob).then((thumb) => {
+      self.postMessage({
+        type: 'cover', id: msg.id, key: msg.key,
+        blob: thumb ? thumb.blob : null,
+        accent: thumb ? thumb.accent : null,
+        relief: thumb ? thumb.relief : null,
+      });
+    }).catch(() => self.postMessage({ type: 'cover', id: msg.id, key: msg.key, blob: null }));
   }
 };
 

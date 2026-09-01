@@ -73,6 +73,11 @@ function ensureWorker() {
     const msg = e.data;
     if (msg.type === 'ready') { workerReady = true; return; }
     if (msg.type === 'tracks') return absorb(msg.tracks);
+    if (msg.type === 'cover') {
+      const done = coverWaits.get(msg.id);
+      if (done) { coverWaits.delete(msg.id); done(msg.blob ? msg : null); }
+      return;
+    }
     if (msg.type === 'progress') {
       state.progress = { done: msg.done, total: msg.total };
       events.emit('progress', state.progress);
@@ -124,6 +129,11 @@ function flushArt() {
   const items = pendingArt.splice(0, pendingArt.length);
   for (const a of items) {
     db.putArt(a.key, a.blob).catch(() => {});
+    /* An album whose cover the listener chose still stores what the files
+       supplied — that is what "use the original again" restores — but the
+       scanned one must not climb back into the caches on a rescan and quietly
+       replace the chosen picture on screen. Store it, ignore it. */
+    if (ownArt.has(a.key)) continue;
     if (a.accent) accents.set(a.key, a.accent);
     /* The surface, under its own key in the same store. A typed array goes
        into IndexedDB as itself, so it comes back out ready to read without a
@@ -333,7 +343,7 @@ export function loadRelief(key) {
   if (!key || reliefs.has(key) || reliefMisses.has(key)) {
     return Promise.resolve(reliefs.get(key) || null);
   }
-  return db.getArt(key + '#relief').then((rec) => {
+  return db.getArt(artKeyFor(key) + '#relief').then((rec) => {
     if (rec && rec.map) { reliefs.set(key, rec); return rec; }
     reliefMisses.add(key);
     return null;
@@ -739,7 +749,7 @@ export function loadArt(key) {
   if (hit) return Promise.resolve(hit);
   let p = artPending.get(key);
   if (p) return p;
-  p = db.getArt(key).then((blob) => {
+  p = db.getArt(artKeyFor(key)).then((blob) => {
     artPending.delete(key);
     const raced = artURLs.get(key);          // an import may have won the race
     if (raced) return raced;
@@ -750,6 +760,163 @@ export function loadArt(key) {
   }).catch(() => { artPending.delete(key); return null; });
   artPending.set(key, p);
   return p;
+}
+
+/* ---------------------------------------------------------- chosen artwork
+ *
+ * A picture you dropped on an album, and the same promise as a tag edit: it is
+ * an overlay, and the cover that came out of the files is still underneath it.
+ *
+ * Two records rather than one. The scanned cover keeps the album key it always
+ * had; yours goes under `key + '#own'`. That costs a set membership test on
+ * every read and buys the thing that matters — "use the original again" is a
+ * delete of one record, not an apology, and a rescan that finds a better
+ * embedded cover cannot silently overwrite the one you chose.
+ *
+ * The picture is handed to the metadata worker rather than processed here, and
+ * comes back through the identical pipeline a scanned cover uses: downscaled
+ * the same way, encoded the same way, sampled for the same accent colour, and
+ * run through the same relief pass. So a cover you chose tints its own page
+ * and lights under the pointer exactly as one found in a file does, and no
+ * view has to learn the difference.
+ */
+
+/**
+ * Album keys whose art the listener chose, each with the colour sampled from
+ * that picture.
+ *
+ * The colour is here rather than derived on demand because of where the other
+ * one lives: a scanned cover's accent is written onto the track records at
+ * import, so it comes back with the library, and a chosen cover has no track
+ * record to ride home on. Without this the album page came back untinted after
+ * every reload — the picture was right and the colour beside it was not, which
+ * is worse than either being wrong on its own.
+ */
+const ownArt = new Map();       // albumKey -> [r,g,b] | null
+
+const ownKey = (key) => key + '#own';
+
+export const hasOwnArt = (key) => ownArt.has(key);
+
+/** The record `loadArt` should read for this album. */
+const artKeyFor = (key) => (ownArt.has(key) ? ownKey(key) : key);
+
+function saveOwnArt() {
+  const out = {};
+  for (const [k, accent] of ownArt) out[k] = accent || null;
+  return db.setKV('ownArt', out).catch(() => {});
+}
+
+/** Drops every cached derivation of an album's cover, so the next read rebuilds. */
+function forgetArt(key) {
+  const url = artURLs.get(key);
+  if (url) { URL.revokeObjectURL(url); artURLs.delete(key); }
+  artMisses.delete(key);
+  artPending.delete(key);
+  reliefs.delete(key);
+  reliefMisses.delete(key);
+}
+
+/* Sent to the worker and awaited by id, because a `cover` reply arrives on the
+   same channel as scan traffic and must not be mistaken for it. */
+let coverSeq = 0;
+const coverWaits = new Map();
+
+function processCover(key, blob) {
+  const w = ensureWorker();
+  if (!w) return Promise.resolve(null);
+  const id = ++coverSeq;
+  return new Promise((resolve) => {
+    coverWaits.set(id, resolve);
+    // If the worker dies mid-flight nothing ever resolves, so bound the wait.
+    setTimeout(() => { if (coverWaits.delete(id)) resolve(null); }, 20000);
+    w.postMessage({ type: 'cover', id, key, blob });
+  });
+}
+
+const IMAGE_TYPES = /^image\/(jpeg|png|webp|gif|avif|bmp|tiff?)$/i;
+
+/**
+ * Gives an album a cover of your choosing.
+ *
+ * Returns true if it took. A file that is not an image, or one the browser
+ * cannot decode, is refused rather than stored — a broken record here would
+ * show up as a blank sleeve with no way to tell whether the picture or the
+ * album was at fault.
+ */
+export async function setArtwork(key, file) {
+  if (!key || !file) return false;
+  if (file.type && !IMAGE_TYPES.test(file.type)) return false;
+
+  const made = await processCover(key, file);
+  if (!made || !made.blob) return false;
+
+  // What is there now, so the undo can put it back exactly.
+  const hadOwn = ownArt.has(key);
+  const prevBlob = hadOwn ? await db.getArt(ownKey(key)).catch(() => null) : null;
+  const prevAccent = accents.get(key) || null;
+  const prevRelief = hadOwn ? reliefs.get(key) || await db.getArt(ownKey(key) + '#relief').catch(() => null) : null;
+
+  await putOwnArt(key, made);
+  const album = state.albumBy.get(key);
+  undo.push({
+    label: `the cover for “${album ? album.title : 'that album'}”`,
+    undo: () => (hadOwn && prevBlob
+      ? putOwnArt(key, { blob: prevBlob, accent: prevAccent, relief: prevRelief })
+      : dropOwnArt(key)),
+    redo: () => putOwnArt(key, made),
+  });
+  return true;
+}
+
+/** Writes the chosen cover and everything derived from it. */
+async function putOwnArt(key, made) {
+  ownArt.set(key, made.accent || null);
+  saveOwnArt();
+  await db.putArt(ownKey(key), made.blob).catch(() => {});
+  if (made.relief) {
+    await db.putArt(ownKey(key) + '#relief', made.relief).catch(() => {});
+  } else {
+    await db.deleteArt([ownKey(key) + '#relief']).catch(() => {});
+  }
+  forgetArt(key);
+  if (made.accent) accents.set(key, made.accent); else accents.delete(key);
+  if (made.relief) reliefs.set(key, made.relief); else reliefMisses.add(key);
+  artURLs.set(key, URL.createObjectURL(made.blob));
+  events.emit('art', [key]);
+  events.emit('change');
+  return 1;
+}
+
+/** Removes the chosen cover, revealing whatever the files supplied. */
+async function dropOwnArt(key) {
+  if (!ownArt.has(key)) return 0;
+  ownArt.delete(key);
+  saveOwnArt();
+  await db.deleteArt([ownKey(key), ownKey(key) + '#relief']).catch(() => {});
+  forgetArt(key);
+  /* The scanned cover's accent went into the album record at import and is
+     still there, so the colour comes back with the picture. */
+  accents.delete(key);
+  events.emit('art', [key]);
+  events.emit('change');
+  return 1;
+}
+
+/** Puts the album back to the cover its files came with. */
+export async function clearArtwork(key) {
+  if (!ownArt.has(key)) return false;
+  const blob = await db.getArt(ownKey(key)).catch(() => null);
+  const accent = accents.get(key) || null;
+  const relief = reliefs.get(key) || await db.getArt(ownKey(key) + '#relief').catch(() => null);
+  const album = state.albumBy.get(key);
+  await dropOwnArt(key);
+  undo.push({
+    label: `putting back the cover for “${album ? album.title : 'that album'}”`,
+    undo: () => (blob ? putOwnArt(key, { blob, accent, relief }) : 0),
+    redo: () => dropOwnArt(key),
+  });
+  return true;
 }
 
 /* ------------------------------------------------------------------ files */
@@ -1340,13 +1507,14 @@ export const favouriteTracks = () =>
 
 /** Paints the stored library first, then reconnects to disk in the background. */
 export async function init() {
-  const [tracks, roots, playlists, recent, faves, sn] = await Promise.all([
+  const [tracks, roots, playlists, recent, faves, sn, own] = await Promise.all([
     db.getAllTracks().catch(() => []),
     db.getRoots().catch(() => []),
     db.getPlaylists().catch(() => []),
     db.getKV('recent').catch(() => null),
     db.getKV('favourites').catch(() => null),
     db.getKV('serial').catch(() => null),
+    db.getKV('ownArt').catch(() => null),
   ]);
 
   serial = typeof sn === 'string' && sn ? sn : makeSerial();
@@ -1358,6 +1526,16 @@ export async function init() {
   history.recent = Array.isArray(recent) ? recent : [];
   favourites.ids = Array.isArray(faves) ? faves.filter((id) => typeof id === 'string') : [];
   favourites.set = new Set(favourites.ids);
+  /* Chosen covers, and the colour each one was sampled for. Accepts a bare
+     array of keys as well as the map, because the first shape this was written
+     in had nowhere to put the colour. */
+  if (Array.isArray(own)) for (const k of own) ownArt.set(k, null);
+  else if (own && typeof own === 'object') {
+    for (const [k, accent] of Object.entries(own)) {
+      ownArt.set(k, accent || null);
+      if (accent) accents.set(k, accent);
+    }
+  }
   reindex();
   events.emit('ready');
 

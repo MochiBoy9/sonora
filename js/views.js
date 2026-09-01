@@ -464,12 +464,15 @@ function viewHome(host) {
   const recentTrack = lib.recentTracks()[0];
 
   const title = el('h1', { class: 'page-title grad-text', text: 'Your library' });
-  const stats = el('p', { class: 'page-sub' });
+  /* Not named `stats`: this function also reads the listening stats module,
+     and an element by that name shadowed the import — `stats.forTrack` then
+     resolved to an HTMLElement and threw on every Home render. */
+  const countLine = el('p', { class: 'page-sub' });
   const head = el('header', { class: 'home-hero' },
     el('div', { class: 'home-hero-text' },
       el('p', { class: 'eyebrow', text: greeting }),
       title,
-      stats,
+      countLine,
       el('div', { class: 'hero-actions' },
         el('button', {
           class: 'btn primary', html: ico('shuffle') + '<span>Shuffle everything</span>',
@@ -489,7 +492,7 @@ function viewHome(host) {
 
   // The count rolls up rather than appearing: a readout settling on a value.
   const counted = el('span');
-  stats.append(counted, ' tracks \u00b7 ',
+  countLine.append(counted, ' tracks \u00b7 ',
     `${lib.state.albums.length} albums \u00b7 ${lib.state.artists.length} artists \u00b7 ` +
     fmtTotal(all.reduce((n, t) => n + (t.duration || 0), 0)).toUpperCase());
   readout(counted, total, { duration: 1100 });
@@ -1139,7 +1142,8 @@ function viewAlbum(host, key) {
     playFab(() => playAll(album.tracks, 0, origin)),
     el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(album.tracks, origin) }),
     el('button', { class: 'icon-btn', html: ico('queue'), title: 'Add to queue', onclick: () => { player.enqueue(album.tracks); toast('Added to queue'); } }),
-    el('button', { class: 'icon-btn', html: ico('more'), title: 'More', onclick: (e) => menu(trackMenu(album.tracks, { origin }), { anchor: e.currentTarget }) }));
+    el('button', { class: 'icon-btn', html: ico('more'), title: 'More',
+      onclick: (e) => menu(coverMenu(key, album).concat(trackMenu(album.tracks, { origin })), { anchor: e.currentTarget }) }));
   meta.appendChild(actions);
 
   hero.append(art, meta);
@@ -1217,7 +1221,139 @@ function viewAlbum(host, key) {
   refresh();
   const off = player.events.on('track', refresh);
   const offState = player.events.on('state', refresh);
-  return () => { off(); offState(); untilt(); };
+  const undrop = acceptCover(art, key);
+  const offArt = lib.events.on('art', (keys) => {
+    if (keys && !keys.includes(key)) return;
+    /* Everything the cover feeds, repainted from one event: the face, the
+       reflection standing on the floor beneath it, and the page tint — which
+       is read off the accent colour the new picture was sampled for. */
+    const img = art.querySelector('.art-img');
+    if (img) { img.dataset.key = ''; paintArt(img, key); }
+    const echo = art.querySelector('.art-echo-img');
+    // Through loadArt rather than off the face's src: reverting to the
+    // original empties the cache, so the face is still waiting at this point.
+    if (echo) {
+      lib.loadArt(key).then((url) => {
+        if (url) echo.setAttribute('src', url); else echo.removeAttribute('src');
+      });
+    }
+    applyHeroTint(hero, key);
+  });
+  return () => { off(); offState(); untilt(); undrop(); offArt(); };
+}
+
+/* ---------------------------------------------------------------- covers
+ *
+ * Some albums arrive with no picture, and some arrive with the wrong one —
+ * a scan of a CD-R, a placeholder from a rip, the same generic square across
+ * forty bootlegs. Sonora will not write to the files, so the fix is the same
+ * shape as a tag correction: your picture goes into Sonora's index, the
+ * album's own cover stays where it was, and "use the original" is one click.
+ *
+ * Three ways in, because the right one depends on where the picture is:
+ * dropped from a folder, pasted from wherever you just copied it, or picked
+ * through the file dialog when neither of those is convenient.
+ */
+
+function coverMenu(key, album) {
+  const choose = async (file) => {
+    if (!file) return;
+    toast('Fitting the cover…');
+    const ok = await lib.setArtwork(key, file);
+    toast(ok ? `New cover for “${album.title}”` : 'That file could not be read as a picture');
+  };
+  return [
+    {
+      label: 'Choose a cover…', icon: 'image', hint: 'or drop one on the sleeve',
+      onSelect: () => {
+        /* An <input type=file> rather than showOpenFilePicker: this one needs
+           no handle afterwards, works in every browser, and does not have to
+           be reconnected on the next launch the way a music folder does. */
+        const pick = el('input', { type: 'file', accept: 'image/*' });
+        pick.style.display = 'none';
+        pick.addEventListener('change', () => { choose(pick.files[0]); pick.remove(); });
+        document.body.appendChild(pick);
+        pick.click();
+      },
+    },
+    lib.hasOwnArt(key) ? {
+      label: 'Use the original cover', icon: 'refresh',
+      onSelect: async () => {
+        await lib.clearArtwork(key);
+        toast(`“${album.title}” is back to its own cover`);
+      },
+    } : null,
+    { separator: true },
+  ].filter(Boolean);
+}
+
+/**
+ * Lets an album's sleeve take a picture by drag or by paste.
+ *
+ * The paste listener is on the document rather than the sleeve because a
+ * sleeve cannot hold focus and ⌘V has to work the moment the page is open;
+ * it is filtered on the clipboard actually carrying an image, so pasting
+ * text into the search box while an album page is behind it does nothing.
+ */
+function acceptCover(art, key) {
+  const album = albumOf(key);
+  let depth = 0;                 // dragenter/dragleave fire per child element
+
+  const take = async (file) => {
+    art.classList.remove('is-dropping');
+    if (!file) return;
+    art.classList.add('is-fitting');
+    const ok = await lib.setArtwork(key, file);
+    art.classList.remove('is-fitting');
+    toast(ok ? `New cover for “${album ? album.title : 'the album'}”`
+             : 'That file could not be read as a picture');
+  };
+
+  const hasImage = (dt) => !!dt && [...(dt.items || [])].some((i) => i.kind === 'file' && /^image\//.test(i.type));
+
+  const onEnter = (e) => {
+    if (!hasImage(e.dataTransfer)) return;
+    e.preventDefault();
+    depth++;
+    art.classList.add('is-dropping');
+  };
+  const onOver = (e) => {
+    if (!hasImage(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+  const onLeave = () => { if (--depth <= 0) { depth = 0; art.classList.remove('is-dropping'); } };
+  const onDrop = (e) => {
+    if (!hasImage(e.dataTransfer)) return;
+    /* Stopped here, not just prevented: the window-level handler treats a drop
+       as "add this music to the library", and an image dropped on a sleeve is
+       a different instruction that happens to use the same gesture. */
+    e.preventDefault();
+    e.stopPropagation();
+    depth = 0;
+    take([...e.dataTransfer.files].find((f) => /^image\//.test(f.type)));
+  };
+  const onPaste = (e) => {
+    const items = [...(e.clipboardData?.items || [])];
+    const img = items.find((i) => i.kind === 'file' && /^image\//.test(i.type));
+    if (!img) return;
+    e.preventDefault();
+    take(img.getAsFile());
+  };
+
+  art.addEventListener('dragenter', onEnter);
+  art.addEventListener('dragover', onOver);
+  art.addEventListener('dragleave', onLeave);
+  art.addEventListener('drop', onDrop);
+  document.addEventListener('paste', onPaste);
+
+  return () => {
+    art.removeEventListener('dragenter', onEnter);
+    art.removeEventListener('dragover', onOver);
+    art.removeEventListener('dragleave', onLeave);
+    art.removeEventListener('drop', onDrop);
+    document.removeEventListener('paste', onPaste);
+  };
 }
 
 /* ------------------------------------------------------------------ back cover */
@@ -1292,12 +1428,17 @@ function backCover(album) {
 
 /** Paints a soft wash of the album's own colour behind its header. */
 function applyHeroTint(hero, key) {
+  /* Removing, not just setting. This runs again when the cover changes, and
+     putting an album back to a picture with no colour of its own has to take
+     the old tint away — otherwise the page stays lit by artwork that is no
+     longer on it. */
+  const paint = (rgb) => {
+    if (rgb) hero.style.setProperty('--hero-rgb', rgb.join(' '));
+    else hero.style.removeProperty('--hero-rgb');
+  };
   const rgb = lib.accentFor(key);
-  if (rgb) hero.style.setProperty('--hero-rgb', rgb.join(' '));
-  else lib.loadArt(key).then(() => {
-    const late = lib.accentFor(key);
-    if (late) hero.style.setProperty('--hero-rgb', late.join(' '));
-  });
+  if (rgb) paint(rgb);
+  else lib.loadArt(key).then(() => paint(lib.accentFor(key)));
 }
 
 /* ------------------------------------------------------------------ ARTISTS */

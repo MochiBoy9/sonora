@@ -1421,3 +1421,53 @@ select.input { padding-right: 8px; }
   .pal { margin-top: 6vh; }
   .pal-keys, .pal-kind { display: none; }
 }
+
+/* ------------------------------------------------------------ cover drop
+
+   The sleeve says it will take a picture only while one is actually over it.
+   A permanent affordance on the album page's largest element would compete
+   with the two real controls beside it — the point of a drop target is that
+   it appears when the gesture starts and gets out of the way afterwards. */
+.sleeve-stage.is-dropping .sleeve { transform: scale(1.02); }
+.sleeve-stage.is-dropping .art-3d::after {
+  content: 'Drop to use as the cover';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0 18px;
+  text-align: center;
+  font-size: calc(12.5px * var(--scale));
+  letter-spacing: .01em;
+  color: var(--text);
+  background: rgb(var(--surface-1-rgb) / .82);
+  box-shadow: inset 0 0 0 2px rgb(var(--accent-rgb) / .75);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  z-index: 3;
+  pointer-events: none;
+}
+/* The wait while the picture is decoded, downscaled and sampled. Short, but
+   not instant on a phone camera's twelve megapixels — and silence there reads
+   as a drop that did nothing. */
+.sleeve-stage.is-fitting .art-3d { opacity: .55; }
+.sleeve-stage.is-fitting .art-3d::after {
+  content: '';
+  position: absolute;
+  /* `.art::after` sets `inset: 0`; cleared here or the box keeps its right and
+     bottom edges pinned and the spinner is a 26px sliver in the corner. */
+  inset: auto;
+  left: 50%; top: 50%;
+  width: 26px; height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid rgb(var(--accent-rgb) / .3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cover-spin .7s linear infinite;
+  z-index: 3;
+}
+@keyframes cover-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .sleeve-stage.is-fitting .art-3d::after { animation-duration: 2.4s; }
+  .sleeve-stage.is-dropping .sleeve { transform: none; }
+}
