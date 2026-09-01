@@ -1,6 +1,6 @@
 # Sonora — Feature Specification & UX Plan
 
-**Version** 2.5 · **Status** implemented and verified unless a section says
+**Version** 2.6 · **Status** implemented and verified unless a section says
 otherwise · **Audience** full-stack, design, QA
 
 ---
@@ -49,6 +49,15 @@ and does it send anything anywhere the listener did not ask for?*
 | F8 | **Lyrics** | A sidecar, then the tag, then — only with Online on — LRCLIB. Timed on the immersive view. | Local only |
 | F9 | **Dynamic range** | Crest factor measured off the file while you listen, on a meter tapped before the rack. | On |
 | F10 | **The crate** | Albums as records in perspective, flipped through; the grid is still there and the choice is remembered. | Grid |
+| F11 | **Undo** | A way back from every change Sonora's index holds: corrections, playlists, favourites, artwork. | On |
+| F12 | **Chosen artwork** | Drop, paste or pick a picture for an album; the cover from the files stays underneath it. | Off until used |
+| F13 | **Smart shelves and the palette** | Playlists that describe themselves, a filter language in the search box, and ⌘K over both. | Empty |
+| F14 | **A rack per record** | An album or an artist can carry its own chain, applied when the crossfade finishes and taken out again after. | Unbound |
+| F15 | **The room** | The turntable whose arm is the playhead, a floor that recedes by release year and can be walked along, and print that stands off the card. | On |
+
+F1–F10 are specified in full in §3. F11–F15 arrived in the fourth catalogue
+pass and are specified in §3 from §F11 onward; the twenty items of the third
+pass are catalogued in §16 rather than given sections of their own.
 
 ### 1.3 The shape of the change
 
@@ -93,6 +102,32 @@ css/aero.css    CHG   the sleeve: stage, edge, form shading, specular, rim
 css/components.css CHG the star, the shortcut sheet, the narrow-width row
 css/layout.css  CHG   the transport star
 css/views.css   CHG   the album showcase, floor and reflection; shelf camera
+```
+
+Since 2.5 (F11–F15):
+
+```
+js/undo.js      NEW   the stack of inverses, and the flag that stops it eating itself
+js/rules.js     NEW   seventeen fields, the evaluator, and the prose it reads back as
+js/palette.js   NEW   commands and library results ranked into one list
+js/library.js   CHG   chosen artwork; smart playlists; the filter language;
+                      undo entries on every writer; ownArt loaded at init
+js/audio.js     CHG   a rack per record: bindings, the parked house rack,
+                      followTrack, and the suppressed save while bound
+js/player.js    CHG   `settled`; peekIndex threaded through the handover chain;
+                      trim silence; beat matching; playHook/hookOf/startOf
+js/stage.js     CHG   the deck: platter at 33⅓, the arm as the playhead
+js/relief.js    CHG   height from the normals, the proud layer, the clamp
+js/views.js     CHG   the year axis and the walk; cover drop/paste/pick;
+                      the rack picker; smart-shelf UI; the DR column;
+                      two Home shelves; windowed shelf and floor rows
+js/virtual.js   CHG   the grid observes its viewport, not its own sizer
+js/metadata.worker.js CHG  a `cover` job, through the same thumbnail pipeline
+js/peaks.worker.js    CHG  tempo, centroid, shelf test, hook, lead-in (record v2)
+js/app.js       CHG   ⌘K, ⌘Z/⌘⇧Z, the settled listener, the view class reset
+index.html      CHG   i-image
+css/*           CHG   the palette, the rack picker, the cover drop target,
+                      the year markers, the deck, the proud layer
 ```
 
 ### 1.4 What did **not** change
@@ -1149,6 +1184,391 @@ Verified exact against known signals: sine 3.01 dB, square 0 dB, triangle
 
 ---
 
+## F11 · Undo
+
+> `js/undo.js` (new), `js/library.js`, `js/app.js`, `js/palette.js`
+
+### F11.1 Objective
+
+Make every change Sonora's own index holds reversible, so that correcting a
+tag, deleting a playlist or dropping a cover is a thing you can try rather
+than a thing you commit to.
+
+### F11.2 Why it is tractable here
+
+Sonora never writes to the listener's files. Every operation on this stack is
+an overlay in Sonora's index, so the inverse of an operation is always a write
+to the same index — never a write to a file that might have moved, been
+renamed, or gone read-only underneath us. There is no case where undo can
+half-apply against the disk, because it never touches the disk.
+
+### F11.3 Behaviour
+
+A stack of closures, not a log of diffs. Each entry carries `undo` and `redo`
+as functions the *call site* wrote, at the moment it had the before and after
+values in hand.
+
+The alternative — a registry of operation types and a generic inverse — is
+more code and more ways to be wrong: it invites somebody to add a field to
+`editTracks` a year from now without noticing there is a second place that has
+to learn about it.
+
+| Operation | Inverse |
+|---|---|
+| `editTracks` | Whole-state snapshot of every `EDITABLE` field plus `edits` and `orig`, restored verbatim |
+| `createPlaylist`, `createSmartPlaylist` | Delete by id |
+| `updatePlaylist` | Only the keys the patch actually wrote |
+| `addToPlaylist` | Remove only the ids that were *not* already in the playlist |
+| `removePlaylist` | Re-insert at the same index, with the same id and contents |
+| `toggleFavourite` | Set to the prior value, pinned rather than flipped |
+| `setArtwork`, `clearArtwork` | Restore the previous blob, accent and relief, or delete |
+
+Three of those rows are the whole reason this section exists:
+
+- **Corrections snapshot whole state, not a diff.** `applyEdits` only writes
+  the fields currently overridden, so undoing the *removal* of an override
+  left the field holding the new value with nothing left to say what it used
+  to be. Overriding a title, clearing it, then undoing twice now walks back
+  through the override to the file's own tag.
+- **`addToPlaylist` records only what it added.** Otherwise undoing an add
+  removes a track that was in the playlist beforehand.
+- **A deleted playlist returns to its index.** Anything else is not what undo
+  means for something visible in the sidebar.
+
+### F11.4 Staleness
+
+An entry can outlive what it describes: correct a track, remove the folder it
+came from, then undo. Every inverse returns how many things it touched, and an
+inverse that touches nothing reports that instead of a cheerful "Undone" — a
+stack that lies about what it did teaches people to stop reading the
+confirmation. The entry still moves to the redo side; a stack you cannot walk
+past is worse than one with a dud step in it.
+
+### F11.5 Re-entrancy
+
+A single module-level `running` flag suppresses `push` while an inverse is in
+flight. Without it, undoing an edit records the undo as a new undoable edit and
+the stack never drains. The alternative is a private "quiet" variant of every
+mutator, which is the same flag with more surface area.
+
+### F11.6 Acceptance criteria
+
+- ⌘Z / Ctrl-Z undoes, ⌘⇧Z / Ctrl-Y redoes; neither fires while a text field
+  has the caret, where ⌘Z has to mean "undo what I typed".
+- A tag edit, undone, restores every derived field including `albumKey` and the
+  `edits` object's absence.
+- Two edits to one field, undone twice, reach the original.
+- Deleting an override then undoing twice reaches the override, then the file's
+  own tag.
+- A playlist deleted and undone returns at the same sidebar index with the same
+  tracks.
+- The palette's Undo and Redo rows carry the label of the step they would take.
+- Depth is capped at 60; a new push clears the redo side.
+
+### F11.7 API surface
+
+```js
+undo.push({ label, undo, redo })   // undo/redo return a count of things touched
+undo.undo() / undo.redo()          // → { label, touched } | { label, touched: 0, error } | null
+undo.canUndo() / undo.canRedo()
+undo.nextUndo() / undo.nextRedo()  // the label of the step, for the UI
+undo.clear() / undo.isRunning()
+undo.events.on('change', fn)
+```
+
+---
+
+## F12 · Chosen artwork
+
+> `js/library.js`, `js/metadata.worker.js`, `js/views.js`
+
+### F12.1 Objective
+
+Give an album the cover it should have had, without writing to the files.
+
+Some records arrive with no picture and some arrive with the wrong one — a
+scan of a CD-R, a placeholder from a rip, the same generic square across forty
+bootlegs.
+
+### F12.2 Two records, not one
+
+The scanned cover keeps the album key it always had; the chosen one goes under
+`key + '#own'`, with its relief under `key + '#own#relief'`. That costs a set
+membership test on every art read and buys two things: reverting is a delete
+rather than an apology, and a rescan that finds a better embedded cover cannot
+silently replace the picture somebody chose. `flushArt` still *stores* what the
+files supply for an overridden album — that is what reverting restores — but
+skips the caches and the accent.
+
+### F12.3 The same door as a scanned cover
+
+The picture is handed to `metadata.worker.js` as a `cover` job and comes back
+through `makeThumb`, the identical pipeline an embedded cover uses: same
+downscale, same WebP encode, same 24×24 accent sample, same Sobel relief pass.
+So a chosen cover tints its own page, lights under the pointer and stands off
+the card exactly as one found in a file does, and no view downstream has to
+know the difference. A 16 KB PNG lands as a 3 KB WebP in 45 ms.
+
+### F12.4 The accent has to be persisted
+
+A scanned cover's accent rides home on the track records, written at import. A
+chosen cover has no track record to ride on, so `kv['ownArt']` is a map of
+album key → accent rather than a list of keys. Without it the album came back
+after every reload with the right picture and the wrong colour, which is worse
+than either being wrong alone. A bare array is still accepted on read, because
+the first shape this was written in had nowhere to put the colour.
+
+### F12.5 Three ways in
+
+Dropped on the sleeve, pasted, or picked through `<input type=file>`. The drop
+handler calls `stopPropagation` as well as `preventDefault`: the window already
+treats a drop as "add this music to the library", and an image on a sleeve is a
+different instruction wearing the same gesture.
+
+### F12.6 Acceptance criteria
+
+- A file whose type is not an image is refused; so is one that lies about its
+  type and cannot be decoded. Neither is stored.
+- Setting a cover repaints the sleeve, the reflection standing under it and the
+  page tint from one `art` event.
+- Reverting an album with no embedded cover clears the tint as well as the
+  picture — `applyHeroTint` removes the property when there is no accent, so a
+  page is never lit by artwork that is no longer on it.
+- The menu offers "Use the original cover" only when there is an override.
+- Undo covers set and clear, restoring blob, accent and relief.
+
+### F12.7 API surface
+
+```js
+lib.setArtwork(albumKey, fileOrBlob)   // → true if it took
+lib.clearArtwork(albumKey)             // → true if there was one to clear
+lib.hasOwnArt(albumKey)
+```
+
+---
+
+## F13 · Smart shelves, search filters and the palette
+
+> `js/rules.js` (new), `js/palette.js` (new), `js/library.js`, `js/ui.js`
+
+### F13.1 Smart shelves
+
+A playlist that is a description rather than a list. Contents are evaluated
+fresh every time they are asked for, so favouriting a track puts it into
+"favourites added this year" immediately and playing one takes it out of
+"never played" the moment the count changes. Nothing is materialised, so
+nothing goes stale.
+
+`rules.js` exposes seventeen fields across the track record, the listening
+stats and the analysis. It is imported lazily by `library.js` through
+`useRuleEngine` — `rules.js` reads `stats.js`, `stats.js` reads `library.js`,
+and a static import would close that ring at module-load time.
+
+Null readings never satisfy a numeric comparison, and unknown sorts last in
+either direction. A library where half the tracks have never been analysed
+must not have those tracks silently counted as zero.
+
+### F13.2 Search filters
+
+The search box takes filter tokens alongside words, and everything that reads
+`lib.search` inherits them — the palette included.
+
+```
+before:1985   after:2000   year:1971
+>6min   <3min   dr>14   dr<8   bpm>120   bpm<90
+fav   unplayed   guessed   edited   lossless   suspect   format:flac
+```
+
+Words and filters are an AND. A query that is **only** filters is still a
+query: `unplayed dr>14` names no words at all and returns every track
+satisfying both, rather than the empty result an all-text search would give.
+`suspect` is only ever true for tracks that have actually been analysed, so it
+finds what is known rather than implying the rest are clean.
+
+### F13.3 The palette
+
+⌘K over two lists ranked into one: the commands are the verbs, `lib.search`
+supplies the nouns. `/` still goes to the search box for anyone who wants to
+search the library specifically.
+
+The score is **word-prefix, not fuzzy**. Subsequence matching is what most
+palettes use and it is wrong for a list this size: it makes "sos" match
+"Settings" and buries the thing somebody typed three letters of.
+
+Commands declare their own shortcut labels rather than deriving them from
+`bindKeys`. That is two lists and worth being explicit about: making them one
+means rewriting the key handling to be data-driven, which is a bigger change
+and not obviously an improvement — a switch on a keystroke is perfectly clear.
+The label sits next to the action it belongs to, where a mismatch is visible.
+
+A command with a `when` that is false is not listed. A palette that offers
+actions which quietly fail is worse than one that offers fewer.
+
+### F13.4 Acceptance criteria
+
+- ⌘K opens and closes; Escape closes; arrows walk and wrap; Enter runs the
+  active row and closes.
+- Undo and Redo appear only when there is something to undo, and carry the
+  label of the step as their subtitle.
+- Every filter agrees with a hand-computed count over the same library.
+- A smart shelf shows an eyebrow reading "Smart shelf", its rules in prose, and
+  an "Edit the rules…" item; it has no "Remove from playlist".
+
+---
+
+## F14 · A rack per record
+
+> `js/audio.js`, `js/player.js`, `js/sound.js`, `js/views.js`
+
+### F14.1 Objective
+
+Let an album or an artist carry its own signal chain. A thin early pressing
+wants the bass shelf up; a loudness-war remaster wants the compressor off and
+the preamp down. Setting that by hand every time is the sort of small repeated
+chore a local player should absorb.
+
+This is backlog item **B-7**, now built.
+
+### F14.2 The timing is the feature
+
+Both decks feed one rack. Changing the chain while a crossfade is running
+equalises the *tail of the outgoing record* with the incoming one's settings.
+
+`player` therefore emits **`settled`** — one deck playing, nothing fading —
+and the rack follows that rather than `track`. A direct load is settled the
+moment it starts; the handover path emits it when the outgoing deck is parked.
+
+Measured on a 2.5 s crossfade: `track` for the incoming record at 3620 ms,
+`settled` at 6147 ms, and the EQ moves at 6147 ms.
+
+### F14.3 The house rack
+
+The rack set by hand is the *house* rack. While a record drives:
+
+- the debounced save to `kv['audio:v1']` is **suppressed**, so playing one loud
+  record cannot leave the whole library equalised for it a week later;
+- leaving the album restores exactly what was there, including any knobs turned
+  while the binding was in circuit.
+
+Presets read onto a copy of the house rack rather than onto the defaults,
+because a preset is a partial statement — it says what the tone controls do and
+says nothing about width, balance or preamp.
+
+### F14.4 Resolution
+
+Album beats artist: the more specific statement wins, and an album is the
+smaller claim. A binding whose rack has been deleted is dropped **and then
+re-resolved** — an album binding can be hiding an artist binding underneath it,
+and stopping at the delete leaves the previous record's rack in circuit until
+the track after this one. It terminates: each pass removes a binding and there
+are only ever two.
+
+### F14.5 Saying so
+
+The Sound page carries a line naming the record the chain came from, with
+*Keep changes* and *Detach* beside it. A page whose controls silently mean
+something different is worse than one carrying an extra line.
+
+### F14.6 API surface
+
+```js
+rack.bindTo(scope, key, id)      // scope: 'album' | 'artist'; id: preset id or saved rack name
+rack.unbindFrom(scope, key)
+rack.bindingOf(scope, key)
+rack.bindingForTrack(track)
+rack.followTrack(track)          // → { applied, label } | { released: true } | null
+rack.boundRack() / rack.keepBoundRack() / rack.allBindings()
+rack.events.on('bound' | 'bindings', fn)
+player.events.on('settled', fn)
+```
+
+---
+
+## F15 · The room
+
+> `js/stage.js`, `js/relief.js`, `js/views.js`
+
+Three drawing items that share one argument: the interface should behave like
+the objects it is drawing.
+
+### F15.1 The turntable — the tonearm is the playhead
+
+The arm is not a decoration beside the transport; it **is** the transport. Its
+angle is the position in the track, and pulling it somewhere else seeks there.
+A scrubber that happens to look like a record player would be a costume.
+
+The numbers are real. A 12" side runs from about 146 mm out to about 60 mm in,
+which on a nine-inch arm is roughly twenty degrees of swing, so the arc is
+−20° to +2° with a −34° rest. The platter turns at 33⅓ — one revolution per
+1.8 s — divided by the speed control, so a deck at 1.1× looks like a deck
+running fast.
+
+Nothing is animated from JavaScript. The platter is one CSS animation; the
+arm's angle is a custom property written from the same branch of the same tick
+that moves the scrubber above it, so the two cannot disagree.
+
+Dragging lifts the stylus: the platter stops, the arm follows with no easing,
+and the seek lands on release rather than on every frame. The arm carries
+`role="slider"` and answers arrows (5 s), shift-arrows (30 s), Home and End —
+an arm that can only be dragged is a transport some people cannot use.
+
+`D` toggles it; the choice is remembered in `sonora:deck`.
+
+### F15.2 The year axis, and walking the floor
+
+Depth on the Floor album view is the release year, **oldest nearest**, so
+walking forward is walking forward through time and the decade markers count
+up. Newest-first would match the rest of the app and reads wrong on a floor: a
+timeline running backwards as you advance makes every marker a subtraction.
+Only decades are marked — a marker per year is a wall of numbers.
+
+An empty year still costs 0.28 of a row to walk past, capped at 2.2 rows,
+because the emptiness is information but a fifteen-year drought should not be
+a corridor. Records with no year sit past the end of the axis behind a wider
+gap: not guessed into a year, not dropped, and not polluting the timeline.
+
+Walking sideways is one `translateX` on the camera. Perspective does the rest —
+a fixed distance in world space projects smaller the further away it is, so the
+near year slides past quickly and the far ones drift. That parallax is why it
+reads as walking rather than as a list scrolling sideways, and it costs
+nothing.
+
+Every lane starts at the same X rather than being centred on itself; centred,
+one step sideways arrives somewhere different in each year. Three ways to move:
+the trackpad's second axis (and shift-wheel), a drag, and Left/Right/Home/End.
+A plain vertical wheel is left alone so the page still scrolls.
+
+### F15.3 Displacement
+
+Relighting alone still draws a flat thing. The proud parts of the print go onto
+their own layer and slide as the sleeve turns; that relative motion is most of
+what tells an eye a surface has depth.
+
+Height is the stored normal map's **gradient magnitude**, blurred twice. The
+surface pass measures where the *edges* are rather than how tall anything is,
+and read as height that is right for print: ink is proud at its boundaries.
+Reading it as luminance instead would float every pale area of every cover. The
+mask curve is squared so the blur's low haze stays down — without that the
+whole picture slides, which is a picture coming loose rather than a relief.
+
+Direction is derived, not guessed. `tilt3d` sets `rotateY` from the pointer's x
+offset, positive to the right; a positive `rotateY` sends the right edge away,
+turning the surface normal toward the pointer; a point standing *h* above that
+surface projects to `x·cosθ + h·sinθ` and shifts toward the pointer. `rotateX`
+carries the opposite sign and the second minus cancels, so both axes agree.
+
+Clamped at seven tenths of the way to the edge — a rendering limit, not a
+physical one. Real parallax keeps growing with the tangent of the angle, but
+past that point the shifted layer pulls away from the artwork's border and the
+seam shows. The sleeve's rotation is still ramping there, so the displacement
+never reaches its limit in the same instant as everything else.
+
+Cost: 0.12 ms once when the pointer arrives, then one transform per frame. The
+relight beside it remains the only per-frame pixel work at 1.46 ms. Covers the
+surface pass measured below `MIN_DENSITY` get neither.
+
+---
+
 ## 4. User flows
 
 ### 4.1 First run
@@ -1358,6 +1778,35 @@ worse than no slice.
 Contains only what the public services returned. No identifiers, no history, no
 file paths.
 
+### 6.6a Chosen artwork — `art` store and `kv['ownArt']`
+
+```js
+art[albumKey]                   // the cover found in the files, always kept
+art[albumKey + '#relief']       // its surface
+art[albumKey + '#own']          // the cover the listener chose, when there is one
+art[albumKey + '#own#relief']   // and its surface
+
+kv['ownArt'] = { [albumKey]: [r, g, b] | null }
+```
+
+The map, rather than a list of keys, because a chosen cover has no track record
+to carry its accent home on (§F12.4). A bare array is still accepted on read.
+
+### 6.6b Rack bindings — `kv['audio:bindings']`
+
+```js
+{ 'album:<albumKey>': 'sub' | 'My late-night rack', 'artist:<artistKey>': … }
+```
+
+Album beats artist. The value names either a built-in preset id or a saved
+rack; a value naming neither is dropped on the next resolution (§F14.4).
+
+### 6.6c Smart playlists — `playlists` store
+
+A smart playlist carries `smart: true`, `match`, `rules`, `sort`, `sortDir`
+and `limit`, and its `tracks` array is always empty — contents are evaluated on
+read (§F13.1), never materialised.
+
 ### 6.7 Preferences — `localStorage`
 
 | Key | Default | Meaning |
@@ -1371,6 +1820,8 @@ file paths.
 | `sonora:accent` | on | album colour beside artwork |
 | `sonora:backdrop` | on | 3D backdrop |
 | `sonora:theme` | system | dark / light / system |
+| `sonora:albumView` | `grid` | grid / crate / shelf / floor |
+| `sonora:deck` | off | the turntable rather than the sleeve on the stage (F15.1) |
 
 Every read and write is wrapped: private mode throws on `localStorage`, and a
 feature that dies because a preference could not be read is a feature that
@@ -1476,7 +1927,7 @@ it is built to prove the rule rather than weaken it.
 | Area | Commitment |
 |---|---|
 | Contrast | Body text ≥ 7:1, secondary ≥ 4.5:1, in both themes. Hairlines are decorative and never the only signal. |
-| Keyboard | Every action reachable without a pointer. Shortcuts: Space, ←/→, ↑/↓, M, S, R, N, P, F, Q, V, B, E, `/`, `?`, Esc — and `?` puts that list on screen, generated from the same table `bindKeys` reads, so it cannot drift. |
+| Keyboard | Every action reachable without a pointer. Shortcuts: Space, ←/→, ↑/↓, M, S, R, N, P, F, Q, V, B, E, `/`, `?`, Esc, ⌘K, ⌘Z / ⌘⇧Z, and D and L inside the immersive view; `?` puts the list on screen. **The sheet is a second list, not a projection of `bindKeys`** — a claim to the contrary stood in this document until 2.6 and was never true. Making them one source means rewriting the key handling to be data-driven, which is a bigger change than it sounds and not obviously better than a switch on a keystroke; the palette mitigates it by carrying each shortcut label beside the action it belongs to, where a mismatch is visible. |
 | Focus | A visible cyan focus ring on every interactive element; dialogs trap Tab and Shift+Tab inside themselves and return focus to whatever opened them. |
 | Screen readers | Landmarks throughout; `aria-selected` on the mode switch; live regions for the connection readout, scan progress and lookup status; every icon button has an `aria-label`. |
 | Motion | `prefers-reduced-motion` has a still-frame path in the intro, backdrop, visualiser and circles, and the Motion setting offers Full / Calm / None independently of the system. |
@@ -1485,8 +1936,19 @@ it is built to prove the rule rather than weaken it.
 | Colour | Never the only channel: pinned circles also gain a ring, the current queue row also gains a marker, undecodable tracks also carry a word. |
 | Targets | ≥ 32px, ≥ 40px on coarse pointers. |
 
-**▸ Backlog:** the table view of the circle data (§F4.7), and a keyboard route
-for reordering the queue (drag is currently pointer-only).
+Two of the 2.6 features are here because of this table rather than in spite of
+it. The tonearm answers arrows, shift-arrows, Home and End and carries
+`role="slider"` with an `aria-valuetext` reading "0:24 of 0:40" — an arm that
+could only be dragged would be a transport some people cannot use, and "it is
+a picture of a record player" is not a reason to make the only control on
+screen unreachable. The Floor view's sideways walk answers Left, Right, Home
+and End for the same reason.
+
+**▸ Backlog:** the table view of the circle data (§F4.7), a keyboard route for
+reordering the queue (drag is currently pointer-only), and keyboard order in
+the Floor view that follows the eye rather than the DOM (B-11) — which is why
+the Floor remains a fourth mode beside Grid, Crate and Shelf rather than a
+replacement for any of them.
 
 ---
 
@@ -1541,6 +2003,43 @@ getBand(key)  putBand(rec)  clearBands()  bandCount()
 
 No existing signature changed meaning. `library.events('scan')` gained a second
 argument; existing listeners ignore it.
+
+### 12.1 Added in 2.6
+
+New modules: `undo` (§F11.7), `rules` and `palette` (§F13), and `relief` gained
+the displacement pass (§F15.3).
+
+```js
+// library.js
+setArtwork(albumKey, file)  clearArtwork(albumKey)  hasOwnArt(albumKey)
+createSmartPlaylist(name, set)   useRuleEngine(fn)
+parseQuery(q)                    // → { words, filters, text }
+search(q, limit)                 // → { …, filtered: ['dr>14', …] }
+
+// audio.js
+bindTo(scope, key, id)  unbindFrom(scope, key)  bindingOf(scope, key)
+bindingForTrack(track)  followTrack(track)  boundRack()  keepBoundRack()
+allBindings()
+events.on('bound' | 'bindings', fn)
+
+// player.js
+events.on('settled', track)      // one deck playing, nothing crossfading
+setTrimSilence(on)  setBeatMatch(on)  playHook()  hookOf(track)  startOf(track)
+
+// rules.js
+FIELDS  OPS  opsFor(field)  evaluate(playlist, tracks)  describe(playlist)
+blankRule()
+
+// palette.js
+openPalette()  closePalette()  togglePalette()  isOpen()
+```
+
+**Behavioural changes to watch.** `library.editTracks`, the playlist writers
+and `toggleFavourite` now push onto the undo stack; anything calling them from
+inside an inverse is suppressed by `undo.isRunning()`. `library.search` gained
+`filtered` on its result. `VirtualGrid` observes its viewport rather than its
+sizer — a caller that sized the sizer from outside would no longer be noticed,
+and nothing does.
 
 ---
 
@@ -1606,6 +2105,71 @@ Three things that were wrong rather than missing:
 ---
 
 ## 14. Changelog-ready summary
+
+### 2.6
+
+> #### Added
+> - **Undo.** ⌘Z takes back the last change to your library — a tag
+>   correction, a playlist, a favourite, a cover — and ⌘⇧Z puts it back.
+>   Sixty steps deep. It says what it undid by name, and when a change no
+>   longer has anything to apply to it says that instead.
+> - **A cover of your own.** Drop a picture on an album's sleeve, paste one, or
+>   pick one. It goes into Sonora's index, the cover from your files stays
+>   underneath it, and "use the original" is one click. The picture is
+>   downscaled, encoded and sampled for its colour by the same code that
+>   handles a cover found inside a file, so it tints its page and catches the
+>   light exactly as one of those does.
+> - **Smart shelves.** A playlist that describes itself rather than listing
+>   itself — seventeen fields across your tags, your listening and the
+>   analysis. It is worked out fresh every time it is opened, so favouriting a
+>   track puts it into "favourites this year" at once.
+> - **Filters in the search box.** `unplayed`, `fav`, `guessed`, `edited`,
+>   `lossless`, `suspect`, `before:1985`, `after:2000`, `year:1971`, `>6min`,
+>   `<3min`, `dr>14`, `bpm>120`, `format:flac`. Words and filters are an AND,
+>   and a query that is only filters still returns tracks.
+> - **⌘K.** Everything the app can do, by typing its name, over the same box
+>   that searches your library — so it finds "Shuffle" and *Shuffle it Off*
+>   together and lets the ranking sort out which you meant.
+> - **A rack per record.** An album or an artist can carry its own chain. It
+>   goes into circuit when the record starts and comes out again afterwards,
+>   and your own rack is parked rather than overwritten while it does.
+> - **The turntable.** On the immersive view, `D`. The platter turns at a real
+>   33⅓ and the tonearm's angle is the playhead: it swings across the side as
+>   the record plays, and pulling it seeks. Arrow keys work on it too.
+> - **A floor that runs by year.** The Floor album view now recedes by release
+>   year with decade markers lying on the ground, and you can walk sideways
+>   along it by drag, by trackpad or with the arrow keys. Records with no year
+>   have their own place past the end rather than being guessed into one.
+> - **Print that stands off the card.** The proud parts of a cover lift onto
+>   their own layer and slide as the sleeve turns.
+> - Two shelves the library writes itself on Home: **On this day**, and
+>   **One song from these** — records where a single track holds most of the
+>   listening.
+>
+> #### Fixed
+> - Undoing the removal of a tag override left the field on its new value with
+>   nothing left to say what it had been.
+> - A repeat-all queue wrapping from the last track to the first left the
+>   transport pointing at the record that had just finished.
+> - The Floor view's class outlived the view, so every page after it inherited
+>   the container it clips its overflow with.
+> - The shelf view rebuilt every spine on every artwork event.
+> - The visualiser's transfer pool could post a buffer it had already detached.
+> - Weighted shuffle read a play-count Map that was declared and never filled;
+>   the unit test that passed had populated it by hand.
+> - `viewHome` declared a local element named `stats`, shadowing the stats
+>   module import — so `stats.forTrack` resolved to an HTMLElement and threw on
+>   every Home render. The shelf it was for had never once appeared.
+> - The album grid's ResizeObserver watched the element its own callback
+>   resizes, logging "ResizeObserver loop completed with undelivered
+>   notifications" on every mount.
+> - The page tint was only ever set, never removed, so reverting to a cover
+>   with no colour of its own left the page lit by artwork that was gone.
+> - A failed `setPointerCapture` on the tonearm abandoned the handler with the
+>   drag still marked live, sticking the deck in cue with no way out but
+>   closing the stage.
+
+### 2.5 and earlier
 
 > ### Added
 > - **Auto-reconnect and resume.** Sonora reopens where you left it: the queue,
@@ -1703,6 +2267,43 @@ Current state: **all five suites pass, with no console errors.** The layout
 audit reports the app clean at 360, 414, 620, 768, 1024, 1280, 1680 and 2400
 pixels on every route.
 
+### 15.1 How 2.6 was verified, and what that does not cover
+
+The suites above were not re-run for this pass. The machine it was built on has
+no Node and no Python, so everything below was checked by driving the running
+application directly — importing its modules, calling into them, reading
+computed styles and measuring the DOM.
+
+That is a real method and it caught five defects nothing else had (§16). It is
+also narrower than the suites in two specific ways, and both are worth naming
+rather than glossing:
+
+- **Appearance was measured, not seen.** The preview surface available here
+  collapses to a few dozen pixels, so nothing in this pass was verified by
+  looking at it. Geometry, class state, computed styles, transform values and
+  timing were all asserted numerically — the tonearm sits at −17.6° four
+  seconds into a forty-second side; the proud layer moves +1.44px toward a
+  pointer at the bottom right and stops growing past seven tenths; the mask
+  leaves 74% of a typographic cover fully transparent. Whether the result
+  *looks* right is the one thing that has not been established, and the
+  displacement in §F15.3 is the item most likely to need a designer's eye.
+- **Timing that depends on frames was avoided.** `requestAnimationFrame` is
+  heavily throttled here and reports zero frames per second while the surface
+  is hidden, so nothing was timed by counting frames. The handover measurement
+  in §F14.2 comes from event timestamps, which are not affected.
+
+What *was* exercised, end to end, against the running app: the undo stack over
+all seven operation types including the three subtle inverses; every search
+filter against a hand-computed count; the palette's ranking, arrow keys and
+Enter; the artwork pipeline from drop to WebP to accent to relief to reload,
+including the refusal paths; rack bindings including the crossfade timing, the
+protected house rack and the dangling-binding case; the year axis's depth
+arithmetic and all three walk gestures; the tonearm's drag, its clamp and every
+key it answers; and every route rendering and tearing down without error.
+
+**Before release, run the five suites on a machine that has Node**, and put the
+displacement and the deck in front of somebody who can see them.
+
 The Band Overview is tested against intercepted routes — real `fetch`, real
 parse, real cache, no live service — which is also how the "zero requests
 before consent" and "cached, not refetched" assertions are made.
@@ -1728,12 +2329,16 @@ before consent" and "cached, not refetched" assertions are made.
 | B-4 | Keyboard route for reordering the queue | §10 |
 | B-5 | One-shot background re-tag to backfill `guessed` on pre-2.1 libraries | §13 |
 | B-6 | Per-album and per-song deep analysis surfaced on the album page, not only from the artist overview | §F2.3 |
-| B-7 | Per-album and per-artist racks, so a badly mastered record can carry its own correction | §F5 |
 | B-8 | Import and export a look or a rack as a file, for sharing | §F5.7, §F6.2 |
 | B-9 | A phase-vocoder pitch mode for large shifts, behind a quality setting | §F5.4 |
+| B-11 | Keyboard order and drag-selection that follow the eye in the Floor view, so it need not be a fourth mode | §F15.2 |
+| B-12 | A visible index of chosen covers and rack bindings, so overrides are findable without walking the library | §F12, §F14 |
 
 B-10 (crossfade and gapless) is **built** as of 2.5 — two decoders in parallel,
 one control at two of its positions. See `js/player.js`, the deck section.
+
+B-7 (per-album and per-artist racks) is **built** as of 2.6. See §F14; the
+part that took the work was not the binding but waiting for the handover.
 
 ### Built in 2.5
 
@@ -1758,3 +2363,29 @@ silence, tapping after the volume control, and depending on frames being drawn
 to record anything at all; and the duplicate finder called eight different
 recordings copies of each other because uncompressed audio of equal length is
 always the same size.
+
+### Built in 2.6
+
+Twenty items from the fourth catalogue. Two were declined — continuous-album
+detection, and structure marks on the scrubber — and the analysis behind the
+second was built anyway, because "play the good bit" needs it.
+
+| Area | What |
+|---|---|
+| Analysis | Tempo with a confidence figure and an octave check; spectral centroid; the repeated section, so "play the good bit" has somewhere to go; lead-in silence, so a track starts at the first note; a shelf test that flags a lossless file encoded from a lossy one |
+| Playback | Skip leading silence; beat-matched handovers when both tempi are confident and close; a rack that can belong to a record rather than to the app |
+| Library | Smart shelves; a filter language in the search box; undo across every change the index holds; artwork you choose; two Home shelves the library writes itself; a marker on fields the tag reader had to guess |
+| Reach | ⌘K over commands and library together |
+| Depth | The turntable whose arm is the transport; a floor that recedes by release year and can be walked along; displacement, so print stands off the card |
+
+Eleven defects were fixed in this pass. Six were reported in the third-pass
+review and fixed on request; five more were found *by* this work, and those are
+the interesting ones — a play-count Map that was declared and never filled and
+whose unit test had populated it by hand; a local variable shadowing a module
+import, which had meant one of the two new Home shelves never rendered at all;
+a ResizeObserver being fed its own output; a page tint that could only be set
+and never removed; and a pointer capture whose failure stranded the tonearm.
+
+The pattern across both passes holds: the defects that matter are the ones
+nothing was looking at. Every one of these was found by running the thing and
+reading what came back, not by reading the code.

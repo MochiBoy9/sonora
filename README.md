@@ -11,7 +11,13 @@ It also reopens where you left it, folds an album back together when it is
 split across folders, draws what you have actually been listening to, gives you
 a full processing rack to bend the sound with, lets you rebuild the interface
 around your own colour, and — only if you ask it to — will look an artist up
-online. All of it is specified in full in [`docs/SPEC.md`](docs/SPEC.md).
+online.
+
+Recently it has grown a way back from every change it lets you make, a
+turntable whose tonearm is the playhead, shelves that describe themselves
+rather than listing themselves, a floor you can walk along by release year, and
+a rack that can belong to a record rather than to the app. All of it is
+specified in full in [`docs/SPEC.md`](docs/SPEC.md).
 
 ---
 
@@ -122,14 +128,21 @@ When an import merges something, the summary says so by name.
 | `Q` | queue panel |
 | `V` | immersive visualiser |
 | `L` | lyrics, on the immersive view |
+| `D` | the turntable, on the immersive view |
 | `B` | bypass the rack (A/B what it is doing) |
 | `E` | open the Sound page |
-| `/` or `⌘K` | search |
+| `/` | search the library |
+| `⌘K` | everything, by name |
+| `⌘Z` / `⌘⇧Z` | undo / redo |
 | `?` | the whole list, on screen |
 
-That table is not maintained by hand in two places: `?` opens the same array
-`bindKeys` reads, so a shortcut cannot exist undocumented and cannot be
-documented without existing.
+`?` puts that list on screen. It is a second list rather than a projection of
+the key handler — this README claimed otherwise until recently and it was not
+true. Making them one source means rewriting the key handling to be
+data-driven, which is a bigger change than it sounds and not obviously better
+than a switch on a keystroke. The palette below is the practical mitigation: it
+prints each shortcut next to the action it belongs to, where a mismatch is
+visible rather than hiding in a table nobody cross-checks.
 
 Right-click any track, album or artist for play-next, add-to-queue, favourite,
 add-to-playlist and go-to-album. Drag rows in the queue to reorder. Drag the
@@ -139,6 +152,58 @@ Click a track row to pick it; `Ctrl`/`⌘`-click to add one, `Shift`-click for a
 range, `Ctrl`/`⌘`-`A` for all of them, `Esc` to let go. Everything that took one
 track takes the set instead, so a thirty-track playlist is one drag rather than
 thirty right-clicks.
+
+## Everything, by typing its name
+
+`⌘K`.
+
+Two lists ranked into one: the commands are the verbs and your library supplies
+the nouns, so typing `shuffle` finds both the shuffle button and *Shuffle it
+Off* and lets the ranking sort out which you meant.
+
+The matching is by whole words, not the fuzzy subsequence most palettes use.
+Fuzzy is why `sos` matches *Settings* in other apps and buries the thing you
+typed three letters of; for a list this size, matching words and rewarding a
+match at the start of one gets the right answer for everything anybody actually
+types.
+
+Anything the search box understands works here too, filters included:
+
+```
+unplayed        never played
+fav             favourited
+guessed         a field the tag reader took from the folder name
+edited          you corrected something on it
+lossless        FLAC, ALAC, WAV, AIFF — or a bitrate that says so
+suspect         lossless, but the spectrum says it came from an MP3
+before:1985     after:2000     year:1971
+>6min   <3min   dr>14   dr<8   bpm>120   bpm<90
+format:flac
+```
+
+Words and filters combine, so `nick unplayed >6min` is one query. A query made
+only of filters is still a query — `unplayed dr>14` names no words at all and
+returns every track that satisfies both.
+
+`suspect` is only ever true of a track that has actually been analysed. It
+finds what is known rather than implying that everything else is clean.
+
+## Shelves that describe themselves
+
+`+` beside Playlists → **Smart shelf…**
+
+A rule, or several: *added this year*, *never played*, *dynamic range above 12*,
+*more than an hour listened*, *bought before 1985*. Seventeen fields across your
+tags, your listening and the analysis.
+
+Nothing is stored but the description, so nothing goes stale. Favourite a track
+and it appears in *favourites this year* immediately; play one and it leaves
+*never played* the moment the count changes. The shelf is worked out fresh every
+time you open it.
+
+A track with nothing measured never matches a numeric rule. A library where
+half the records have not been analysed yet must not have those quietly counted
+as zero and swept into *dynamic range below 8*.
 
 ## Tracks running into each other
 
@@ -186,6 +251,53 @@ Both come out of one analysis, computed the first time a track is played and
 kept afterwards. Nothing is decoded at import — that would be an afternoon's
 work for data most files never need.
 
+## The turntable
+
+Press `D` on the immersive view.
+
+The platter turns at a real 33⅓ — one revolution per 1.8 seconds — and divides
+that by the speed control, so a deck running at 1.1× looks like a deck running
+fast. The cover is the label, turning with it, spindle hole and all.
+
+**The tonearm is the playhead.** Not a decoration beside the transport: the arm
+is the transport. It swings inward across the side exactly as the track
+advances, and pulling it somewhere else seeks there. Grab it and the platter
+stops and the stylus lifts, the way cueing a record works; let go and it drops
+back in.
+
+The arc is a real one. A 12" side runs from about 146mm out to about 60mm in,
+which on a nine-inch arm is roughly twenty degrees of swing, so that is what
+the arm does — it sits where a real one would at the same point in a side.
+
+Arrow keys move it five seconds, `Shift` thirty, `Home` and `End` to the ends.
+An arm you can only drag would be a transport some people cannot use, and "it
+looks like a record player" is not a reason to make the only control on screen
+unreachable.
+
+## Walking the years
+
+`Albums → Floor`.
+
+The floor recedes by release year, oldest nearest, so scrolling walks you
+forward through time and the decade markers count up as you go. They lie on the
+ground in front of their records rather than standing beside them — a decade
+you walk over reads as a place.
+
+An empty year still costs something to cross, because the gap is information: a
+collection with nothing between 1979 and 1994 should feel like it. Not a full
+year's worth of walking each, though, or a long drought becomes a corridor.
+
+And you can walk sideways. Drag the floor, use a trackpad's second axis, or
+press `←` and `→` — `Home` and `End` for the ends of a long year. It reads as
+walking rather than as a list scrolling because perspective is doing the work:
+the year in front of you slides past quickly while the ones behind it drift,
+exactly as things at different distances do when you move.
+
+Records with no year are not guessed into one and not dropped. They sit past
+the end of the axis behind a wider gap, under their own marker, so the timeline
+stays honest about what it is showing and the untagged pile is still somewhere
+you can walk to.
+
 ## Files, and what is in them twice
 
 `Files` in the sidebar. Two questions that are really the same question asked
@@ -216,6 +328,45 @@ where they differ shows "— several —" and is left alone unless you type in i
 so the album name can be fixed on forty tracks without flattening forty titles
 into one.
 
+## Taking it back
+
+`⌘Z`. `⌘⇧Z` puts it back again, and `Ctrl-Y` works too.
+
+It covers everything Sonora's index holds: a tag correction, a playlist made,
+renamed, added to or deleted, a favourite, a cover you dropped. Sixty steps.
+
+The reason it can exist at all is the same reason the tag dialog says what it
+says — **Sonora never writes to your files**. Every change on that stack is an
+overlay in Sonora's own index, so undoing one is a write to the same index, not
+a write to a file that might have moved or gone read-only since. There is no
+case where undo half-applies against your disk, because it never touches your
+disk.
+
+It tells you what it undid, by name: *Undid deleting "Late nights"*. And when a
+change no longer has anything to apply to — you corrected a track, then removed
+the folder it came from — it says that instead of claiming success. A
+confirmation that is sometimes a lie is one nobody reads.
+
+Not while you are typing in a field, where `⌘Z` has to mean "undo what I just
+typed".
+
+## A cover of your own
+
+Some records arrive with no picture, and some arrive with the wrong one: a scan
+of a CD-R, a placeholder from a rip, the same generic square across forty
+bootlegs.
+
+Drop an image on the sleeve on an album page, paste one, or use
+`Choose a cover…` in the album's menu. Same promise as a tag edit — the cover
+from your files stays underneath, and **Use the original cover** is one click.
+
+Your picture goes through exactly the same door as one found inside a file: the
+same downscale, the same WebP encode, the same colour sample, the same surface
+pass. So it tints its own page, catches the light under the pointer and stands
+off the card just as an embedded cover does, and nothing in the app has to know
+where it came from. A twelve-megapixel photo becomes a few kilobytes in about
+forty milliseconds.
+
 ## The Rack
 
 `Sound` in the sidebar, or `E` from anywhere.
@@ -242,6 +393,31 @@ same edit. Double-click a handle to flatten that band, or use the arrow keys.
 
 Eleven presets, and you can save your own. **`B` bypasses the whole rack from
 anywhere**, which is the only honest way to tell whether any of it is helping.
+
+## A rack for a record
+
+Some records want a different chain. A thin early pressing wants the bass shelf
+up; a loudness-war remaster wants the compressor off and the preamp down; a
+live bootleg wants the room taken out of it. Setting that by hand every time
+you put the record on is exactly the sort of small repeated chore a player
+should absorb.
+
+`Rack for this album…` in an album's menu. Pick a preset or one of your saved
+racks, and it goes into circuit whenever that record plays and comes out again
+afterwards. An album beats an artist, so a band can have a general setting and
+one of its records can override it.
+
+**Your own rack is parked, not overwritten.** Turn knobs while a record's rack
+is in circuit and you are changing the live chain only — what you had set by
+hand comes back the moment you play something else, and playing one loud record
+cannot leave your whole library equalised for it a week later. The Sound page
+says so while it is happening, with *Keep changes* and *Detach* beside the line.
+
+The fiddly part is not the binding, it is the timing. Both decks share one
+rack, so swapping the chain during a crossfade would put the incoming record's
+EQ on the tail of the one going out. Sonora waits for the fade to finish — on a
+two-and-a-half-second crossfade the transport names the new record two and a
+half seconds before the chain actually changes.
 
 ## The ones you keep
 
@@ -708,6 +884,18 @@ the machine in the table) because the intro now compiles shaders and renders a
 scene during boot; the library is painted behind it either way, and the intro is
 on screen for longer than the difference.
 
+The newest drawing work was written to add nothing per frame. The proud layer
+that lifts a cover's print (see *the sleeve turns*) is built once when the
+pointer arrives — 0.12 ms for the copy and the mask — and after that a frame is
+one transform; the relighting beside it remains the only per-frame pixel work,
+at 1.46 ms, unchanged. The turntable's platter is a CSS animation and its arm
+is one custom property written from the tick that was already moving the
+scrubber. The floor builds only the rows the camera can see, so a four-hundred
+album library costs the same as a forty-album one.
+
+A cover you drop is downscaled, encoded and sampled in about 45 ms — a 16 KB
+PNG becomes a 3 KB WebP — on the worker, not the main thread.
+
 ## Testing
 
 The tools generate a synthetic library with real containers and real tags — the
@@ -750,6 +938,26 @@ real cache, no live service. That is also how the suite proves that nothing is
 requested before you consent, and that a second look at an artist is served from
 the cache.
 
+### What the newest work was checked with, and what it was not
+
+The suites above need Node, and the machine this pass was built on has neither
+Node nor Python. So everything in it was verified by driving the running
+application directly — importing its own modules, calling into them, and
+measuring the DOM and computed styles that came back.
+
+That found five defects nothing else had, including one that meant a whole
+feature had never rendered once. It is also narrower than the suites in one way
+worth stating plainly: **the preview surface available collapsed to a few dozen
+pixels, so none of this pass was verified by looking at it.** Geometry, timing
+and state were asserted numerically instead — the tonearm sits at −17.6° four
+seconds into a forty-second side, the proud layer moves 1.44px toward a pointer
+at the bottom right and stops growing past seven tenths of the way to the edge,
+the mask leaves 74% of a typographic cover fully transparent. Whether it *looks*
+right is the one thing that has not been established.
+
+Run the suites on a machine with Node before release, and put the sleeve
+displacement and the turntable in front of somebody who can see them.
+
 ## Notes
 
 - Everything stays on the device. With **Settings → Online** off — which is how
@@ -772,7 +980,13 @@ the cache.
 - The rack is saved with your library and comes back with it. If a track ever
   sounds wrong, press `B`: that is the whole rack out of the signal path, and
   it will tell you in one keystroke whether the problem is the file or a knob
-  you left somewhere.
+  you left somewhere. If the Sound page says the chain came with a record
+  rather than from you, that is a binding — *Detach* takes it off.
+- **Nothing Sonora lets you change is written to your files, so nothing it lets
+  you change is permanent.** Tag corrections, playlists, favourites and the
+  covers you choose are all overlays in Sonora's own index — which is what
+  makes `⌘Z` possible, and why *Clear library* can put everything back the way
+  the disk has it.
 - The design owes its conventions to a few places worth naming: motion.dev and
   anime.js for spring-based orchestration, staggered timelines and treating text
   as a list of targets; KokonutUI and bklit-ui for the token-driven,
