@@ -639,6 +639,10 @@ const SHORTCUTS = [
   ['Sound', [
     [['B'], 'Bypass the rack — A/B it'],
   ]],
+  ['In the visualiser', [
+    [['D'], 'The turntable'],
+    [['L'], 'Lyrics, when there are any'],
+  ]],
 ];
 
 let shortcutSheet = null;

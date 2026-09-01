@@ -17,8 +17,10 @@ import { createVisualizer, MODES, isMode } from './visualizer.js';
 import * as lyrics from './lyrics.js';
 import * as peakmap from './peaks.js';
 import { tick, animate, spring, draggable, settled, ease, reduceMotion } from './motion.js';
+import * as rack from './audio.js';
 
 const MODE_KEY = 'sonora:viz';
+const DECK_KEY = 'sonora:deck';
 const IDLE_MS = 3200;
 
 export const storedMode = () => {
@@ -58,7 +60,36 @@ export function openStage(backdrop) {
 
   const artImg = el('img', { class: 'art-img', alt: '', decoding: 'async' });
   const art = el('div', { class: 'art stage-art' }, artImg);
-  const artWrap = el('div', { class: 'stage-art-wrap' }, art);
+
+  /* ------------------------------------------------------------- the deck
+   *
+   * A turntable, and a working one rather than a picture of one.
+   *
+   * The whole point is that the tonearm is not a decoration beside the
+   * transport — it *is* the transport. Its angle is the playhead: the arm
+   * swings inward across the side exactly as the track advances, and pulling
+   * it somewhere else seeks there. A scrubber that also happens to look like
+   * a record player would be a costume; this is the same control drawn as the
+   * object it is imitating.
+   *
+   * Nothing here is animated from JavaScript. The platter turns on a CSS
+   * animation at a real 33⅓ — one revolution per 1.8 seconds — and the arm's
+   * angle is a custom property written once per tick from the position the
+   * transport already reports.
+   */
+  const label = el('img', { class: 'art-img deck-label-art', alt: '', decoding: 'async' });
+  const platter = el('div', { class: 'deck-platter', 'aria-hidden': 'true' },
+    el('div', { class: 'deck-label' }, label));
+  const arm = el('div', {
+    class: 'deck-arm', role: 'slider', tabindex: '0',
+    'aria-label': 'Tonearm — the position in the track',
+    'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0',
+  }, el('i', { class: 'deck-arm-tube' }), el('i', { class: 'deck-head' }));
+  const deck = el('div', { class: 'deck', hidden: true },
+    el('div', { class: 'deck-mat', 'aria-hidden': 'true' }), platter,
+    el('div', { class: 'deck-pivot', 'aria-hidden': 'true' }), arm);
+
+  const artWrap = el('div', { class: 'stage-art-wrap' }, art, deck);
 
   const title = el('h2', { class: 'stage-title' });
   const artist = el('p', { class: 'stage-artist' });
@@ -75,6 +106,14 @@ export function openStage(backdrop) {
   const lyricBtn = el('button', {
     class: 'icon-btn stage-lyric-btn', title: 'Lyrics (L)', 'aria-label': 'Show lyrics',
     'aria-pressed': 'false', html: ico('file'), hidden: true,
+  });
+  // `setDeck` is a function declaration further down, so it is hoisted and
+  // reachable from here — which is what lets this sit with the other buttons
+  // instead of below the wiring that uses it.
+  const deckBtn = el('button', {
+    class: 'icon-btn stage-deck-btn', title: 'Turntable (D)', 'aria-label': 'Show the turntable',
+    'aria-pressed': 'false', html: ico('album'),
+    onclick: () => setDeck(!deckOn),
   });
 
   const elapsed = el('span', { class: 'stage-time', text: '0:00' });
@@ -100,7 +139,7 @@ export function openStage(backdrop) {
   host.append(
     canvas,
     el('div', { class: 'stage-veil' }),
-    el('div', { class: 'stage-top' }, modeBar, lyricBtn, closeBtn),
+    el('div', { class: 'stage-top' }, modeBar, deckBtn, lyricBtn, closeBtn),
     el('div', { class: 'stage-body' }, artWrap,
       el('div', { class: 'stage-meta' }, title, artist, tags, lyricBox)),
     el('div', { class: 'stage-foot' },
@@ -348,6 +387,9 @@ export function openStage(backdrop) {
       if (specFor) specAhead.style.clipPath = `inset(0 0 0 ${(r * 100).toFixed(3)}%)`;
       seek.setAttribute('aria-valuenow', Math.round(r * 100));
       followLyric(player.currentTime());
+      // The arm is the same reading as the scrubber above, so it is written
+      // from the same branch — one is never ahead of the other.
+      paintDeck();
     }
     lift += ((a.pulse * 26 + a.level * 18) - lift) * Math.min(1, dt / 90);
     art.style.transform =
@@ -426,6 +468,115 @@ export function openStage(backdrop) {
     if (wantLyrics) { shown = -1; followLyric(player.currentTime()); }
   });
 
+  /* ----------------------------------------------------------- deck wiring
+   *
+   * The arm's travel, in degrees from the pivot.
+   *
+   * A 12" side runs from about 146mm out to about 60mm in, which on a
+   * nine-inch arm is roughly twenty degrees of swing. Those are the numbers
+   * this uses, so the arm sits where a real one would at the same point in a
+   * side rather than sweeping some arbitrary arc chosen to look busy.
+   */
+  const ARM_START = -20;            // dropped on the lead-in groove
+  const ARM_END = 2;                // run-out, near the label
+  const ARM_REST = -34;             // parked on its rest, nothing playing
+
+  let deckOn = false;
+  let scrubAt = null;               // fraction being dragged to, or null
+
+  const armAngle = (frac) => ARM_START + (ARM_END - ARM_START) * Math.max(0, Math.min(1, frac));
+
+  function paintDeck() {
+    if (!deckOn) return;
+    const dur = player.state.duration || 0;
+    const playing = !!player.state.current;
+    const frac = scrubAt !== null ? scrubAt
+      : dur > 0 ? Math.max(0, Math.min(1, player.currentTime() / dur)) : 0;
+    arm.style.setProperty('--arm', `${(playing ? armAngle(frac) : ARM_REST).toFixed(2)}deg`);
+    arm.setAttribute('aria-valuenow', String(Math.round(frac * 100)));
+    arm.setAttribute('aria-valuetext',
+      dur ? `${fmtTime(frac * dur)} of ${fmtTime(dur)}` : 'Nothing playing');
+    /* The platter keeps 33⅓ against the *record*, so the speed control moves
+       it: at 1.1x the deck is running fast and should look like it. */
+    deck.style.setProperty('--rate', String(rack.state.speed || 1));
+    deck.classList.toggle('is-spinning', player.state.playing && !scrubAt);
+    deck.classList.toggle('is-cued', scrubAt !== null);
+  }
+
+  /** Where along the side a pointer is asking for, from its angle at the pivot. */
+  function fracFromPointer(e) {
+    const pivot = deck.querySelector('.deck-pivot').getBoundingClientRect();
+    const cx = pivot.left + pivot.width / 2;
+    const cy = pivot.top + pivot.height / 2;
+    // The arm hangs down-left from the pivot at rest; measure from straight down.
+    const deg = Math.atan2(e.clientX - cx, e.clientY - cy) * 180 / Math.PI;
+    return Math.max(0, Math.min(1, (deg - ARM_START) / (ARM_END - ARM_START)));
+  }
+
+  let armDrag = false;
+  const onArmDown = (e) => {
+    if (!deckOn || !player.state.current || e.button > 0) return;
+    armDrag = true;
+    scrubAt = fracFromPointer(e);
+    /* Capture is a nicety — it keeps the drag alive when the pointer leaves
+       the arm — and it is allowed to fail. Uncaught, a throw here abandons the
+       handler with `scrubAt` set and the deck stuck in cue, holding the
+       platter still and never seeking. The drag works without it. */
+    try { arm.setPointerCapture?.(e.pointerId); } catch { /* not captured */ }
+    paintDeck();
+    e.preventDefault();
+  };
+  const onArmMove = (e) => {
+    if (!armDrag) return;
+    scrubAt = fracFromPointer(e);
+    paintDeck();
+  };
+  const onArmUp = (e) => {
+    if (!armDrag) return;
+    armDrag = false;
+    try { arm.releasePointerCapture?.(e.pointerId); } catch { /* never held */ }
+    const to = scrubAt;
+    scrubAt = null;
+    if (to !== null && player.state.duration) player.seek(to * player.state.duration);
+    paintDeck();
+  };
+  arm.addEventListener('pointerdown', onArmDown);
+  arm.addEventListener('pointermove', onArmMove);
+  arm.addEventListener('pointerup', onArmUp);
+  arm.addEventListener('pointercancel', onArmUp);
+
+  /* The arm answers the keyboard exactly as the scrubber beside it does. An
+     arm that can only be dragged is a transport some people cannot use, and
+     "it is a picture of a record player" is not a reason to make the one
+     control on screen unreachable. */
+  const onArmKey = (e) => {
+    if (!player.state.current) return;
+    const dur = player.state.duration || 0;
+    const step = e.shiftKey ? 30 : 5;
+    let to = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') to = player.currentTime() + step;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') to = player.currentTime() - step;
+    else if (e.key === 'Home') to = 0;
+    else if (e.key === 'End') to = Math.max(0, dur - 1);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+    player.seek(Math.max(0, Math.min(dur, to)));
+    paintDeck();
+  };
+  arm.addEventListener('keydown', onArmKey);
+
+  function setDeck(on) {
+    deckOn = on;
+    deck.hidden = !on;
+    art.hidden = on;
+    deckBtn.classList.toggle('is-on', on);
+    deckBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    deckBtn.setAttribute('aria-label', on ? 'Show the sleeve' : 'Show the turntable');
+    try { localStorage.setItem(DECK_KEY, on ? '1' : '0'); } catch { /* private */ }
+    if (on) paintDeck();
+  }
+
   /* ---------------------------------------------------------------- wiring */
 
   const offTrack = player.events.on('track', paint);
@@ -434,7 +585,10 @@ export function openStage(backdrop) {
   loadSpec();
   loadLyrics();
   const offState = player.events.on('state', () => { paintState(); paint(); });
-  const offArt = lib.events.on('art', () => { const t = player.state.current; if (t) paintArt(artImg, t.albumKey); });
+  const offArt = lib.events.on('art', () => {
+    const t = player.state.current;
+    if (t) { paintArt(artImg, t.albumKey); paintArt(label, t.albumKey); }
+  });
 
   const onKey = (e) => {
     if (e.key === 'Escape') { e.stopPropagation(); closeStage(); return; }
@@ -443,12 +597,23 @@ export function openStage(backdrop) {
     if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey && !e.altKey && words) {
       e.stopPropagation();
       lyricBtn.click();
+      return;
+    }
+    /* Not gated on anything, unlike L: the deck is there for every track,
+       and the arrow keys the arm answers to are handled on the arm itself
+       so they only apply when it has the focus. */
+    if ((e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.stopPropagation();
+      setDeck(!deckOn);
     }
   };
   document.addEventListener('keydown', onKey, true);
 
   paint();
   paintState();
+  /* Restored, because which face the stage shows is a way of listening rather
+     than a novelty to be re-chosen on every visit. */
+  try { setDeck(localStorage.getItem(DECK_KEY) === '1'); } catch { setDeck(false); }
 
   if (backdrop) { backdrop.setIntensity(1.9); backdrop.setRoom?.(1); }
   animate(host, { opacity: [0, 1] }, { duration: 360, easing: ease.out });
@@ -465,6 +630,11 @@ export function openStage(backdrop) {
     offTrack(); offState(); offArt(); offLyrics(); offSpec();
     offPeaks();
     document.removeEventListener('keydown', onKey, true);
+    arm.removeEventListener('pointerdown', onArmDown);
+    arm.removeEventListener('pointermove', onArmMove);
+    arm.removeEventListener('pointerup', onArmUp);
+    arm.removeEventListener('pointercancel', onArmUp);
+    arm.removeEventListener('keydown', onArmKey);
     host.removeEventListener('pointermove', onMove);
     document.body.classList.remove('stage-open');
     if (bdCanvas) document.body.insertBefore(bdCanvas, document.body.firstChild);
