@@ -21,6 +21,7 @@ import { mountSound } from './sound.js';
 import * as rules from './rules.js';
 import * as offline from './offline.js';
 import * as stats from './stats.js';
+import * as rack from './audio.js';
 import * as band from './band.js';
 import * as session from './session.js';
 import * as looks from './looks.js';
@@ -1256,6 +1257,7 @@ function viewAlbum(host, key) {
  */
 
 function coverMenu(key, album) {
+  const bound = rack.bindingOf('album', key);
   const choose = async (file) => {
     if (!file) return;
     toast('Fitting the cover…');
@@ -1283,8 +1285,71 @@ function coverMenu(key, album) {
         toast(`“${album.title}” is back to its own cover`);
       },
     } : null,
+    {
+      label: 'Rack for this album…', icon: 'sliders',
+      hint: bound || '',
+      onSelect: () => rackPicker('album', key, album.title),
+    },
     { separator: true },
   ].filter(Boolean);
+}
+
+/**
+ * Picks the rack a record should arrive with.
+ *
+ * A dialog rather than a submenu because the list is long — eleven presets
+ * plus however many racks you have saved — and because the row that matters
+ * most is the one at the top saying there is no rack, which a submenu buries.
+ */
+async function rackPicker(scope, key, label) {
+  const current = rack.bindingOf(scope, key);
+  const saved = await rack.savedRacks();
+  const list = el('div', { class: 'rack-pick' });
+
+  const row = (id, name, note) => {
+    const on = (id || null) === (current || null);
+    return el('button', {
+      class: 'rack-pick-row' + (on ? ' is-on' : ''),
+      onclick: async () => {
+        await rack.bindTo(scope, key, id);
+        closeDialog();
+        /* Takes effect on the next track that asks for it. Saying so is the
+           honest thing: the change is real but you will not hear it until the
+           record comes round, and silence here reads as a control that did
+           nothing. */
+        const now = player.state.current;
+        const mine = now && (scope === 'album' ? now.albumKey : now.artistKey) === key;
+        if (mine) await rack.followTrack(now);
+        toast(id
+          ? (mine ? `“${label}” is on the ${name} rack` : `“${label}” will arrive on the ${name} rack`)
+          : `“${label}” goes back to your rack`);
+      },
+    },
+      el('span', { class: 'rack-pick-name', text: name }),
+      note ? el('span', { class: 'rack-pick-note', text: note }) : null,
+      el('span', { class: 'rack-pick-mark', html: on ? ico('star-fill') : '' }));
+  };
+
+  list.appendChild(row(null, 'Your rack', 'whatever the Sound page says'));
+  if (saved.length) {
+    list.appendChild(el('p', { class: 'rack-pick-head', text: 'Saved' }));
+    for (const r of saved) list.appendChild(row(r.name, r.name));
+  }
+  list.appendChild(el('p', { class: 'rack-pick-head', text: 'Presets' }));
+  for (const p of rack.PRESETS) list.appendChild(row(p.id, p.label));
+
+  let closeDialog = () => {};
+  const d = dialog({
+    title: 'A rack for this record',
+    body: el('div', {},
+      el('p', { class: 'dialog-note', text:
+        `Sonora puts this chain in circuit whenever ${scope === 'album' ? 'this album' : 'this artist'} plays, ` +
+        'and takes it out again afterwards. Your own rack is never overwritten.' }),
+      list),
+    width: 460,
+    actions: [{ label: 'Done' }],
+  });
+  closeDialog = () => d.close();
 }
 
 /**

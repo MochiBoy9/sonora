@@ -54,6 +54,41 @@ export function mountSound(host) {
       el('h1', { class: 'page-title', text: 'The Rack' }),
       el('p', { class: 'page-sub', id: 'rack-sub' })));
 
+  /* When a record is driving the chain, the controls below are still live but
+     they are not editing what you would assume. Saying so is the whole of the
+     fix — a page that silently means something different is worse than one
+     that carries an extra line. */
+  const boundLine = el('div', { class: 'rack-bound', hidden: true });
+  host.appendChild(boundLine);
+
+  function paintBound() {
+    const b = rack.boundRack();
+    boundLine.hidden = !b;
+    if (!b) return;
+    boundLine.textContent = '';
+    boundLine.append(
+      el('p', { class: 'rack-bound-text' },
+        el('span', { text: 'This chain came with ' }),
+        el('b', { text: b.label || 'the record playing' }),
+        el('span', { text: `. Your own rack is parked, and comes back when ${b.scope === 'album' ? 'the album' : 'the artist'} does.` })),
+      el('button', {
+        class: 'btn ghost sm', text: 'Keep changes',
+        title: 'Save the rack as it stands now onto this record',
+        onclick: async () => {
+          const name = await rack.keepBoundRack();
+          toast(name ? `Saved as “${name}”` : 'Nothing to save');
+        },
+      }),
+      el('button', {
+        class: 'btn ghost sm', text: 'Detach',
+        onclick: async () => {
+          await rack.unbindFrom(b.scope, b.key);
+          await rack.followTrack(player.state.current);
+          toast('Back to your rack');
+        },
+      }));
+  }
+
   const grid = el('div', { class: 'rack' });
   host.appendChild(grid);
 
@@ -469,6 +504,8 @@ export function mountSound(host) {
 
   on(rack, 'change', () => { if (!host.isConnected) return; paintAll(); });
   on(player, 'track', () => paintAll());
+  on(rack, 'bound', () => { if (host.isConnected) paintBound(); });
+  paintBound();
 
   /* The lamp reads the same per-frame analysis every visualiser reads, so it
      costs no second look at the analyser — and the ticker stops on its own

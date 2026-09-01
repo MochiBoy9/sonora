@@ -532,11 +532,174 @@ export const isDefault = () =>
 let saveTimer = 0;
 
 function schedule() {
+  /* Not while a record is driving the rack. The saved rack is *yours* — the
+     one you set by hand and expect to find next launch — and letting an
+     album's settings write over it would mean playing one loud record once
+     and finding the whole library equalised for it a week later. */
+  if (bound) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     db.setKV(KEY, JSON.parse(JSON.stringify(state))).catch(() => {});
   }, SAVE_DEBOUNCE);
 }
+
+/* ------------------------------------------------- a rack per record
+ *
+ * Some records want a different chain. A thin early pressing wants the bass
+ * shelf up; a loudness-war remaster wants the compressor off and the preamp
+ * down; a live bootleg wants the room taken out of it. Setting that by hand
+ * every time you put the record on is exactly the sort of small repeated
+ * chore a local player should absorb.
+ *
+ * A binding is `scope:key -> rack id`, where the id names either a built-in
+ * preset or a rack you saved. Album beats artist, because the more specific
+ * statement wins and an album is the smaller claim.
+ *
+ * The rack you set by hand is the *house* rack, and it is parked rather than
+ * overwritten while a record drives: leaving that album puts it back exactly.
+ * Nothing about a binding is allowed to leak into the next record.
+ */
+
+const BIND_KEY = 'audio:bindings';
+
+let bindings = {};              // 'album:<key>' | 'artist:<key>' -> rack id
+let bound = null;               // { scope, key, id, label } currently driving
+let house = null;               // the hand-set rack, parked while `bound`
+
+/** What is driving the rack right now, or null for the house rack. */
+export const boundRack = () => bound;
+
+export const bindingOf = (scope, key) => bindings[scope + ':' + key] || null;
+
+/** The id bound to a track, album first. Null when the house rack applies. */
+export function bindingForTrack(t) {
+  const hit = matchFor(t);
+  return hit ? hit.id : null;
+}
+
+/** Which binding claims this track, and under which scope. Album beats artist. */
+function matchFor(t) {
+  if (!t) return null;
+  const album = bindings['album:' + t.albumKey];
+  if (album) return { scope: 'album', key: t.albumKey, id: album, label: t.album };
+  const artist = bindings['artist:' + t.artistKey];
+  if (artist) return { scope: 'artist', key: t.artistKey, id: artist, label: t.albumArtist };
+  return null;
+}
+
+const saveBindings = () => db.setKV(BIND_KEY, bindings).catch(() => {});
+
+/** Names a rack: a built-in preset id, or the name of one you saved. */
+async function rackStateFor(id) {
+  const preset = PRESETS.find((p) => p.id === id);
+  if (preset) {
+    /* A preset is a partial statement — it says what the tone controls do and
+       leaves everything else alone. Read onto a copy of the house rack so
+       "Vocal" on an album does not also silently reset your width and
+       balance to whatever the defaults happen to be. */
+    const base = JSON.parse(JSON.stringify(house || state));
+    return {
+      ...base,
+      eq: preset.eq.slice(),
+      bass: preset.bass, treble: preset.treble,
+      width: preset.width === undefined ? base.width : preset.width,
+      comp: { ...base.comp, ...(preset.comp || { on: false }) },
+      space: { ...base.space, ...(preset.space || { on: false }) },
+      preset: preset.id,
+      on: true,
+    };
+  }
+  const saved = (await savedRacks()).find((r) => r.name === id);
+  return saved ? JSON.parse(JSON.stringify(saved.state)) : null;
+}
+
+function put(next) {
+  Object.assign(state, next, {
+    eq: Array.isArray(next.eq) ? next.eq.slice() : state.eq,
+    comp: { ...state.comp, ...(next.comp || {}) },
+    space: { ...state.space, ...(next.space || {}) },
+  });
+  apply();
+}
+
+/**
+ * Puts the rack a track asks for into the chain, or brings the house rack back.
+ *
+ * Returns what it did, so the caller can say so. Called only when nothing is
+ * crossfading — see the note on `bindTo`.
+ */
+export async function followTrack(t) {
+  const want = matchFor(t);
+
+  if (!want) {
+    if (!bound) return null;
+    const back = house;
+    bound = null;                 // cleared first: `put` calls apply, which saves
+    house = null;
+    if (back) put(back);
+    events.emit('bound', null);
+    return { released: true };
+  }
+
+  // Already in circuit. Re-applying would be a ramp on every track of the
+  // album, which is a click you can hear for no change you asked for.
+  if (bound && bound.id === want.id && bound.key === want.key) return null;
+
+  const next = await rackStateFor(want.id);
+  if (!next) {
+    /* The rack was deleted after being bound. Drop the binding rather than
+       leave a dangling one that fails quietly on every play, then resolve
+       again — an album binding may be hiding an artist binding underneath it,
+       and returning here would leave the previous record's rack in circuit
+       until the track after this one. Terminates: each pass removes a
+       binding, and there are only ever two. */
+    delete bindings[want.scope + ':' + want.key];
+    saveBindings();
+    return followTrack(t);
+  }
+
+  if (!bound) house = JSON.parse(JSON.stringify(state));
+  bound = want;
+  put(next);
+  events.emit('bound', bound);
+  return { applied: want.id, label: want.label };
+}
+
+/**
+ * Ties a rack to an album or an artist.
+ *
+ * Takes effect on the next track that asks for it rather than immediately,
+ * and that is the whole subtlety of this feature: both decks feed one rack,
+ * so changing the chain during a crossfade equalises the tail of the outgoing
+ * record with the incoming one's settings. The caller waits for the handover
+ * to finish — see `player.events.on('settled')`.
+ */
+export async function bindTo(scope, key, id) {
+  if (!scope || !key) return;
+  if (id) bindings[scope + ':' + key] = id; else delete bindings[scope + ':' + key];
+  await saveBindings();
+  events.emit('bindings', bindings);
+}
+
+export const unbindFrom = (scope, key) => bindTo(scope, key, null);
+
+/** Writes the rack as it stands now onto whatever is currently driving it. */
+export async function keepBoundRack() {
+  if (!bound) return false;
+  const name = `${bound.label || 'Album'} rack`;
+  await saveRack(name);
+  await bindTo(bound.scope, bound.key, name);
+  bound = { ...bound, id: name };
+  events.emit('bound', bound);
+  return name;
+}
+
+/** Every binding, resolved against the library for display. */
+export const allBindings = () => Object.entries(bindings)
+  .map(([k, id]) => {
+    const i = k.indexOf(':');
+    return { scope: k.slice(0, i), key: k.slice(i + 1), id };
+  });
 
 /** User-named racks, kept beside the built-in presets. */
 export async function savedRacks() {
@@ -574,6 +737,8 @@ export function loadRack(rack) {
 async function load() {
   if (loaded) return state;
   loaded = true;
+  const marks = await db.getKV(BIND_KEY).catch(() => null);
+  if (marks && typeof marks === 'object' && !Array.isArray(marks)) bindings = marks;
   const saved = await db.getKV(KEY).catch(() => null);
   if (saved && typeof saved === 'object') {
     Object.assign(state, saved, {

@@ -747,6 +747,10 @@ async function load(track, autoplay, { count = true } = {}) {
      with the decode that is actually making sound. */
   peakmap.warm(track, 'wave');
   warmNext();
+  /* One deck is playing and nothing is crossfading, so the shared chain is
+     safe to change. A direct load is settled the moment it starts; the
+     handover path emits this later, when the outgoing deck is parked. */
+  events.emit('settled', track);
 }
 
 /**
@@ -1025,6 +1029,11 @@ function finishHandover(track, nextIndex, from, to, fade) {
     releaseDeck(from);
     handover = null;
     warmNext();
+    /* The fade is over and only one deck is making sound. Anything that
+       changes the chain both decks share — a rack bound to this record —
+       has been waiting for exactly this moment: doing it a moment earlier
+       would have equalised the tail of the record that just ended. */
+    events.emit('settled', track);
   }, parkIn);
 }
 

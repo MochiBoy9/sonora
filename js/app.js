@@ -831,6 +831,15 @@ async function boot() {
   }, { passive: true });
 
   player.events.on('track', applyAccent);
+  /* A record that carries its own rack gets it here, on `settled` rather than
+     on `track`: both decks feed one chain, and swapping the chain while a
+     crossfade is still running would put the incoming record's EQ on the tail
+     of the one going out. `settled` fires when only one deck is making sound. */
+  player.events.on('settled', async (t) => {
+    const did = await rack.followTrack(t).catch(() => null);
+    if (did?.applied) toast(`Rack for “${did.label}”`);
+    else if (did?.released) toast('Back to your rack');
+  });
   player.events.on('unavailable', (t) => toast(`Can't reach “${t.title}” — reconnect its folder`, {
     action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
   }));
