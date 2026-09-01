@@ -19,6 +19,7 @@ import { startRelief } from './relief.js';
 import { startOffline } from './offline.js';
 import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
 import * as peakmap from './peaks.js';
+import * as undoStack from './undo.js';
 
 /* Destinations are numbered, like channels on a desk — the number is part of
    how you learn where things are, not decoration. */
@@ -623,13 +624,17 @@ const SHORTCUTS = [
     [['F'], 'Favourite what is playing'],
   ]],
   ['Getting around', [
-    [['/'], 'Search'],
-    [['⌘', 'K'], 'Search'],
+    [['/'], 'Search the library'],
+    [['⌘', 'K'], 'Everything, by name'],
     [['Q'], 'Queue panel'],
     [['V'], 'Immersive visualiser'],
     [['E'], 'The Sound page'],
     [['?'], 'This list'],
     [['Esc'], 'Close whatever is open'],
+  ]],
+  ['The library', [
+    [['⌘', 'Z'], 'Undo the last change'],
+    [['⌘', '⇧', 'Z'], 'Redo it'],
   ]],
   ['Sound', [
     [['B'], 'Bypass the rack — A/B it'],
@@ -659,6 +664,26 @@ function showShortcuts() {
   });
 }
 
+/**
+ * Runs one step of the undo stack and says what happened.
+ *
+ * The interesting case is the third one. An entry can outlive what it
+ * describes — correct a track, remove the folder it came from, then undo — and
+ * the honest answer is that nothing was put back. Saying "Undone" there would
+ * be a lie that teaches you to stop reading the confirmation, so the toast
+ * reports the miss instead. The entry still moves to the redo side, because a
+ * stack you cannot walk past is worse than one with a dud step in it.
+ */
+async function runUndo(redo) {
+  const label = redo ? undoStack.nextRedo() : undoStack.nextUndo();
+  if (!label) { toast(redo ? 'Nothing to redo' : 'Nothing to undo'); return; }
+  const done = redo ? await undoStack.redo() : await undoStack.undo();
+  if (!done) return;
+  if (done.error) toast(`Could not ${redo ? 'redo' : 'undo'} ${done.label}`);
+  else if (!done.touched) toast(`${done.label} is no longer here to change`);
+  else toast(`${redo ? 'Redid' : 'Undid'} ${done.label}`);
+}
+
 function bindKeys() {
   addEventListener('keydown', (e) => {
     const t = e.target;
@@ -678,6 +703,13 @@ function bindKeys() {
        reachable by knowing where they lived. "/" still goes to the search box
        for anyone who wants to search the library specifically. */
     if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); togglePalette(); return; }
+    /* Undo, but not while a text field has the caret: inside the edit dialog
+       ⌘Z has to mean "undo what I just typed", which is the browser's job and
+       not ours. Ctrl-Y is here because Windows users reach for it. */
+    if (!typing && (e.metaKey || e.ctrlKey)) {
+      if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); runUndo(e.shiftKey); return; }
+      if (e.key === 'y' || e.key === 'Y') { e.preventDefault(); runUndo(true); return; }
+    }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
 
     switch (e.key) {
@@ -763,6 +795,8 @@ async function boot() {
     toast(rack.state.on ? 'Rack in circuit' : 'Rack bypassed');
   });
   document.addEventListener('sonora:toggle-queue', () => toggleQueuePane());
+  document.addEventListener('sonora:undo', () => runUndo(false));
+  document.addEventListener('sonora:redo', () => runUndo(true));
   document.addEventListener('sonora:theme', (e) => applyTheme(e.detail));
   document.addEventListener('sonora:stage', () => toggleStage(backdrop));
   document.addEventListener('sonora:setting', (e) => {

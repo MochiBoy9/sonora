@@ -25,6 +25,7 @@
 import { el, ico, fmtTime } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
+import * as undoStack from './undo.js';
 import { toast } from './ui.js';
 
 /* ------------------------------------------------------------------ commands */
@@ -38,7 +39,17 @@ const go = (hash) => () => { location.hash = hash; };
  */
 function commands() {
   const playing = !!player.state.current;
+  const back = undoStack.nextUndo();
+  const forward = undoStack.nextRedo();
   return [
+    /* The only two rows whose subtitle is the answer to "what would this do?".
+       A palette entry reading "Undo" makes you press it to find out; one
+       reading "Undo — deleting “Late nights”" does not. */
+    { label: 'Undo', icon: 'refresh', keys: '⌘Z', when: !!back, hint: back,
+      run: () => document.dispatchEvent(new CustomEvent('sonora:undo')) },
+    { label: 'Redo', icon: 'refresh', keys: '⌘⇧Z', when: !!forward, hint: forward,
+      run: () => document.dispatchEvent(new CustomEvent('sonora:redo')) },
+
     { label: 'Play or pause', icon: 'play', keys: 'Space', when: playing, run: () => player.toggle() },
     { label: 'Next track', icon: 'next', keys: 'N', when: playing, run: () => player.next(false) },
     { label: 'Previous track', icon: 'prev', keys: 'P', when: playing, run: () => player.prev() },

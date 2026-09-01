@@ -13,6 +13,7 @@
  */
 
 import * as db from './db.js';
+import * as undo from './undo.js';
 import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle, ext } from './util.js';
 
 export const events = new Emitter();
@@ -180,11 +181,53 @@ function applyEdits(t) {
  * override and lets the file's own tag show through again. Returns the number
  * of tracks touched.
  */
+/**
+ * Everything about a track that an edit can move, as plain values.
+ *
+ * Deliberately a whole-state snapshot rather than a diff. Restoring `edits`
+ * and `orig` alone is not enough — `applyEdits` only writes the fields that
+ * are currently overridden, so a field whose override is being *removed* would
+ * keep the new value with nothing left to say what it used to be. Eight
+ * strings per corrected track is a rounding error against holding the file's
+ * own tags, which we already do.
+ */
+function snapshotTracks(rows) {
+  return rows.map((t) => {
+    const s = { id: t.id, edits: t.edits ? { ...t.edits } : null, orig: t.orig ? { ...t.orig } : null };
+    for (const k of EDITABLE) s[k] = t[k];
+    return s;
+  });
+}
+
+/** Puts snapshots back. Returns how many tracks were still there to put back. */
+async function restoreTracks(snaps) {
+  const rows = [];
+  for (const s of snaps) {
+    const t = state.tracks.get(s.id);
+    if (!t) continue;               // the folder went away; see undo.js on staleness
+    for (const k of EDITABLE) t[k] = s[k];
+    if (s.edits) t.edits = { ...s.edits }; else delete t.edits;
+    if (s.orig) t.orig = { ...s.orig }; else delete t.orig;
+    t.albumKey = albumKeyOf(t.albumArtist || t.artist || '', t.album);
+    decorate(t);
+    rows.push(t);
+  }
+  if (rows.length) {
+    await db.putTracks(rows).catch(() => {});
+    reindex();
+    events.emit('change');
+  }
+  return rows.length;
+}
+
 export async function editTracks(tracks, patch) {
   const rows = [];
+  const before = [];
   for (const t of tracks) {
     const track = typeof t === 'string' ? state.tracks.get(t) : t;
     if (!track) continue;
+    // Taken before anything moves, and thrown away below if nothing does.
+    const was = snapshotTracks([track])[0];
     const edits = { ...(track.edits || {}) };
     /* What the file said, kept for exactly the fields that were overridden.
      *
@@ -225,12 +268,16 @@ export async function editTracks(tracks, patch) {
     track.namedArtist = true;
     decorate(track);
     rows.push(track);
+    before.push(was);
   }
 
   if (rows.length) {
     await db.putTracks(rows).catch(() => {});
     reindex();
     events.emit('change');
+    const after = snapshotTracks(rows);
+    const what = rows.length === 1 ? `the correction to “${rows[0].title}”` : `${rows.length} corrections`;
+    undo.push({ label: what, undo: () => restoreTracks(before), redo: () => restoreTracks(after) });
   }
   return rows.length;
 }
@@ -1053,20 +1100,68 @@ export async function rescanAll() {
 
 /* ------------------------------------------------------------------ playlists */
 
+/* The four writers below all record an inverse. A playlist is small and
+   entirely ours, so the inverses hold whole copies rather than diffs: a
+   deleted playlist comes back with its id, its contents and its place in the
+   sidebar, which is what "undo" has to mean for something you can see. */
+
+/** Re-inserts a playlist where it was, id and all. */
+async function restorePlaylist(p, at) {
+  const copy = { ...p, tracks: (p.tracks || []).slice() };
+  state.playlists.splice(Math.min(at, state.playlists.length), 0, copy);
+  await db.putPlaylist(copy).catch(() => {});
+  events.emit('playlists');
+  return 1;
+}
+
+async function dropPlaylist(id) {
+  const had = state.playlists.some((p) => p.id === id);
+  state.playlists = state.playlists.filter((p) => p.id !== id);
+  await db.deletePlaylist(id).catch(() => {});
+  events.emit('playlists');
+  return had ? 1 : 0;
+}
+
+/** Writes a set of fields onto a playlist. Returns 1 if it was still there. */
+async function patchPlaylist(id, patch) {
+  const p = state.playlists.find((x) => x.id === id);
+  if (!p) return 0;
+  for (const [k, v] of Object.entries(patch)) p[k] = Array.isArray(v) ? v.slice() : v;
+  await db.putPlaylist(p).catch(() => {});
+  events.emit('playlists');
+  return 1;
+}
+
 export async function createPlaylist(name, trackIds = []) {
   const p = { id: 'p:' + hash32(name + Date.now()), name, tracks: trackIds.slice(), createdAt: Date.now() };
   state.playlists.push(p);
   await db.putPlaylist(p).catch(() => {});
   events.emit('playlists');
+  undo.push({
+    label: `the playlist “${name}”`,
+    undo: () => dropPlaylist(p.id),
+    redo: () => restorePlaylist(p, state.playlists.length),
+  });
   return p;
 }
 
 export async function updatePlaylist(id, patch) {
   const p = state.playlists.find((x) => x.id === id);
   if (!p) return null;
+  // Only the keys actually being written, so undoing a rename does not also
+  // revert a reorder that happened in between.
+  const was = {};
+  for (const k of Object.keys(patch)) was[k] = Array.isArray(p[k]) ? p[k].slice() : p[k];
+  const now = {};
+  for (const [k, v] of Object.entries(patch)) now[k] = Array.isArray(v) ? v.slice() : v;
   Object.assign(p, patch);
   await db.putPlaylist(p).catch(() => {});
   events.emit('playlists');
+  undo.push({
+    label: 'name' in patch ? `the rename to “${p.name}”` : `the change to “${p.name}”`,
+    undo: () => patchPlaylist(id, was),
+    redo: () => patchPlaylist(id, now),
+  });
   return p;
 }
 
@@ -1074,15 +1169,43 @@ export async function addToPlaylist(id, trackIds) {
   const p = state.playlists.find((x) => x.id === id);
   if (!p) return;
   const have = new Set(p.tracks);
-  for (const t of trackIds) if (!have.has(t)) p.tracks.push(t);
+  // Only the ones that were not already in it: undoing an add of a track that
+  // was in the playlist beforehand must not remove it.
+  const added = [...new Set(trackIds)].filter((t) => !have.has(t));
+  for (const t of added) p.tracks.push(t);
+  if (!added.length) return;
   await db.putPlaylist(p).catch(() => {});
   events.emit('playlists');
+  undo.push({
+    label: added.length === 1 ? `adding it to “${p.name}”` : `adding ${added.length} tracks to “${p.name}”`,
+    undo: async () => {
+      const cur = state.playlists.find((x) => x.id === id);
+      if (!cur) return 0;
+      const drop = new Set(added);
+      return patchPlaylist(id, { tracks: cur.tracks.filter((t) => !drop.has(t)) });
+    },
+    redo: async () => {
+      const cur = state.playlists.find((x) => x.id === id);
+      if (!cur) return 0;
+      const back = new Set(cur.tracks);
+      return patchPlaylist(id, { tracks: cur.tracks.concat(added.filter((t) => !back.has(t))) });
+    },
+  });
 }
 
 export async function removePlaylist(id) {
+  const at = state.playlists.findIndex((p) => p.id === id);
+  const gone = at >= 0 ? { ...state.playlists[at], tracks: (state.playlists[at].tracks || []).slice() } : null;
   state.playlists = state.playlists.filter((p) => p.id !== id);
   await db.deletePlaylist(id).catch(() => {});
   events.emit('playlists');
+  if (gone) {
+    undo.push({
+      label: `deleting “${gone.name}”`,
+      undo: () => restorePlaylist(gone, at),
+      redo: () => dropPlaylist(id),
+    });
+  }
 }
 
 /**
@@ -1125,6 +1248,11 @@ export async function createSmartPlaylist(name, set = {}) {
   state.playlists.push(p);
   await db.putPlaylist(p).catch(() => {});
   events.emit('playlists');
+  undo.push({
+    label: `the smart shelf “${name}”`,
+    undo: () => dropPlaylist(p.id),
+    redo: () => restorePlaylist(p, state.playlists.length),
+  });
   return p;
 }
 
@@ -1192,6 +1320,15 @@ export function toggleFavourite(id, force) {
   }
   db.setKV('favourites', favourites.ids).catch(() => {});
   events.emit('favourites', id, on);
+  /* The inverse of a toggle is the toggle back, but pinned to a value rather
+     than flipped: undoing after the same track was favourited again by hand
+     should land on "not favourited", not on whatever the flip happens to give. */
+  const name = (state.tracks.get(id) || {}).title;
+  undo.push({
+    label: on ? `favouriting${name ? ` “${name}”` : ''}` : `unfavouriting${name ? ` “${name}”` : ''}`,
+    undo: () => { toggleFavourite(id, !on); return 1; },
+    redo: () => { toggleFavourite(id, on); return 1; },
+  });
   return on;
 }
 
