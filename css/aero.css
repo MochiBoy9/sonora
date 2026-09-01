@@ -550,3 +550,21 @@ body::after { z-index: 0; }
 
 
 @media (prefers-reduced-motion: reduce) { .art-relief { display: none; } }
+
+/* The proud parts of the print, on their own layer so they can slide against
+   the card as the sleeve turns. Only ever moved by a transform — the pixels
+   are drawn once, when the pointer arrives. */
+.art-proud {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  will-change: transform;
+  opacity: calc(var(--gloss, 1) * 0.85);
+}
+/* No displacement without motion. The sleeve is not turning under a reduced
+   -motion setting, and ink that slides over a card which is standing still is
+   a picture coming loose rather than a surface. */
+@media (prefers-reduced-motion: reduce) { .art-proud { display: none; } }

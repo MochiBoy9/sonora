@@ -4,6 +4,7 @@ import { el, ico, fmtTime, clamp, canDecode } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { animate, ease, enter, spring, settled } from './motion.js';
+import * as rules from './rules.js';
 
 /* ------------------------------------------------------------------ artwork */
 
@@ -255,6 +256,11 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
       (columns.includes('art') ? '<div class="art art-sm"><img class="art-img" alt="" decoding="async"></div>' : '') +
       '<div class="trow-text"><div class="trow-title"></div><div class="trow-sub"></div></div></div>';
     if (columns.includes('album')) html += '<div class="trow-album"></div>';
+    /* The dynamic range, where the listener asked for it. Measured on the audio
+       thread the first time a track is played and otherwise shown in a panel
+       almost nobody opens — it is the most useful number about a file that is
+       not its title, and a library sorted by it is a different library. */
+    if (columns.includes('dr')) html += '<div class="trow-dr"></div>';
     if (columns.includes('duration')) html += '<div class="trow-time"></div>';
     html += '<div class="trow-actions">' +
       `<button class="icon-btn ghost trow-fav" aria-label="Favourite" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>` +
@@ -313,6 +319,21 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
 
     const album = row.querySelector('.trow-album');
     if (album && album.textContent !== track.album) album.textContent = track.album;
+
+    const dr = row.querySelector('.trow-dr');
+    if (dr) {
+      const v = track.dr;
+      const text = v > 0 ? 'DR' + Math.round(v) : '—';
+      if (dr.textContent !== text) dr.textContent = text;
+      dr.title = v > 0
+        ? v.toFixed(1) + ' dB crest factor'
+        : 'Not measured yet — play the track once';
+      /* Under 8 dB is a loudness-war master and 14 or over is a well-cut one.
+         Marked at the two ends rather than shaded on a gradient: this is a
+         verdict somebody wants to read at a glance, not a heat map. */
+      dr.classList.toggle('is-squashed', v > 0 && v < 8);
+      dr.classList.toggle('is-open', v >= 14);
+    }
 
     const time = row.querySelector('.trow-time');
     if (time) {
@@ -421,6 +442,14 @@ export function trackMenu(tracks, opts = {}) {
     first && { label: 'Go to artist', icon: 'artist', onSelect: () => (location.hash = '#/artist/' + first.artistKey) },
     opts.onRemove && { separator: true },
     opts.onRemove && { label: opts.removeLabel || 'Remove', icon: 'trash', danger: true, onSelect: opts.onRemove },
+    /* Only offered where the analysis actually found a repeat. On anything
+       through-composed it declines, and a menu item that does nothing on half
+       a library is worse than one that is sometimes absent. */
+    first && player.hookOf(first) && {
+      label: 'Play the good bit', icon: 'play',
+      hint: fmtTime(player.hookOf(first).at),
+      onSelect: () => { if (!player.playHook(first)) toast('No repeated section found'); },
+    },
     { separator: true },
     tracks.length && {
       label: tracks.length > 1 ? `Edit details for ${tracks.length} tracks…` : 'Edit details…',
@@ -429,6 +458,133 @@ export function trackMenu(tracks, opts = {}) {
     },
     first && { label: 'Track info', icon: 'info', onSelect: () => infoDialog(first) },
   ].filter(Boolean);
+}
+
+/* ------------------------------------------------------------------ rules */
+
+/**
+ * The builder for a playlist that describes itself.
+ *
+ * One row per rule, each a field, an operator and a value — and the operators
+ * offered change with the field, because "contains" means nothing about a
+ * year and "in the last" means nothing about a title. The count updates as you
+ * type, which is most of what makes a rule builder usable: you can see whether
+ * you have described forty tracks or four thousand before you commit to it.
+ */
+export function rulesDialog(existing, onSave) {
+  const set = {
+    name: existing?.name || 'New shelf',
+    match: existing?.match || 'all',
+    rules: (existing?.rules || []).map((r) => ({ ...r })),
+    sort: existing?.sort || 'none',
+    sortDir: existing?.sortDir || 1,
+    limit: existing?.limit || 0,
+  };
+  if (!set.rules.length) set.rules.push(rules.blankRule());
+
+  const body = el('div', { class: 'rules-form' });
+  const nameInput = el('input', { class: 'input', type: 'text', value: set.name, 'aria-label': 'Name' });
+  nameInput.addEventListener('input', () => { set.name = nameInput.value; });
+
+  const matchSeg = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Match' });
+  for (const [id, label] of [['all', 'All of these'], ['any', 'Any of these']]) {
+    const b = el('button', {
+      class: 'seg' + (set.match === id ? ' is-on' : ''), role: 'radio',
+      'aria-checked': String(set.match === id), text: label,
+    });
+    b.addEventListener('click', () => {
+      set.match = id;
+      for (const x of matchSeg.children) {
+        const on = x === b;
+        x.classList.toggle('is-on', on);
+        x.setAttribute('aria-checked', String(on));
+      }
+      paintCount();
+    });
+    matchSeg.appendChild(b);
+  }
+
+  const list = el('div', { class: 'rules-list' });
+  const count = el('p', { class: 'rules-count' });
+
+  function paintCount() {
+    const n = rules.evaluate(set).length;
+    count.textContent = `${n.toLocaleString()} ${n === 1 ? 'track' : 'tracks'} · ${rules.describe(set)}`;
+  }
+
+  function paintRules() {
+    list.textContent = '';
+    set.rules.forEach((rule, i) => {
+      const row = el('div', { class: 'rule-row' });
+
+      const fieldSel = el('select', { class: 'input rule-field', 'aria-label': 'Field' });
+      for (const [id, f] of Object.entries(rules.FIELDS)) {
+        fieldSel.appendChild(el('option', { value: id, text: f.label, selected: id === rule.field }));
+      }
+      fieldSel.addEventListener('change', () => {
+        // A new field usually means the old operator no longer applies.
+        Object.assign(rule, rules.blankRule(fieldSel.value));
+        paintRules(); paintCount();
+      });
+
+      const opSel = el('select', { class: 'input rule-op', 'aria-label': 'Condition' });
+      for (const op of rules.opsFor(rule.field)) {
+        opSel.appendChild(el('option', { value: op.id, text: op.label, selected: op.id === rule.op }));
+      }
+      opSel.addEventListener('change', () => {
+        rule.op = opSel.value;
+        paintRules(); paintCount();
+      });
+
+      row.append(fieldSel, opSel);
+
+      const op = rules.OPS[rule.op];
+      if (op && !op.noValue) {
+        const kind = rules.FIELDS[rule.field].kind;
+        const val = el('input', {
+          class: 'input rule-value', 'aria-label': 'Value',
+          type: kind === 'text' ? 'text' : 'number',
+          value: String(rule.value ?? ''),
+        });
+        val.addEventListener('input', () => { rule.value = val.value; paintCount(); });
+        row.appendChild(val);
+        const unit = op.unit || rules.FIELDS[rule.field].unit;
+        if (unit) row.appendChild(el('span', { class: 'rule-unit', text: unit }));
+      }
+
+      row.appendChild(el('button', {
+        class: 'icon-btn ghost sm rule-drop', 'aria-label': 'Remove this rule',
+        html: ico('close'),
+        onclick: () => { set.rules.splice(i, 1); if (!set.rules.length) set.rules.push(rules.blankRule()); paintRules(); paintCount(); },
+      }));
+      list.appendChild(row);
+    });
+  }
+
+  body.append(
+    el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Name' }), nameInput),
+    el('div', { class: 'rules-head' }, el('span', { class: 'label', text: 'Match' }), matchSeg),
+    list,
+    el('button', {
+      class: 'btn ghost sm rules-add', html: ico('plus') + '<span>Add a rule</span>',
+      onclick: () => { set.rules.push(rules.blankRule()); paintRules(); paintCount(); },
+    }),
+    count,
+    el('p', { class: 'rules-note',
+      text: 'Worked out fresh every time it is opened, so it is never out of date.' }),
+  );
+
+  paintRules();
+  paintCount();
+
+  dialog({
+    title: existing ? 'Edit shelf' : 'New smart shelf',
+    body, width: 560,
+    actions: [
+      { label: 'Cancel' },
+      { label: existing ? 'Save' : 'Create', primary: true, onSelect: () => onSave(set) },
+    ],
+  });
 }
 
 /* ------------------------------------------------------------------ editing */
@@ -477,8 +633,20 @@ export function editDialog(tracks) {
     inputs.set(key, input);
 
     const edited = tracks.some((t) => t.edits && t.edits[key] !== undefined);
-    body.appendChild(el('label', { class: 'edit-field' + (edited ? ' is-edited' : '') },
+    /* Which of these the tag reader had to take from a folder name rather than
+       from the file. It has recorded that since 2.1 and resolved it into a
+       single boolean at import, after which nobody could see it again.
+     *
+     * It is worth seeing: an artist inferred from a directory is a different
+     * kind of fact from one read out of an ALBUMARTIST frame, and somebody
+     * fixing their library wants to know which is which before they start —
+     * it is also exactly the list of files worth re-tagging at the source. */
+    const guessed = !edited && tracks.some((t) =>
+      String(t.guessed || '').split(' ').includes(key));
+
+    body.appendChild(el('label', { class: 'edit-field' + (edited ? ' is-edited' : '') + (guessed ? ' is-guessed' : '') },
       el('span', { class: 'edit-label', text: label },
+        guessed ? el('span', { class: 'edit-guess', title: 'Taken from the folder name — the file did not say', text: 'guessed' }) : null,
         edited ? el('button', {
           class: 'edit-revert', type: 'button', title: 'Use what the file says',
           text: 'revert',

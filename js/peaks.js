@@ -23,6 +23,11 @@ import { Emitter, idle } from './util.js';
 
 export const events = new Emitter();
 
+/* The record shape this build understands. A stored record from an older
+   version is treated as absent and recomputed once, because the fields it is
+   missing cannot be derived from the ones it kept — only from the samples. */
+const REC_VERSION = 2;
+
 /** id -> record | null (a null means "looked, found nothing, stop asking"). */
 const memo = new Map();
 /** id -> promise, so two callers asking at once share one decode. */
@@ -62,6 +67,23 @@ function ensureWorker() {
     if (msg.type === 'peaks') {
       const rec = msg.rec;
       memo.set(rec.id, rec);
+      /* A few of these readings belong on the track as well as in the analysis
+         store: the rule engine, the sorts and the list columns all work over
+         the in-memory index and should not have to open a second database to
+         ask what tempo something is. Only the scalars are copied — the
+         waveform and the spectrogram stay where they are, which is the whole
+         reason that store exists. */
+      const track = lib.getTrack(rec.id);
+      if (track) {
+        let changed = false;
+        for (const k of ['bpm', 'bpmConfidence', 'centroid', 'shelfHz', 'truncated', 'lead']) {
+          if (rec[k] !== undefined && track[k] !== rec[k]) { track[k] = rec[k]; changed = true; }
+        }
+        if (changed) {
+          db.putTracks([track]).catch(() => {});
+          lib.events.emit('change');
+        }
+      }
       db.putPeaks(rec).catch(() => {});
       events.emit('peaks', rec.id, rec);
       resolveWaiters(rec.id, rec);
@@ -185,7 +207,7 @@ export function forTrack(track, want = 'all') {
 
   const p = (async () => {
     const stored = await db.getPeaks(id).catch(() => null);
-    if (stored && stored.v === 1 && satisfies(stored, want)) {
+    if (stored && stored.v === REC_VERSION && satisfies(stored, want)) {
       memo.set(id, stored);
       return stored;
     }

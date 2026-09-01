@@ -1192,3 +1192,341 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   .edit-field:nth-child(-n+5) { grid-column: 1 / -1; }
   .edit-note { grid-column: 1 / -1; }
 }
+
+/* ---------------------------------------------------------------- dynamic range
+
+   The crest factor, measured on the audio thread the first time a track is
+   played. It is the most useful number about a file that is not its title —
+   a well-cut record sits at 12-16 dB and a loudness-war victim under 8 — and
+   until now it lived only in a panel almost nobody opens.
+
+   Marked at the two ends rather than shaded across the range: this is a
+   verdict to be read at a glance, not a heat map. */
+.trow-dr {
+  width: 46px;
+  flex: none;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  letter-spacing: .04em;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.trow-dr.is-squashed { color: var(--warn); }
+.trow-dr.is-open { color: var(--accent); }
+.thead .trow-dr { font-size: calc(10px * var(--scale)); }
+
+@media (max-width: 860px) { .trow-dr { display: none; } }
+
+/* ---------------------------------------------------------------- rule builder
+
+   One row per rule: a field, a condition, a value. The operators offered
+   change with the field, because "contains" means nothing about a year.
+
+   The count under the list updates as you type, which is most of what makes a
+   builder like this usable — you can see whether you have described forty
+   tracks or four thousand before committing to it. */
+.rules-form { display: grid; gap: 14px; }
+
+.rules-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rules-list { display: grid; gap: 8px; }
+
+.rule-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.rule-row:has(.rule-unit) { grid-template-columns: minmax(0,1.1fr) minmax(0,1.2fr) minmax(0,1fr) auto auto; }
+.rule-row .input { height: 34px; font-size: calc(13px * var(--scale)); min-width: 0; }
+select.input { padding-right: 8px; }
+
+.rule-unit {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.rule-drop { flex: none; }
+.rules-add { justify-self: start; }
+
+.rules-count {
+  font-family: var(--mono);
+  font-size: calc(11.5px * var(--scale));
+  color: var(--accent);
+  line-height: 1.5;
+  padding-left: 12px;
+  border-left: 2px solid var(--accent-line);
+}
+.rules-note { color: var(--text-3); font-size: calc(12px * var(--scale)); }
+
+@media (max-width: 620px) {
+  .rule-row, .rule-row:has(.rule-unit) { grid-template-columns: 1fr 1fr; }
+  .rule-drop { grid-column: 2; justify-self: end; }
+}
+
+/* A smart playlist is marked in the sidebar: it behaves differently from one
+   you built by hand, and finding that out by surprise is worse than a glyph. */
+.side-playlist.is-smart .side-playlist-name::after {
+  content: "";
+  display: inline-block;
+  width: 5px; height: 5px;
+  margin-left: 7px;
+  vertical-align: middle;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+/* A field the tag reader took from a folder name rather than from the file.
+   Distinct from an edited field: one is a guess the app made, the other is a
+   correction you made, and conflating them would be the worst of both. */
+.edit-guess {
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--warn);
+  padding: 1px 6px;
+  margin-left: 8px;
+  box-shadow: inset 0 0 0 var(--hair) rgb(255 200 87 / .4);
+}
+.edit-field.is-guessed .input { box-shadow: inset 0 0 0 var(--hair) rgb(255 200 87 / .34); }
+
+/* ---------------------------------------------------------------- palette
+
+   Everything the app can do, reachable by typing its name. Two lists ranked
+   into one: the actions, and whatever the library search finds — so ⌘K finds
+   "shuffle" and "Shuffle it Off" in the same box.
+
+   Sits high on the screen rather than centred: a list that grows downward from
+   a fixed point is easier to read down than one that re-centres itself as it
+   changes length. */
+.pal-scrim { align-items: flex-start; }
+
+.pal {
+  width: min(660px, calc(100vw - 32px));
+  margin-top: 12vh;
+  background: rgb(var(--surface-2-rgb) / .96);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line), 0 32px 80px -24px rgb(0 0 0 / .8);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pal-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  height: 56px;
+  border-bottom: var(--hair) solid var(--line);
+  flex: none;
+}
+.pal-ico { display: grid; place-items: center; color: var(--text-3); flex: none; }
+.pal-ico .ico { width: 17px; height: 17px; }
+
+.pal-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: calc(15.5px * var(--scale));
+}
+.pal-input::placeholder { color: var(--text-3); }
+.pal-input:focus { outline: none; }
+
+.pal-list { overflow-y: auto; max-height: min(52vh, 460px); padding: 6px; }
+.pal-empty { padding: 22px 14px; color: var(--text-3); text-align: center; }
+
+.pal-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 10px;
+  text-align: left;
+  color: var(--text-2);
+  transition: background var(--dur-1) linear, color var(--dur-1) linear;
+}
+.pal-row.is-active { background: rgb(var(--accent-rgb) / .14); color: var(--text); }
+.pal-row:hover { background: rgb(var(--accent-rgb) / .09); }
+
+.pal-row-ico { flex: none; display: grid; place-items: center; color: var(--text-3); }
+.pal-row.is-active .pal-row-ico { color: var(--accent); }
+.pal-row-ico .ico { width: 15px; height: 15px; }
+
+.pal-row-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.pal-row-text b {
+  font-weight: 500;
+  font-size: calc(14px * var(--scale));
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pal-row-text span {
+  font-size: calc(11.5px * var(--scale));
+  color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.pal-keys {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .06em;
+  color: var(--text-3);
+  padding: 2px 7px;
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+}
+.pal-meta, .pal-kind {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.pal-kind { min-width: 42px; text-align: right; opacity: .7; }
+
+.pal-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 10px 16px;
+  border-top: var(--hair) solid var(--line);
+  font-size: calc(11.5px * var(--scale));
+  color: var(--text-3);
+  flex: none;
+}
+.pal-hint code {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  color: var(--accent);
+  background: rgb(var(--accent-rgb) / .1);
+  padding: 1px 6px;
+}
+
+@media (max-width: 620px) {
+  .pal { margin-top: 6vh; }
+  .pal-keys, .pal-kind { display: none; }
+}
+
+/* ------------------------------------------------------------ cover drop
+
+   The sleeve says it will take a picture only while one is actually over it.
+   A permanent affordance on the album page's largest element would compete
+   with the two real controls beside it — the point of a drop target is that
+   it appears when the gesture starts and gets out of the way afterwards. */
+.sleeve-stage.is-dropping .sleeve { transform: scale(1.02); }
+.sleeve-stage.is-dropping .art-3d::after {
+  content: 'Drop to use as the cover';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0 18px;
+  text-align: center;
+  font-size: calc(12.5px * var(--scale));
+  letter-spacing: .01em;
+  color: var(--text);
+  background: rgb(var(--surface-1-rgb) / .82);
+  box-shadow: inset 0 0 0 2px rgb(var(--accent-rgb) / .75);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  z-index: 3;
+  pointer-events: none;
+}
+/* The wait while the picture is decoded, downscaled and sampled. Short, but
+   not instant on a phone camera's twelve megapixels — and silence there reads
+   as a drop that did nothing. */
+.sleeve-stage.is-fitting .art-3d { opacity: .55; }
+.sleeve-stage.is-fitting .art-3d::after {
+  content: '';
+  position: absolute;
+  /* `.art::after` sets `inset: 0`; cleared here or the box keeps its right and
+     bottom edges pinned and the spinner is a 26px sliver in the corner. */
+  inset: auto;
+  left: 50%; top: 50%;
+  width: 26px; height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid rgb(var(--accent-rgb) / .3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cover-spin .7s linear infinite;
+  z-index: 3;
+}
+@keyframes cover-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .sleeve-stage.is-fitting .art-3d::after { animation-duration: 2.4s; }
+  .sleeve-stage.is-dropping .sleeve { transform: none; }
+}
+
+/* ------------------------------------------------------- a rack per record
+
+   A list, not a select: eleven presets plus however many racks you saved is
+   too many for a dropdown to be honest about, and the row that matters most
+   is the first one — "your rack", meaning no binding at all. */
+.dialog-note {
+  margin: 0 0 14px;
+  color: var(--text-3);
+  font-size: calc(12.5px * var(--scale));
+  line-height: 1.5;
+}
+
+.rack-pick { display: flex; flex-direction: column; max-height: 46vh; overflow-y: auto; }
+
+.rack-pick-head {
+  margin: 12px 0 4px;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.rack-pick-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  text-align: left;
+  color: var(--text-2);
+  transition: background var(--dur-1) linear, color var(--dur-1) linear;
+}
+.rack-pick-row:hover { background: rgb(var(--accent-rgb) / .09); color: var(--text); }
+.rack-pick-row.is-on { background: rgb(var(--accent-rgb) / .14); color: var(--text); }
+.rack-pick-name { flex: 1 1 auto; min-width: 0; font-size: calc(14px * var(--scale)); }
+.rack-pick-note { color: var(--text-3); font-size: calc(11.5px * var(--scale)); }
+.rack-pick-mark { flex: none; width: 15px; display: grid; place-items: center; color: var(--accent); }
+.rack-pick-mark .ico { width: 14px; height: 14px; }
+
+/* The line on the Sound page saying the chain is not yours right now. Reads
+   as a notice rather than a control, because the controls beneath it still
+   work — they just are not editing what you think they are. */
+.rack-bound {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 11px 14px;
+  margin-bottom: 16px;
+  background: rgb(var(--accent-rgb) / .1);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
+  --k: var(--cut);
+  clip-path: var(--nick-ne);
+  border-radius: var(--radius);
+}
+.rack-bound-text { flex: 1 1 220px; min-width: 0; font-size: calc(12.5px * var(--scale)); color: var(--text-2); }
+.rack-bound-text b { color: var(--text); font-weight: 500; }

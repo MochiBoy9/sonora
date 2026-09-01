@@ -144,44 +144,40 @@ export function createVisualizer(canvas, {
   ro.observe(canvas);
   resize();
 
-  /* Transfer buffers, pooled.
+  /* Two scratch buffers, filled and sent by copy.
    *
-   * A transferred ArrayBuffer is detached, so the same one cannot be sent
-   * twice — and allocating a fresh kilobyte every frame is exactly the
-   * per-frame garbage this file's header promises not to make. Three buffers
-   * cycling is enough: by the time the third is in flight the first has come
-   * back. They are only ever created on the worker path. */
-  const POOL = 3;
-  const packedPool = worker ? Array.from({ length: POOL }, () => new Float32Array(128)) : null;
-  const wavePool = worker ? Array.from({ length: POOL }, () => new Uint8Array(1024)) : null;
-  let poolAt = 0;
+   * These used to be transferred, out of a pool of three, on the reasoning
+   * that by the time the third was in flight the first would be back. It never
+   * was: a transferred ArrayBuffer is detached at the sender and only returns
+   * if the receiver sends it back, which this worker does not. So every slot
+   * was detached after three frames and the code fell into its own
+   * reallocation branch — allocating a fresh Float32Array and Uint8Array every
+   * frame, which is exactly the per-frame garbage the pool existed to avoid.
+   *
+   * Structured-cloning them instead is about 1.5 KB of memcpy per frame, well
+   * under a microsecond, and it keeps these two alive for the life of the
+   * visualiser. The alternative — posting the buffers back each frame — trades
+   * a memcpy for a second message in the other direction, which is the more
+   * expensive half of the two. */
+  const packed = worker ? new Float32Array(128) : null;
+  const wave = worker ? new Uint8Array(1024) : null;
 
   function sendFrame(a, dt, now) {
-    // A detached buffer has length 0; that is how a returned one is spotted.
-    let packed = packedPool[poolAt];
-    let wave = wavePool[poolAt];
-    if (packed.length === 0) packed = packedPool[poolAt] = new Float32Array(128);
-    if (wave.length === 0) wave = wavePool[poolAt] = new Uint8Array(1024);
-    poolAt = (poolAt + 1) % POOL;
-
     const n = Math.min(64, a.bands.length);
     packed.set(a.bands.subarray(0, n), 0);
     packed.set(a.peaks.subarray(0, n), 64);
 
-    const transfer = [packed.buffer];
-    let waveBuf = null;
+    let waveOut = null;
     if (a.wave) {
-      const m = Math.min(wave.length, a.wave.length);
-      wave.set(a.wave.subarray(0, m));
-      waveBuf = wave.buffer;
-      transfer.push(waveBuf);
+      wave.set(a.wave.subarray(0, Math.min(wave.length, a.wave.length)));
+      waveOut = wave;
     }
 
     worker.postMessage({
-      type: 'frame', packed: packed.buffer, wave: waveBuf,
+      type: 'frame', packed, wave: waveOut,
       level: a.level, bass: a.bass, pulse: a.pulse, live: a.live, idle: a.idle,
       dt, now,
-    }, transfer);
+    });
   }
 
   const stop = tick((dt, now) => {

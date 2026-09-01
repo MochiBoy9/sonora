@@ -360,3 +360,145 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
 @media (prefers-reduced-motion: reduce) {
   .stage-lyrics.is-synced > .stage-line { transition: none; }
 }
+
+/* ---------------------------------------------------------------- the deck
+
+   A turntable in the artwork's place. The platter turns at a real 33⅓ — one
+   revolution per 1.8 seconds — scaled by whatever the speed control is doing,
+   so a deck running at 1.1x looks like a deck running fast.
+
+   The tonearm's angle is the playhead and nothing else: it is written as
+   --arm from the same reading the scrubber uses, so the two can never
+   disagree about where in the track you are. */
+.deck {
+  position: absolute;
+  inset: 0;
+  --rate: 1;
+}
+
+/* The mat, and the spindle it turns on. */
+.deck-mat {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, #14181e 0 62%, #0b0e13 92%, #05070a),
+    radial-gradient(circle at 34% 26%, rgb(255 255 255 / .07), transparent 52%);
+  box-shadow: 0 44px 90px -40px rgb(0 0 0 / .95), inset 0 0 0 var(--hair) rgb(160 220 255 / .12);
+}
+
+.deck-platter {
+  position: absolute;
+  inset: 4%;
+  border-radius: 50%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 50%, #05070a 0 1.6%, transparent 1.8%),
+    repeating-radial-gradient(circle at 50% 50%,
+      rgb(190 220 255 / .06) 0 1px, rgb(0 0 0 / 0) 1px 3.6px),
+    radial-gradient(circle at 38% 30%, rgb(255 255 255 / .09), transparent 46%),
+    radial-gradient(circle at 50% 50%, #171b21 0 62%, #0b0e13 88%, #05070a);
+}
+/* The record does not start turning until the music does, and it stops rather
+   than vanishing when the music stops — which is what a paused deck looks
+   like. Cueing takes it off the mark: dragging the arm lifts the stylus. */
+.deck.is-spinning .deck-platter { animation: deck-spin calc(1.8s / var(--rate)) linear infinite; }
+.deck.is-cued .deck-platter { animation-play-state: paused; }
+@keyframes deck-spin { to { rotate: 360deg; } }
+
+/* The label: the cover, printed round and turning with the record. */
+.deck-label {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 33%; height: 33%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  overflow: hidden;
+  background: rgb(var(--art-rgb) / .8);
+  box-shadow: inset 0 0 0 var(--hair) rgb(255 255 255 / .18);
+}
+.deck-label-art { width: 100%; height: 100%; object-fit: cover; }
+/* The spindle hole, punched through the label. */
+.deck-label::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 9%; height: 9%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #05070a;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .6);
+}
+
+/* The pivot sits off the top-right corner of the platter, where a real one is.
+   The arm rotates about it, so both share this origin. */
+.deck-pivot,
+.deck-arm {
+  position: absolute;
+  right: -2%;
+  top: 4%;
+  width: 22px;
+  height: 22px;
+}
+.deck-pivot {
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, #4a5460, #1a1f26 70%);
+  box-shadow: 0 4px 12px -4px rgb(0 0 0 / .8), inset 0 0 0 var(--hair) rgb(160 220 255 / .2);
+}
+
+.deck-arm {
+  --arm: -34deg;
+  transform-origin: 50% 50%;
+  rotate: var(--arm);
+  transition: rotate 260ms var(--ease);
+  cursor: grab;
+  touch-action: none;
+  z-index: 2;
+}
+/* While it is being pulled it follows the pointer with no easing: a control
+   that lags the hand dragging it does not feel like a control. */
+.deck.is-cued .deck-arm { transition: none; cursor: grabbing; }
+.deck-arm:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 5px; border-radius: 50%; }
+
+/* The tube runs down and to the left from the pivot, toward the record. */
+.deck-arm-tube {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: min(62%, 210px);
+  margin-left: -2.5px;
+  background: linear-gradient(90deg, #2b323b, #6b7683 42%, #333b45);
+  border-radius: 3px;
+  box-shadow: 2px 0 6px -2px rgb(0 0 0 / .7);
+}
+/* The headshell, at the far end where the stylus is. */
+.deck-head {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + min(62%, 210px) - 6px);
+  width: 15px;
+  height: 20px;
+  margin-left: -7.5px;
+  background: linear-gradient(180deg, #4d5765, #232a33);
+  box-shadow: 0 3px 8px -3px rgb(0 0 0 / .8), inset 0 0 0 var(--hair) rgb(160 220 255 / .18);
+  --k: 4px;
+  clip-path: var(--nick-ne);
+  border-radius: 2px;
+}
+/* A wider invisible grab area than the arm draws: a five-pixel tube is a
+   five-pixel target, and nobody should have to aim at one to scrub. */
+.deck-arm::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 42px;
+  height: calc(min(62%, 210px) + 24px);
+  margin-left: -21px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deck.is-spinning .deck-platter { animation: none; }
+  .deck-arm { transition: none; }
+}

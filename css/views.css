@@ -1326,6 +1326,7 @@
    from how many tracks are on the record. A double album is visibly fatter. */
 
 .shelf-run {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 2px;
@@ -1544,4 +1545,59 @@
   .floor-art { height: 118px; }
   .floor-row { gap: 16px; }
   .spine { height: 210px; }
+}
+
+/* The shelf is windowed like the crate: only the spines inside the scrolled
+   view exist, absolutely positioned at their computed offset, with a spacer
+   holding the scroll range open. Without `position: relative` on the run they
+   would position against the page instead. */
+.shelf-pad { flex: none; height: 1px; pointer-events: none; }
+.shelf-run > .spine { position: absolute; bottom: 18px; }
+
+/* The description a smart shelf was built from, shown on its own page. It is
+   the thing that decides what is below it, so it belongs above the list rather
+   than buried in a menu. */
+.smart-note {
+  margin: -4px 0 14px;
+  font-family: var(--mono);
+  font-size: calc(12px * var(--scale));
+  letter-spacing: .03em;
+  color: var(--accent);
+  padding-left: 12px;
+  border-left: 2px solid var(--accent-line);
+}
+
+/* ------------------------------------------------------- the year axis
+
+   Depth is the release year. The marker lies on the ground in front of its
+   records rather than standing up beside them: a sign in a room is a caption,
+   and a decade you walk over is a place. */
+.floor { touch-action: pan-y; cursor: grab; }
+.floor:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 6px; }
+.floor.is-walking { cursor: grabbing; }
+.floor.is-walking .floor-card { pointer-events: none; }
+
+.floor-mark {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 26px;
+  transform: rotateX(74deg);
+  transform-origin: 0 0;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(46px * var(--scale));
+  font-weight: 600;
+  letter-spacing: .08em;
+  line-height: 1;
+  color: rgb(var(--accent-rgb) / .16);
+  pointer-events: none;
+  user-select: none;
+}
+/* The undated pile is off the end of the axis and says so — the same marking,
+   in the neutral ink, because it is a label rather than a date. */
+.floor-row.is-undated .floor-mark {
+  color: var(--text-3);
+  opacity: .3;
+  font-size: calc(34px * var(--scale));
 }

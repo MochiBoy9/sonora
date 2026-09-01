@@ -11,15 +11,17 @@ import * as player from './player.js';
 import * as db from './db.js';
 import { VirtualList, VirtualGrid } from './virtual.js';
 import {
-  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, Selection,
+  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, rulesDialog, Selection,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
 import { enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunning, requestDeviceTilt, stopDeviceTilt, startDeviceTilt } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
 import { mountCircles } from './circles.js';
 import { mountSound } from './sound.js';
+import * as rules from './rules.js';
 import * as offline from './offline.js';
 import * as stats from './stats.js';
+import * as rack from './audio.js';
 import * as band from './band.js';
 import * as session from './session.js';
 import * as looks from './looks.js';
@@ -226,6 +228,7 @@ function columnHeader(columns, sortState, onSort) {
   if (columns.includes('index')) html += '<div class="trow-index">#</div>';
   html += '<div class="trow-main"><button class="sortable" data-sort="title">Title</button></div>';
   if (columns.includes('album')) html += '<div class="trow-album"><button class="sortable" data-sort="album">Album</button></div>';
+  if (columns.includes('dr')) html += '<div class="trow-dr"><button class="sortable" data-sort="dr" title="Dynamic range">DR</button></div>';
   if (columns.includes('duration')) html += `<div class="trow-time"><button class="sortable" data-sort="duration">${ico('clock')}</button></div>`;
   html += '<div class="trow-actions"></div>';
   head.innerHTML = html;
@@ -462,12 +465,15 @@ function viewHome(host) {
   const recentTrack = lib.recentTracks()[0];
 
   const title = el('h1', { class: 'page-title grad-text', text: 'Your library' });
-  const stats = el('p', { class: 'page-sub' });
+  /* Not named `stats`: this function also reads the listening stats module,
+     and an element by that name shadowed the import — `stats.forTrack` then
+     resolved to an HTMLElement and threw on every Home render. */
+  const countLine = el('p', { class: 'page-sub' });
   const head = el('header', { class: 'home-hero' },
     el('div', { class: 'home-hero-text' },
       el('p', { class: 'eyebrow', text: greeting }),
       title,
-      stats,
+      countLine,
       el('div', { class: 'hero-actions' },
         el('button', {
           class: 'btn primary', html: ico('shuffle') + '<span>Shuffle everything</span>',
@@ -487,7 +493,7 @@ function viewHome(host) {
 
   // The count rolls up rather than appearing: a readout settling on a value.
   const counted = el('span');
-  stats.append(counted, ' tracks \u00b7 ',
+  countLine.append(counted, ' tracks \u00b7 ',
     `${lib.state.albums.length} albums \u00b7 ${lib.state.artists.length} artists \u00b7 ` +
     fmtTotal(all.reduce((n, t) => n + (t.duration || 0), 0)).toUpperCase());
   readout(counted, total, { duration: 1100 });
@@ -505,6 +511,55 @@ function viewHome(host) {
     .sort((a, b) => b.tracks.length - a.tracks.length).slice(0, 10);
   const shelfArtists = shelf('Artists', topArtists, (a) => artistCard(a), { seeAll: '#/artists' });
   if (shelfArtists) frag.appendChild(shelfArtists);
+
+  /* This day, other years.
+   *
+   * Every play has been stamped since the history existed, and nothing has
+   * ever read those stamps for anything but ordering. A shelf of what you were
+   * playing a year ago today costs one filter and gives a local library the
+   * one thing no streaming service can honestly offer: a memory that belongs
+   * to you, computed on your machine, from a log nobody else has a copy of.
+   *
+   * Only shown when there is genuinely something there. A shelf that says
+   * "nothing yet" every day for a year is worse than no shelf. */
+  const today = new Date();
+  const anniversaries = [];
+  const seenAlbums = new Set();
+  for (const t of lib.allTracks()) {
+    if (!t.lastPlayed) continue;
+    const d = new Date(t.lastPlayed);
+    if (d.getFullYear() >= today.getFullYear()) continue;      // this year is not a memory
+    if (d.getMonth() !== today.getMonth() || d.getDate() !== today.getDate()) continue;
+    const al = lib.state.albumBy.get(t.albumKey);
+    if (al && !seenAlbums.has(al.key)) { seenAlbums.add(al.key); anniversaries.push(al); }
+  }
+  const shelfThen = shelf('On this day', anniversaries.slice(0, 10), (a) => albumCard(a));
+  if (shelfThen) frag.appendChild(shelfThen);
+
+  /* Records where one track has all the listening.
+   *
+   * Sonora counts seconds rather than plays, so it can tell the difference
+   * between a record you have listened to and a record you own. An album where
+   * one track has most of the time and the rest have almost none is a specific
+   * and common situation — either you love one song, or you never gave the
+   * thing a chance — and it is the most interesting page a local library can
+   * show you about itself.
+   */
+  const lopsided = [];
+  for (const al of lib.state.albums) {
+    if (!al.tracks || al.tracks.length < 4) continue;
+    const secs = al.tracks.map((t) => stats.forTrack(t.id) || 0);
+    const total = secs.reduce((s, v) => s + v, 0);
+    if (total < 120) continue;                                  // barely touched either way
+    const top = Math.max(...secs);
+    // Most of the listening in one track, and the rest of the record cold.
+    const share = top / total;
+    if (share > 0.7) lopsided.push({ album: al, share });
+  }
+  lopsided.sort((a, b) => b.share - a.share);
+  const shelfOne = shelf('One song from these', lopsided.slice(0, 10).map((x) => x.album),
+    (a) => albumCard(a));
+  if (shelfOne) frag.appendChild(shelfOne);
 
   // A compact "surprise me" strip: random albums, reshuffled on every visit.
   const pool = lib.state.albums.slice();
@@ -534,7 +589,7 @@ function viewHome(host) {
 const songSort = { key: 'title', dir: 1 };
 
 function viewSongs(host) {
-  const columns = ['index', 'art', 'title', 'album', 'duration'];
+  const columns = ['index', 'art', 'title', 'album', 'dr', 'duration'];
   const all = lib.allTracks();
   const head = el('header', { class: 'page-head' },
     el('p', { class: 'eyebrow', text: 'Library' }),
@@ -659,36 +714,126 @@ const ALBUM_VIEW = 'sonora:albumview';
  * a record it is considering.
  */
 function mountShelf(host) {
+  /*
+   * Windowed, like the crate is.
+   *
+   * The first version built one element per album and rebuilt every one of
+   * them on each `change` and each `art` event — which during an import is a
+   * full DOM rebuild several times a second, on the thread that also has to
+   * answer scrolling. The crate next door keeps eleven records in the DOM
+   * however large the library is; a shelf drawn the naive way was the one
+   * album view that did not scale, which is a poor showing for the view whose
+   * whole premise is a collection too big for a wall.
+   *
+   * A spine is a fixed width for a given thickness, so the run's total width
+   * is known without measuring and only the spines inside the scrolled window
+   * need to exist. The spacer either side holds the scroll range open.
+   */
   const shelf = el('div', { class: 'shelf-run', role: 'list', 'aria-label': 'Albums by spine' });
+  const before = el('div', { class: 'shelf-pad', 'aria-hidden': 'true' });
+  const after = el('div', { class: 'shelf-pad', 'aria-hidden': 'true' });
+  shelf.append(before, after);
 
-  function paint() {
-    shelf.textContent = '';
-    for (const album of lib.state.albums) {
-      const thick = thicknessOf(album);
-      const spine = el('a', {
-        class: 'spine', role: 'listitem', href: '#/album/' + album.key,
-        style: `--thick:${thick.toFixed(3)}`,
-        'aria-label': `${album.title} by ${album.artist}`,
-      },
-        el('span', { class: 'spine-face', style: { background: placeholderStyle(album.key) } }),
-        el('span', { class: 'spine-text' },
-          el('b', { class: 'spine-title', text: album.title }),
-          el('span', { class: 'spine-artist', text: album.artist })),
-        el('span', { class: 'spine-edge', 'aria-hidden': 'true' }));
+  /* Width of one spine, in px, matching the CSS: 13 + 11 × thickness. Kept in
+     step with `.spine { width: calc(13px + 11px * var(--thick)) }` — if that
+     changes, this has to. */
+  const GAP = 2;
+  const widthOf = (album) => 13 + 11 * thicknessOf(album) + GAP;
 
-      // The colour the importer pulled out of the cover, so a shelf of spines
-      // is still recognisably a shelf of *these* records.
-      const rgb = lib.accentFor(album.key);
-      if (rgb) spine.style.setProperty('--spine-rgb', rgb.join(' '));
-      shelf.appendChild(spine);
+  let albums = [];
+  let offsets = [];          // running x position of each spine
+  let total = 0;
+  const live = new Map();    // album key -> element, for what is on screen now
+
+  function measure() {
+    albums = lib.state.albums;
+    offsets = new Array(albums.length);
+    let x = 0;
+    for (let i = 0; i < albums.length; i++) { offsets[i] = x; x += widthOf(albums[i]); }
+    total = x;
+  }
+
+  function build(album) {
+    const spine = el('a', {
+      class: 'spine', role: 'listitem', href: '#/album/' + album.key,
+      style: `--thick:${thicknessOf(album).toFixed(3)}`,
+      'aria-label': `${album.title} by ${album.artist}`,
+    },
+      el('span', { class: 'spine-face', style: { background: placeholderStyle(album.key) } }),
+      el('span', { class: 'spine-text' },
+        el('b', { class: 'spine-title', text: album.title }),
+        el('span', { class: 'spine-artist', text: album.artist })),
+      el('span', { class: 'spine-edge', 'aria-hidden': 'true' }));
+    // The colour the importer pulled out of the cover, so a shelf of spines
+    // is still recognisably a shelf of *these* records.
+    const rgb = lib.accentFor(album.key);
+    if (rgb) spine.style.setProperty('--spine-rgb', rgb.join(' '));
+    return spine;
+  }
+
+  let raf = 0;
+  function place() {
+    raf = 0;
+    if (!albums.length) return;
+    const left = shelf.scrollLeft;
+    const right = left + shelf.clientWidth;
+    // A screen either side, so flicking sideways never shows a gap.
+    const pad = shelf.clientWidth;
+
+    let from = 0, to = albums.length - 1;
+    while (from < albums.length && offsets[from] + widthOf(albums[from]) < left - pad) from++;
+    while (to >= 0 && offsets[to] > right + pad) to--;
+
+    const wanted = new Set();
+    for (let i = from; i <= to; i++) wanted.add(albums[i].key);
+
+    for (const [key, node] of live) {
+      if (!wanted.has(key)) { node.remove(); live.delete(key); }
+    }
+    for (let i = from; i <= to; i++) {
+      const album = albums[i];
+      if (live.has(album.key)) continue;
+      const node = build(album);
+      node.style.position = 'absolute';
+      node.style.left = offsets[i] + 'px';
+      shelf.appendChild(node);
+      live.set(album.key, node);
+    }
+    before.style.width = total + 'px';
+  }
+
+  function rebuild() {
+    for (const node of live.values()) node.remove();
+    live.clear();
+    measure();
+    place();
+  }
+
+  /* An art batch changes colours, not the arrangement — so it repaints what is
+     on screen instead of rebuilding the shelf. This is the event that fires
+     several times a second during a scan. */
+  function repaintColours() {
+    for (const [key, node] of live) {
+      const rgb = lib.accentFor(key);
+      if (rgb) node.style.setProperty('--spine-rgb', rgb.join(' '));
     }
   }
 
-  paint();
+  const onScroll = () => { if (!raf) raf = requestAnimationFrame(place); };
+  shelf.addEventListener('scroll', onScroll, { passive: true });
+  const ro = new ResizeObserver(() => place());
+  ro.observe(shelf);
+
   host.appendChild(shelf);
-  const off = lib.events.on('change', paint);
-  const offArt = lib.events.on('art', paint);
-  return () => { off(); offArt(); };
+  rebuild();
+
+  const off = lib.events.on('change', rebuild);
+  const offArt = lib.events.on('art', repaintColours);
+  return () => {
+    off(); offArt(); ro.disconnect();
+    shelf.removeEventListener('scroll', onScroll);
+    if (raf) cancelAnimationFrame(raf);
+  };
 }
 
 /* ------------------------------------------------------------------ floor */
@@ -718,40 +863,144 @@ function mountShelf(host) {
  *   never the only way to see the library.
  */
 function mountFloor(host, viewport) {
-  const PER_ROW = 4;                  // albums across
-  const ROW_DEPTH = 210;              // px of Z between rows
+  const ROW_DEPTH = 210;              // px of Z between one row and the next
   const FAR = 6;                      // rows past which nothing recedes further
   const NEAR_ROWS = 3;                // rows that still get a readable title
+  const SLOT = 194;                   // px of X per album, cover plus its gap
 
-  const stage = el('div', { class: 'floor', 'aria-label': 'Albums on the floor' });
+  /* An empty year still costs something to walk past, because the emptiness is
+     information — a collection with nothing between 1979 and 1994 should feel
+     like it. Not a full row each, though: at full depth a fifteen-year gap is
+     a corridor with nothing in it, and the point is to notice the gap, not to
+     be punished for it. A quarter of a row, and the run is capped. */
+  const GAP_DEPTH = 0.28;
+  const GAP_MAX = 2.2;                // rows, however long the drought
+
+  const stage = el('div', {
+    class: 'floor', tabindex: '0', role: 'group',
+    'aria-label': 'Albums by year. Scroll to walk through the years, left and right arrows to walk sideways.',
+  });
   const camera = el('div', { class: 'floor-camera' });
   stage.appendChild(camera);
 
-  let rows = [];
+  let rowCount = 0;
   let items = [];
+  let rows = [];                      // { year, albums, depth, label }
+  let camX = 0;                       // where along the floor you are standing
+  let maxX = 0;
+  let depthSpan = 0;                  // rows of walking from the first year to the last
+
+  /* Rows exist only while the camera can see them.
+   *
+   * The first version built every row up front and then hid the distant ones,
+   * which is the expensive half of virtualising done backwards: a
+   * four-hundred-album library still put a hundred rows and four hundred
+   * covers into the DOM, and only then declined to draw most of them. Now a
+   * row is built when it comes within range and dropped when it leaves, so
+   * what exists is bounded by the depth of the room rather than by the size of
+   * the collection — which is the same argument the crate makes next door.
+   *
+   * `rows` is a sparse array indexed by row number; the gaps are the rows that
+   * do not currently exist. */
+  const liveRows = new Map();       // row index -> element
+
+  function buildRow(r) {
+    const lane = rows[r];
+    const row = el('div', { class: 'floor-row' + (lane.undated ? ' is-undated' : '') });
+
+    /* The year, lying on the ground in front of its records. On the floor
+       rather than upright, because a label standing up would be a sign in the
+       room and this is a marking on it — and because a decade you are walking
+       over reads as a place rather than as a caption. Only decades are called
+       out: a marker per year would be a wall of numbers, and the decade is the
+       unit people actually think in. */
+    if (lane.mark) {
+      row.appendChild(el('span', { class: 'floor-mark', 'aria-hidden': 'true', text: lane.mark }));
+    }
+
+    for (const album of lane.albums) {
+      const card = el('a', {
+        class: 'floor-card', href: '#/album/' + album.key,
+        'aria-label': `${album.title} by ${album.artist}${album.year ? ', ' + album.year : ''}`,
+      },
+        el('span', { class: 'floor-art', style: { background: placeholderStyle(album.key) } },
+          el('img', { class: 'art-img', alt: '', decoding: 'async', loading: 'lazy' })),
+        el('span', { class: 'floor-text' },
+          el('b', { text: album.title }),
+          el('span', { text: album.artist })));
+      paintArt(card.querySelector('.art-img'), album.key);
+      row.appendChild(card);
+    }
+    camera.appendChild(row);
+    liveRows.set(r, row);
+    return row;
+  }
+
+  /* ------------------------------------------------------------- the axis
+   *
+   * Depth is the release year, oldest nearest, so walking forward is walking
+   * forward through time and the decade markers count up as you go. Counting
+   * down would have been the other option — newest first, like everything else
+   * in the app — and it reads wrong on a floor: a timeline that runs backwards
+   * as you advance makes every marker a subtraction.
+   *
+   * Records with no year are a real and common case, not an edge one: a rip
+   * with no tags, a bootleg, anything ripped before somebody cared. They are
+   * not guessed into a year and not dropped. They go past the end of the axis
+   * behind a wider gap, so the timeline stays honest about what it is showing
+   * and the undated pile is somewhere you can still walk to.
+   */
+  function lanesFor(albums) {
+    const byYear = new Map();
+    const undated = [];
+    for (const a of albums) {
+      if (a.year > 0) {
+        if (!byYear.has(a.year)) byYear.set(a.year, []);
+        byYear.get(a.year).push(a);
+      } else undated.push(a);
+    }
+
+    const years = [...byYear.keys()].sort((x, y) => x - y);
+    const out = [];
+    let prev = null;
+    let lastDecade = null;
+    for (const y of years) {
+      // Distance to walk before this year, from however long the drought was.
+      const gap = prev === null ? 0 : Math.min(GAP_MAX, (y - prev - 1) * GAP_DEPTH);
+      const decade = Math.floor(y / 10) * 10;
+      out.push({
+        year: y,
+        albums: byYear.get(y),
+        gap,
+        mark: decade !== lastDecade ? `${decade}s` : '',
+      });
+      lastDecade = decade;
+      prev = y;
+    }
+    if (undated.length) {
+      out.push({ year: 0, albums: undated, gap: years.length ? 1.4 : 0, mark: 'No year', undated: true });
+    }
+    return out;
+  }
 
   function build() {
     items = lib.state.albums;
+    rows = lanesFor(items);
     camera.textContent = '';
-    rows = [];
-    for (let i = 0; i < items.length; i += PER_ROW) {
-      const row = el('div', { class: 'floor-row' });
-      for (const album of items.slice(i, i + PER_ROW)) {
-        const card = el('a', {
-          class: 'floor-card', href: '#/album/' + album.key,
-          'aria-label': `${album.title} by ${album.artist}`,
-        },
-          el('span', { class: 'floor-art', style: { background: placeholderStyle(album.key) } },
-            el('img', { class: 'art-img', alt: '', decoding: 'async', loading: 'lazy' })),
-          el('span', { class: 'floor-text' },
-            el('b', { text: album.title }),
-            el('span', { text: album.artist })));
-        paintArt(card.querySelector('.art-img'), album.key);
-        row.appendChild(card);
-      }
-      camera.appendChild(row);
-      rows.push(row);
-    }
+    liveRows.clear();
+    rowCount = rows.length;
+
+    /* Where each lane sits in depth, accumulated once rather than derived per
+       frame: the gaps make a lane's position depend on every lane before it,
+       and recomputing that on every scroll frame would be the one O(n) thing
+       in a view that is otherwise bounded by what you can see. */
+    let at = 0;
+    for (const lane of rows) { at += 1 + lane.gap; lane.at = at - 1; }
+    depthSpan = at;
+
+    // The widest year decides how far there is to walk sideways.
+    maxX = Math.max(0, rows.reduce((m, l) => Math.max(m, l.albums.length), 0) * SLOT - SLOT);
+    camX = Math.min(camX, maxX);
     place();
   }
 
@@ -764,39 +1013,139 @@ function mountFloor(host, viewport) {
   let raf = 0;
   function place() {
     raf = 0;
-    if (!rows.length) return;
+    if (!rowCount) return;
     const scrolled = viewport.scrollTop;
     // One row per this many pixels of scroll.
     const advance = scrolled / ROW_DEPTH;
 
-    for (let i = 0; i < rows.length; i++) {
-      const d = i - advance;                       // rows ahead of the camera
+    /* Walking sideways.
+     *
+     * One translate on the camera, and perspective does the rest: a fixed
+     * distance in world space projects to a smaller distance on screen the
+     * further away it is, so the near year slides past quickly and the far
+     * ones drift. That parallax is the whole reason this reads as walking
+     * rather than as a list scrolling horizontally, and it costs nothing —
+     * the browser is already dividing by z for every one of these rows. */
+    camera.style.transform = `translate3d(${(-camX).toFixed(1)}px, 0, 0)`;
+
+    // Which rows the camera can see: one behind, and as far ahead as the far
+    // plane plus a little. Everything outside this does not exist.
+    let first = 0, last = -1;
+    for (let i = 0; i < rowCount; i++) {
+      const d = rows[i].at - advance;
+      if (d < -1.2) first = i + 1;
+      if (d <= FAR + 3) last = i;
+    }
+    first = Math.min(first, rowCount - 1);
+
+    for (const [i, row] of liveRows) {
+      if (i < first || i > last) { row.remove(); liveRows.delete(i); }
+    }
+
+    for (let i = first; i <= last; i++) {
+      const row = liveRows.get(i) || buildRow(i);
+      const d = rows[i].at - advance;              // rows ahead of the camera
       // Bounded: past the far plane rows stop receding, so a long library is a
       // long list rather than an infinitely compressed corridor.
       const z = -Math.min(d, FAR) * ROW_DEPTH;
-      const near = d < NEAR_ROWS;
-      const row = rows[i];
-
-      // Rows well behind the camera are not drawn at all.
-      if (d < -1.2 || d > FAR + 3) {
-        if (row.style.visibility !== 'hidden') row.style.visibility = 'hidden';
-        continue;
-      }
-      if (row.style.visibility) row.style.removeProperty('visibility');
-
-      row.style.transform = `translate3d(-50%, 0, ${z.toFixed(1)}px)`;
+      /* Every lane starts at the same X, rather than each being centred on
+         itself. A centred row would put 1974's four records and 1991's twenty
+         over different ground, so walking right would arrive somewhere
+         different in each year and the sideways axis would mean nothing.
+         Left-aligned, one step sideways is the same step in every year. */
+      row.style.transform = `translate3d(${(-SLOT / 2).toFixed(1)}px, 0, ${z.toFixed(1)}px)`;
       // Depth fade, so the far end goes into the room rather than stopping.
       row.style.opacity = String(Math.max(0, Math.min(1, 1 - Math.max(0, d) / (FAR + 2.5))).toFixed(3));
-      row.classList.toggle('is-near', near);
+      row.classList.toggle('is-near', d < NEAR_ROWS);
     }
+  }
+
+  /** Steps sideways, clamped to the floor's own width. */
+  function walk(dx) {
+    const next = Math.max(0, Math.min(maxX, camX + dx));
+    if (next === camX) return false;
+    camX = next;
+    if (!raf) raf = requestAnimationFrame(place);
+    return true;
   }
 
   const onScroll = () => { if (!raf) raf = requestAnimationFrame(place); };
   viewport.addEventListener('scroll', onScroll, { passive: true });
 
+  /* Three ways to walk sideways, because there is no one gesture everybody
+     has: a trackpad's second axis, a drag, and the arrow keys. The keys are
+     not a courtesy — a view that can only be moved by dragging is a view some
+     people cannot move at all. */
+  const onWheel = (e) => {
+    // A horizontal wheel, or a vertical one with Shift — the pair every
+    // horizontally-scrolling thing on the web already answers to.
+    const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : (e.shiftKey ? e.deltaY : 0);
+    if (!dx) return;
+    if (walk(dx)) e.preventDefault();
+  };
+  stage.addEventListener('wheel', onWheel, { passive: false });
+
+  const onKey = (e) => {
+    const step = e.shiftKey ? SLOT * 3 : SLOT;
+    if (e.key === 'ArrowLeft') { if (walk(-step)) e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { if (walk(step)) e.preventDefault(); }
+    else if (e.key === 'Home') { camX = 0; e.preventDefault(); place(); }
+    else if (e.key === 'End') { camX = maxX; e.preventDefault(); place(); }
+  };
+  stage.addEventListener('keydown', onKey);
+
+  /* Dragging. The cards are links, so a drag that ends on one would otherwise
+     navigate — past a few pixels of movement this stops being a click and the
+     next one is swallowed. */
+  let drag = null;
+  /* Set when a drag ends past the threshold, cleared by the click it swallows
+     or by the next press. A flag rather than a one-shot listener taken back
+     off on a timer: the click follows the release in the same sequence of
+     tasks *usually*, and "usually" is how you get a view that occasionally
+     opens an album because the pointer was busy. */
+  let swallowClick = false;
+  const onClick = (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  stage.addEventListener('click', onClick, true);
+
+  const onDown = (e) => {
+    if (e.button !== 0) return;
+    swallowClick = false;
+    drag = { x: e.clientX, from: camX, moved: 0 };
+    stage.setPointerCapture?.(e.pointerId);
+  };
+  const onDragMove = (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    drag.moved = Math.max(drag.moved, Math.abs(dx));
+    camX = Math.max(0, Math.min(maxX, drag.from - dx));
+    if (drag.moved > 6) stage.classList.add('is-walking');
+    if (!raf) raf = requestAnimationFrame(place);
+  };
+  const onUp = (e) => {
+    if (!drag) return;
+    const moved = drag.moved;
+    drag = null;
+    stage.classList.remove('is-walking');
+    stage.releasePointerCapture?.(e.pointerId);
+    swallowClick = moved > 6;
+  };
+  stage.addEventListener('pointerdown', onDown);
+  stage.addEventListener('pointermove', onDragMove);
+  stage.addEventListener('pointerup', onUp);
+  stage.addEventListener('pointercancel', onUp);
+
   // The stage has to be tall enough to scroll through every row.
   function resize() {
-    stage.style.height = `${Math.max(1, Math.ceil(items.length / PER_ROW)) * ROW_DEPTH + viewport.clientHeight * 0.4}px`;
+    // Guarded for the same reason the virtualiser's is: this runs from a
+    // ResizeObserver on the viewport, and making the stage taller can bring a
+    // scrollbar in, which resizes the viewport, which runs this again.
+    const h = `${Math.max(1, depthSpan) * ROW_DEPTH + viewport.clientHeight * 0.4}px`;
+    if (stage.style.height !== h) stage.style.height = h;
   }
   const ro = new ResizeObserver(() => { resize(); place(); });
   ro.observe(viewport);
@@ -807,8 +1156,9 @@ function mountFloor(host, viewport) {
   place();
 
   const off = lib.events.on('change', () => { build(); resize(); });
+  // Only the rows that exist, which is only the ones you can see.
   const offArt = lib.events.on('art', () => {
-    for (const row of rows) {
+    for (const row of liveRows.values()) {
       for (const img of row.querySelectorAll('.art-img')) {
         if (img.dataset.key) paintArt(img, img.dataset.key);
       }
@@ -818,6 +1168,13 @@ function mountFloor(host, viewport) {
   return () => {
     off(); offArt(); ro.disconnect();
     viewport.removeEventListener('scroll', onScroll);
+    stage.removeEventListener('wheel', onWheel);
+    stage.removeEventListener('keydown', onKey);
+    stage.removeEventListener('pointerdown', onDown);
+    stage.removeEventListener('pointermove', onDragMove);
+    stage.removeEventListener('pointerup', onUp);
+    stage.removeEventListener('pointercancel', onUp);
+    stage.removeEventListener('click', onClick, true);
     if (raf) cancelAnimationFrame(raf);
   };
 }
@@ -980,7 +1337,8 @@ function viewAlbum(host, key) {
     playFab(() => playAll(album.tracks, 0, origin)),
     el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(album.tracks, origin) }),
     el('button', { class: 'icon-btn', html: ico('queue'), title: 'Add to queue', onclick: () => { player.enqueue(album.tracks); toast('Added to queue'); } }),
-    el('button', { class: 'icon-btn', html: ico('more'), title: 'More', onclick: (e) => menu(trackMenu(album.tracks, { origin }), { anchor: e.currentTarget }) }));
+    el('button', { class: 'icon-btn', html: ico('more'), title: 'More',
+      onclick: (e) => menu(coverMenu(key, album).concat(trackMenu(album.tracks, { origin })), { anchor: e.currentTarget }) }));
   meta.appendChild(actions);
 
   hero.append(art, meta);
@@ -1058,7 +1416,203 @@ function viewAlbum(host, key) {
   refresh();
   const off = player.events.on('track', refresh);
   const offState = player.events.on('state', refresh);
-  return () => { off(); offState(); untilt(); };
+  const undrop = acceptCover(art, key);
+  const offArt = lib.events.on('art', (keys) => {
+    if (keys && !keys.includes(key)) return;
+    /* Everything the cover feeds, repainted from one event: the face, the
+       reflection standing on the floor beneath it, and the page tint — which
+       is read off the accent colour the new picture was sampled for. */
+    const img = art.querySelector('.art-img');
+    if (img) { img.dataset.key = ''; paintArt(img, key); }
+    const echo = art.querySelector('.art-echo-img');
+    // Through loadArt rather than off the face's src: reverting to the
+    // original empties the cache, so the face is still waiting at this point.
+    if (echo) {
+      lib.loadArt(key).then((url) => {
+        if (url) echo.setAttribute('src', url); else echo.removeAttribute('src');
+      });
+    }
+    applyHeroTint(hero, key);
+  });
+  return () => { off(); offState(); untilt(); undrop(); offArt(); };
+}
+
+/* ---------------------------------------------------------------- covers
+ *
+ * Some albums arrive with no picture, and some arrive with the wrong one —
+ * a scan of a CD-R, a placeholder from a rip, the same generic square across
+ * forty bootlegs. Sonora will not write to the files, so the fix is the same
+ * shape as a tag correction: your picture goes into Sonora's index, the
+ * album's own cover stays where it was, and "use the original" is one click.
+ *
+ * Three ways in, because the right one depends on where the picture is:
+ * dropped from a folder, pasted from wherever you just copied it, or picked
+ * through the file dialog when neither of those is convenient.
+ */
+
+function coverMenu(key, album) {
+  const bound = rack.bindingOf('album', key);
+  const choose = async (file) => {
+    if (!file) return;
+    toast('Fitting the cover…');
+    const ok = await lib.setArtwork(key, file);
+    toast(ok ? `New cover for “${album.title}”` : 'That file could not be read as a picture');
+  };
+  return [
+    {
+      label: 'Choose a cover…', icon: 'image', hint: 'or drop one on the sleeve',
+      onSelect: () => {
+        /* An <input type=file> rather than showOpenFilePicker: this one needs
+           no handle afterwards, works in every browser, and does not have to
+           be reconnected on the next launch the way a music folder does. */
+        const pick = el('input', { type: 'file', accept: 'image/*' });
+        pick.style.display = 'none';
+        pick.addEventListener('change', () => { choose(pick.files[0]); pick.remove(); });
+        document.body.appendChild(pick);
+        pick.click();
+      },
+    },
+    lib.hasOwnArt(key) ? {
+      label: 'Use the original cover', icon: 'refresh',
+      onSelect: async () => {
+        await lib.clearArtwork(key);
+        toast(`“${album.title}” is back to its own cover`);
+      },
+    } : null,
+    {
+      label: 'Rack for this album…', icon: 'sliders',
+      hint: bound || '',
+      onSelect: () => rackPicker('album', key, album.title),
+    },
+    { separator: true },
+  ].filter(Boolean);
+}
+
+/**
+ * Picks the rack a record should arrive with.
+ *
+ * A dialog rather than a submenu because the list is long — eleven presets
+ * plus however many racks you have saved — and because the row that matters
+ * most is the one at the top saying there is no rack, which a submenu buries.
+ */
+async function rackPicker(scope, key, label) {
+  const current = rack.bindingOf(scope, key);
+  const saved = await rack.savedRacks();
+  const list = el('div', { class: 'rack-pick' });
+
+  const row = (id, name, note) => {
+    const on = (id || null) === (current || null);
+    return el('button', {
+      class: 'rack-pick-row' + (on ? ' is-on' : ''),
+      onclick: async () => {
+        await rack.bindTo(scope, key, id);
+        closeDialog();
+        /* Takes effect on the next track that asks for it. Saying so is the
+           honest thing: the change is real but you will not hear it until the
+           record comes round, and silence here reads as a control that did
+           nothing. */
+        const now = player.state.current;
+        const mine = now && (scope === 'album' ? now.albumKey : now.artistKey) === key;
+        if (mine) await rack.followTrack(now);
+        toast(id
+          ? (mine ? `“${label}” is on the ${name} rack` : `“${label}” will arrive on the ${name} rack`)
+          : `“${label}” goes back to your rack`);
+      },
+    },
+      el('span', { class: 'rack-pick-name', text: name }),
+      note ? el('span', { class: 'rack-pick-note', text: note }) : null,
+      el('span', { class: 'rack-pick-mark', html: on ? ico('star-fill') : '' }));
+  };
+
+  list.appendChild(row(null, 'Your rack', 'whatever the Sound page says'));
+  if (saved.length) {
+    list.appendChild(el('p', { class: 'rack-pick-head', text: 'Saved' }));
+    for (const r of saved) list.appendChild(row(r.name, r.name));
+  }
+  list.appendChild(el('p', { class: 'rack-pick-head', text: 'Presets' }));
+  for (const p of rack.PRESETS) list.appendChild(row(p.id, p.label));
+
+  let closeDialog = () => {};
+  const d = dialog({
+    title: 'A rack for this record',
+    body: el('div', {},
+      el('p', { class: 'dialog-note', text:
+        `Sonora puts this chain in circuit whenever ${scope === 'album' ? 'this album' : 'this artist'} plays, ` +
+        'and takes it out again afterwards. Your own rack is never overwritten.' }),
+      list),
+    width: 460,
+    actions: [{ label: 'Done' }],
+  });
+  closeDialog = () => d.close();
+}
+
+/**
+ * Lets an album's sleeve take a picture by drag or by paste.
+ *
+ * The paste listener is on the document rather than the sleeve because a
+ * sleeve cannot hold focus and ⌘V has to work the moment the page is open;
+ * it is filtered on the clipboard actually carrying an image, so pasting
+ * text into the search box while an album page is behind it does nothing.
+ */
+function acceptCover(art, key) {
+  const album = albumOf(key);
+  let depth = 0;                 // dragenter/dragleave fire per child element
+
+  const take = async (file) => {
+    art.classList.remove('is-dropping');
+    if (!file) return;
+    art.classList.add('is-fitting');
+    const ok = await lib.setArtwork(key, file);
+    art.classList.remove('is-fitting');
+    toast(ok ? `New cover for “${album ? album.title : 'the album'}”`
+             : 'That file could not be read as a picture');
+  };
+
+  const hasImage = (dt) => !!dt && [...(dt.items || [])].some((i) => i.kind === 'file' && /^image\//.test(i.type));
+
+  const onEnter = (e) => {
+    if (!hasImage(e.dataTransfer)) return;
+    e.preventDefault();
+    depth++;
+    art.classList.add('is-dropping');
+  };
+  const onOver = (e) => {
+    if (!hasImage(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+  const onLeave = () => { if (--depth <= 0) { depth = 0; art.classList.remove('is-dropping'); } };
+  const onDrop = (e) => {
+    if (!hasImage(e.dataTransfer)) return;
+    /* Stopped here, not just prevented: the window-level handler treats a drop
+       as "add this music to the library", and an image dropped on a sleeve is
+       a different instruction that happens to use the same gesture. */
+    e.preventDefault();
+    e.stopPropagation();
+    depth = 0;
+    take([...e.dataTransfer.files].find((f) => /^image\//.test(f.type)));
+  };
+  const onPaste = (e) => {
+    const items = [...(e.clipboardData?.items || [])];
+    const img = items.find((i) => i.kind === 'file' && /^image\//.test(i.type));
+    if (!img) return;
+    e.preventDefault();
+    take(img.getAsFile());
+  };
+
+  art.addEventListener('dragenter', onEnter);
+  art.addEventListener('dragover', onOver);
+  art.addEventListener('dragleave', onLeave);
+  art.addEventListener('drop', onDrop);
+  document.addEventListener('paste', onPaste);
+
+  return () => {
+    art.removeEventListener('dragenter', onEnter);
+    art.removeEventListener('dragover', onOver);
+    art.removeEventListener('dragleave', onLeave);
+    art.removeEventListener('drop', onDrop);
+    document.removeEventListener('paste', onPaste);
+  };
 }
 
 /* ------------------------------------------------------------------ back cover */
@@ -1133,12 +1687,17 @@ function backCover(album) {
 
 /** Paints a soft wash of the album's own colour behind its header. */
 function applyHeroTint(hero, key) {
+  /* Removing, not just setting. This runs again when the cover changes, and
+     putting an album back to a picture with no colour of its own has to take
+     the old tint away — otherwise the page stays lit by artwork that is no
+     longer on it. */
+  const paint = (rgb) => {
+    if (rgb) hero.style.setProperty('--hero-rgb', rgb.join(' '));
+    else hero.style.removeProperty('--hero-rgb');
+  };
   const rgb = lib.accentFor(key);
-  if (rgb) hero.style.setProperty('--hero-rgb', rgb.join(' '));
-  else lib.loadArt(key).then(() => {
-    const late = lib.accentFor(key);
-    if (late) hero.style.setProperty('--hero-rgb', late.join(' '));
-  });
+  if (rgb) paint(rgb);
+  else lib.loadArt(key).then(() => paint(lib.accentFor(key)));
 }
 
 /* ------------------------------------------------------------------ ARTISTS */
@@ -1273,7 +1832,7 @@ function viewPlaylists(host) {
       tilt3d(card.querySelector('.card-art'), { max: 8, lift: 16, scale: 1.015 });
       if (cover) paintArt(card.querySelector('.art-img'), cover);
       card.querySelector('.card-title').textContent = p.name;
-      card.querySelector('.card-sub').textContent = fmtCount(p.tracks.length, 'track');
+      card.querySelector('.card-sub').textContent = fmtCount(tracks.length, 'track') + (p.smart ? ' · describes itself' : '');
       card.querySelector('.card-fab').addEventListener('click', (e) => {
         e.stopPropagation();
         playAll(tracks, 0, { type: 'playlist', key: p.id, label: p.name });
@@ -1401,10 +1960,10 @@ function viewPlaylist(host, id) {
   const tracks0 = lib.playlistTracks(p);
   const art = artBox(tracks0[0]?.albumKey || p.id, null, 'hero-art');
   const meta = el('div', { class: 'hero-meta' },
-    el('p', { class: 'eyebrow', text: 'Playlist' }),
+    el('p', { class: 'eyebrow', text: p.smart ? 'Smart shelf' : 'Playlist' }),
     el('h1', { class: 'hero-title', text: p.name }),
     el('p', { class: 'hero-sub' },
-      el('span', { text: fmtCount(p.tracks.length, 'track') }),
+      el('span', { text: fmtCount(tracks0.length, 'track') }),
       el('span', { class: 'dot' }),
       el('span', { text: fmtTotal(tracks0.reduce((s, t) => s + (t.duration || 0), 0)) })));
   meta.appendChild(el('div', { class: 'hero-actions' },
@@ -1413,6 +1972,16 @@ function viewPlaylist(host, id) {
     el('button', {
       class: 'icon-btn', html: ico('more'), onclick: (e) => menu([
         { label: 'Rename', icon: 'edit', onSelect: () => promptDialog({ title: 'Rename playlist', label: 'Name', value: p.name, onConfirm: (n) => n && lib.updatePlaylist(p.id, { name: n }) }) },
+        p.smart && {
+          label: 'Edit the rules…', icon: 'sliders',
+          onSelect: () => rulesDialog(p, (set) => {
+            lib.updatePlaylist(p.id, {
+              name: set.name, match: set.match, rules: set.rules,
+              sort: set.sort, sortDir: set.sortDir, limit: set.limit,
+            });
+            document.dispatchEvent(new CustomEvent('sonora:refresh'));
+          }),
+        },
         { label: 'Add to queue', icon: 'queue', onSelect: () => { player.enqueue(lib.playlistTracks(p)); toast('Added to queue'); } },
         { separator: true },
         { label: 'Delete playlist', icon: 'trash', danger: true, onSelect: () => { lib.removePlaylist(p.id); location.hash = '#/playlists'; } },
@@ -1422,18 +1991,27 @@ function viewPlaylist(host, id) {
   host.appendChild(hero);
   if (tracks0[0]) applyHeroTint(hero, tracks0[0].albumKey);
 
-  if (!p.tracks.length) {
-    host.appendChild(emptyState({ icon: 'playlist', title: 'This playlist is empty', note: 'Right-click a track anywhere and choose “Add to playlist”.' }));
+  if (!tracks0.length) {
+    host.appendChild(emptyState(p.smart
+      ? { icon: 'sparkle', title: 'Nothing matches yet',
+          note: `This shelf describes ${rules.describe(p)}. Edit the rules, or give the library time to catch up.` }
+      : { icon: 'playlist', title: 'This playlist is empty', note: 'Right-click a track anywhere and choose “Add to playlist”.' }));
     enter([hero], { y: 14 });
     const off = lib.events.on('playlists', () =>
       document.dispatchEvent(new CustomEvent('sonora:refresh')));
     return () => off();
   }
 
-  const columns = ['index', 'art', 'title', 'album', 'duration'];
+  const columns = ['index', 'art', 'title', 'album', 'dr', 'duration'];
+  if (p.smart) host.appendChild(el('p', { class: 'smart-note note', text: rules.describe(p) }));
+
+  /* A smart shelf has nothing to remove from: its contents are a consequence
+     of its rules, so taking a track out would either be undone on the next
+     repaint or quietly rewrite the description. The rules are the edit. */
   const table = trackTable(host, () => lib.playlistTracks(p), {
-    origin, columns, removeLabel: 'Remove from playlist',
-    onRemove: (t) => {
+    origin, columns,
+    removeLabel: p.smart ? null : 'Remove from playlist',
+    onRemove: p.smart ? null : (t) => {
       const i = p.tracks.indexOf(t.id);
       if (i >= 0) { p.tracks.splice(i, 1); lib.updatePlaylist(p.id, { tracks: p.tracks }); }
     },
@@ -1814,6 +2392,34 @@ function viewSettings(host) {
       el('div', { class: 'settings-name', text: 'Shuffle style' }),
       el('div', { class: 'settings-note', text: 'Learned leans gently towards what you actually play, and hard away from anything heard in the last hour.' })),
     el('div', { class: 'settings-actions' }, shufPick)));
+
+  /** A plain on/off row driven by a player setter. */
+  const toggleRow = (icon, name, note, get, set) => {
+    const btn = el('button', {
+      class: 'switch' + (get() ? ' is-on' : ''),
+      role: 'switch', 'aria-checked': String(get()),
+    }, el('span', { class: 'switch-knob' }));
+    btn.addEventListener('click', () => {
+      set(!get());
+      const on = get();
+      btn.classList.toggle('is-on', on);
+      btn.setAttribute('aria-checked', String(on));
+    });
+    return el('div', { class: 'settings-row' },
+      el('div', { class: 'settings-ico', html: ico(icon) }),
+      el('div', { class: 'settings-text' },
+        el('div', { class: 'settings-name', text: name }),
+        el('div', { class: 'settings-note', text: note })),
+      el('div', { class: 'settings-actions' }, btn));
+  };
+
+  pbRows.appendChild(toggleRow('play', 'Skip the silence at the start',
+    'Most rips carry a second or two of nothing before the first note. Starts at the music instead, and the scrubber still shows what was skipped.',
+    () => player.state.trimSilence, (v) => player.setTrimSilence(v)));
+
+  pbRows.appendChild(toggleRow('sliders', 'Land the crossfade on the beat',
+    'Where both tracks have a clear tempo and the two are close, the overlap starts on a beat rather than on a stopwatch.',
+    () => player.state.beatMatch, (v) => player.setBeatMatch(v)));
 
   playback.appendChild(pbRows);
   host.appendChild(playback);
@@ -2600,16 +3206,23 @@ function viewFiles(host) {
 
   /* ---- duplicates ---- */
 
-  let dupeToken = 0;
+  /* One token for the whole page, bumped by *any* repaint.
+   *
+   * It used to be bumped only by the duplicate scan itself, which meant
+   * switching to Folders mid-scan invalidated nothing: the body was still
+   * connected and the token still matched, so a scan finishing afterwards
+   * appended its groups underneath the folder tree. A guard has to be owned by
+   * whatever can invalidate it, and that is `paint`. */
+  let paintToken = 0;
 
   async function paintDupes() {
-    const token = ++dupeToken;
+    const token = paintToken;
     // Reading the head and tail of every candidate takes a moment on a real
     // library, and a page that sits blank while it happens looks broken.
     const busy = el('p', { class: 'muted dupe-summary', text: 'Comparing files…' });
     body.appendChild(busy);
     const groups = await findDuplicates();
-    if (token !== dupeToken || !body.isConnected) return;
+    if (token !== paintToken || !body.isConnected) return;
     busy.remove();
     if (!groups.length) {
       body.appendChild(emptyState({ icon: 'database', title: 'Nothing duplicated',
@@ -2654,6 +3267,7 @@ function viewFiles(host) {
 
   function paint() {
     body.textContent = '';
+    paintToken++;
     if (mode === 'folders') paintFolders(); else paintDupes();
   }
 

@@ -64,16 +64,17 @@ self.onmessage = (e) => {
 
     case 'frame': {
       if (!renderer) return;
-      /* The packed layout, unpacked. Bands and peaks are one buffer because
-         two transfers cost two round trips through the structured clone
-         algorithm for no benefit — they are always sent together and always
-         the same length. */
-      const packed = new Float32Array(m.packed);
-      const bands = packed.subarray(0, bandCount);
-      const peaks = packed.subarray(bandCount, bandCount * 2);
+      /* The packed layout, unpacked. Bands and peaks travel in one array
+         because they are always sent together and always the same length;
+         splitting them would only mean two clones instead of one.
+
+         `m.packed` arrives as a Float32Array already — the structured clone
+         preserves the view type, so there is nothing to wrap. */
+      const bands = m.packed.subarray(0, bandCount);
+      const peaks = m.packed.subarray(bandCount, bandCount * 2);
       renderer.frame({
         bands, peaks,
-        wave: m.wave ? new Uint8Array(m.wave) : null,
+        wave: m.wave || null,
         level: m.level, bass: m.bass, pulse: m.pulse,
         live: m.live, idle: m.idle,
       }, m.dt, m.now);

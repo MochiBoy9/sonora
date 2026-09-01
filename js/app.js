@@ -1,12 +1,12 @@
 /* app.js — shell: routing, navigation, search, shortcuts, theming, ingestion. */
 
-import { $, el, ico, debounce, clamp, acceptAttr, formatName } from './util.js';
+import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { renderView, hasLiveSelection } from './views.js';
 import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
-import { toast, closeMenu, promptDialog, menu, dialog } from './ui.js';
+import { toast, closeMenu, promptDialog, menu, dialog, rulesDialog } from './ui.js';
 import * as session from './session.js';
 import * as stats from './stats.js';
 import * as looks from './looks.js';
@@ -17,6 +17,9 @@ import { mountBackdrop } from './backdrop.js';
 import { toggleStage, isOpen as stageOpen } from './stage.js';
 import { startRelief } from './relief.js';
 import { startOffline } from './offline.js';
+import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
+import * as peakmap from './peaks.js';
+import * as undoStack from './undo.js';
 
 /* Destinations are numbered, like channels on a desk — the number is part of
    how you learn where things are, not decoration. */
@@ -68,6 +71,13 @@ function swapView() {
   try { teardown(); } catch (err) { console.warn(err); }
   closeMenu();
   host.textContent = '';
+  /* And its classes. A view that puts one on the container — the album Floor
+     mode does, to clip its own horizontal overflow — had no way to take it off
+     again: its teardown unwinds what it built, and clearing `textContent`
+     leaves the element itself untouched. So the class outlived the view and
+     every page afterwards inherited it. Resetting here fixes it for every
+     view at once rather than asking each one to remember. */
+  host.className = 'view';
   host.scrollTop = 0;
 
   teardown = renderView(host, route);
@@ -186,13 +196,25 @@ function buildSidebar() {
   const playlistHead = el('div', { class: 'side-head' },
     el('span', { class: 'label', text: 'Playlists' }),
     el('button', {
-      class: 'icon-btn ghost sm', title: 'New playlist', html: ico('plus'),
-      onclick: () => {
-        promptDialog({
-          title: 'New playlist', label: 'Name', value: 'My playlist', confirm: 'Create',
-          onConfirm: async (name) => { if (name) { const p = await lib.createPlaylist(name); location.hash = '#/playlist/' + p.id; } },
-        });
-      },
+      class: 'icon-btn ghost sm', title: 'New playlist', 'aria-label': 'New playlist', html: ico('plus'),
+      onclick: (e) => menu([
+        {
+          label: 'Empty playlist', icon: 'playlist',
+          hint: 'add tracks yourself',
+          onSelect: () => promptDialog({
+            title: 'New playlist', label: 'Name', value: 'My playlist', confirm: 'Create',
+            onConfirm: async (name) => { if (name) { const p = await lib.createPlaylist(name); location.hash = '#/playlist/' + p.id; } },
+          }),
+        },
+        {
+          label: 'Smart shelf…', icon: 'sparkle',
+          hint: 'describe it once',
+          onSelect: () => rulesDialog(null, async (set) => {
+            const p = await lib.createSmartPlaylist(set.name || 'Smart shelf', set);
+            location.hash = '#/playlist/' + p.id;
+          }),
+        },
+      ], { anchor: e.currentTarget }),
     }));
 
   const playlists = el('div', { class: 'side-playlists' });
@@ -214,11 +236,17 @@ function buildSidebar() {
       return;
     }
     for (const p of lib.state.playlists) {
+      /* A smart shelf counts what it currently describes rather than what it
+         was storing, and says which kind it is — finding out that a list
+         rewrites itself by watching it change is worse than a small mark. */
+      const count = p.smart ? lib.playlistTracks(p).length : p.tracks.length;
       playlists.appendChild(el('a', {
-        class: 'side-playlist', href: '#/playlist/' + p.id, data: { route: 'playlist:' + p.id },
+        class: 'side-playlist' + (p.smart ? ' is-smart' : ''),
+        href: '#/playlist/' + p.id, data: { route: 'playlist:' + p.id },
+        title: p.smart ? `${p.name} — describes itself` : p.name,
       },
         el('span', { class: 'side-playlist-name', text: p.name }),
-        el('span', { class: 'side-playlist-count', text: String(p.tracks.length) })));
+        el('span', { class: 'side-playlist-count', text: String(count) })));
     }
     paintNav(parseHash());
   };
@@ -596,16 +624,24 @@ const SHORTCUTS = [
     [['F'], 'Favourite what is playing'],
   ]],
   ['Getting around', [
-    [['/'], 'Search'],
-    [['⌘', 'K'], 'Search'],
+    [['/'], 'Search the library'],
+    [['⌘', 'K'], 'Everything, by name'],
     [['Q'], 'Queue panel'],
     [['V'], 'Immersive visualiser'],
     [['E'], 'The Sound page'],
     [['?'], 'This list'],
     [['Esc'], 'Close whatever is open'],
   ]],
+  ['The library', [
+    [['⌘', 'Z'], 'Undo the last change'],
+    [['⌘', '⇧', 'Z'], 'Redo it'],
+  ]],
   ['Sound', [
     [['B'], 'Bypass the rack — A/B it'],
+  ]],
+  ['In the visualiser', [
+    [['D'], 'The turntable'],
+    [['L'], 'Lyrics, when there are any'],
   ]],
 ];
 
@@ -632,6 +668,26 @@ function showShortcuts() {
   });
 }
 
+/**
+ * Runs one step of the undo stack and says what happened.
+ *
+ * The interesting case is the third one. An entry can outlive what it
+ * describes — correct a track, remove the folder it came from, then undo — and
+ * the honest answer is that nothing was put back. Saying "Undone" there would
+ * be a lie that teaches you to stop reading the confirmation, so the toast
+ * reports the miss instead. The entry still moves to the redo side, because a
+ * stack you cannot walk past is worse than one with a dud step in it.
+ */
+async function runUndo(redo) {
+  const label = redo ? undoStack.nextRedo() : undoStack.nextUndo();
+  if (!label) { toast(redo ? 'Nothing to redo' : 'Nothing to undo'); return; }
+  const done = redo ? await undoStack.redo() : await undoStack.undo();
+  if (!done) return;
+  if (done.error) toast(`Could not ${redo ? 'redo' : 'undo'} ${done.label}`);
+  else if (!done.touched) toast(`${done.label} is no longer here to change`);
+  else toast(`${redo ? 'Redid' : 'Undid'} ${done.label}`);
+}
+
 function bindKeys() {
   addEventListener('keydown', (e) => {
     const t = e.target;
@@ -646,7 +702,18 @@ function bindKeys() {
       e.preventDefault(); showShortcuts(); return;
     }
     if (e.key === '/' && !typing) { e.preventDefault(); $('#search')?.focus(); return; }
-    if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $('#search')?.focus(); return; }
+    /* The palette, not the search field. Cmd-K means "let me type what I want"
+       everywhere else, and Sonora has forty actions that were previously only
+       reachable by knowing where they lived. "/" still goes to the search box
+       for anyone who wants to search the library specifically. */
+    if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); togglePalette(); return; }
+    /* Undo, but not while a text field has the caret: inside the edit dialog
+       ⌘Z has to mean "undo what I just typed", which is the browser's job and
+       not ours. Ctrl-Y is here because Windows users reach for it. */
+    if (!typing && (e.metaKey || e.ctrlKey)) {
+      if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); runUndo(e.shiftKey); return; }
+      if (e.key === 'y' || e.key === 'Y') { e.preventDefault(); runUndo(true); return; }
+    }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
 
     switch (e.key) {
@@ -723,7 +790,17 @@ async function boot() {
 
   document.addEventListener('sonora:add', addMusic);
   document.addEventListener('sonora:shortcuts', showShortcuts);
+  /* The palette dispatches rather than calling: it is loaded before the shell
+     is built, and holding references to functions that do not exist yet is how
+     a module graph acquires a cycle. */
+  document.addEventListener('sonora:add-music', () => addMusicMenu($('.add-btn')));
+  document.addEventListener('sonora:bypass', () => {
+    rack.set({ on: !rack.state.on });
+    toast(rack.state.on ? 'Rack in circuit' : 'Rack bypassed');
+  });
   document.addEventListener('sonora:toggle-queue', () => toggleQueuePane());
+  document.addEventListener('sonora:undo', () => runUndo(false));
+  document.addEventListener('sonora:redo', () => runUndo(true));
   document.addEventListener('sonora:theme', (e) => applyTheme(e.detail));
   document.addEventListener('sonora:stage', () => toggleStage(backdrop));
   document.addEventListener('sonora:setting', (e) => {
@@ -758,6 +835,15 @@ async function boot() {
   }, { passive: true });
 
   player.events.on('track', applyAccent);
+  /* A record that carries its own rack gets it here, on `settled` rather than
+     on `track`: both decks feed one chain, and swapping the chain while a
+     crossfade is still running would put the incoming record's EQ on the tail
+     of the one going out. `settled` fires when only one deck is making sound. */
+  player.events.on('settled', async (t) => {
+    const did = await rack.followTrack(t).catch(() => null);
+    if (did?.applied) toast(`Rack for “${did.label}”`);
+    else if (did?.released) toast('Back to your rack');
+  });
   player.events.on('unavailable', (t) => toast(`Can't reach “${t.title}” — reconnect its folder`, {
     action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
   }));
@@ -788,6 +874,19 @@ async function boot() {
   session.restore(toast).then((outcome) => {
     if (outcome === 'resumed' || outcome === 'ready') applyAccent();
   });
+
+  /* Hold the analysis cache to its documented size.
+   *
+   * `peaks.trim()` has always known what the bound was — four thousand records,
+   * about a hundred megabytes — and nothing ever called it, so the store grew
+   * by roughly 28 KB for every track ever played and never gave any of it back.
+   * Once per launch, on idle, is the right cadence: it is a slow scan and
+   * nothing depends on its result. */
+  idle(() => {
+    peakmap.trim().then((dropped) => {
+      if (dropped) console.info(`[sonora] analysis cache: dropped ${dropped} old records`);
+    }).catch(() => {});
+  }, 8000);
 
   /* Offline, last of all.
    *

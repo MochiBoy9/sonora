@@ -13,7 +13,8 @@
  */
 
 import * as db from './db.js';
-import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle } from './util.js';
+import * as undo from './undo.js';
+import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle, ext } from './util.js';
 
 export const events = new Emitter();
 
@@ -72,6 +73,11 @@ function ensureWorker() {
     const msg = e.data;
     if (msg.type === 'ready') { workerReady = true; return; }
     if (msg.type === 'tracks') return absorb(msg.tracks);
+    if (msg.type === 'cover') {
+      const done = coverWaits.get(msg.id);
+      if (done) { coverWaits.delete(msg.id); done(msg.blob ? msg : null); }
+      return;
+    }
     if (msg.type === 'progress') {
       state.progress = { done: msg.done, total: msg.total };
       events.emit('progress', state.progress);
@@ -123,6 +129,11 @@ function flushArt() {
   const items = pendingArt.splice(0, pendingArt.length);
   for (const a of items) {
     db.putArt(a.key, a.blob).catch(() => {});
+    /* An album whose cover the listener chose still stores what the files
+       supplied — that is what "use the original again" restores — but the
+       scanned one must not climb back into the caches on a rescan and quietly
+       replace the chosen picture on screen. Store it, ignore it. */
+    if (ownArt.has(a.key)) continue;
     if (a.accent) accents.set(a.key, a.accent);
     /* The surface, under its own key in the same store. A typed array goes
        into IndexedDB as itself, so it comes back out ready to read without a
@@ -180,11 +191,53 @@ function applyEdits(t) {
  * override and lets the file's own tag show through again. Returns the number
  * of tracks touched.
  */
+/**
+ * Everything about a track that an edit can move, as plain values.
+ *
+ * Deliberately a whole-state snapshot rather than a diff. Restoring `edits`
+ * and `orig` alone is not enough — `applyEdits` only writes the fields that
+ * are currently overridden, so a field whose override is being *removed* would
+ * keep the new value with nothing left to say what it used to be. Eight
+ * strings per corrected track is a rounding error against holding the file's
+ * own tags, which we already do.
+ */
+function snapshotTracks(rows) {
+  return rows.map((t) => {
+    const s = { id: t.id, edits: t.edits ? { ...t.edits } : null, orig: t.orig ? { ...t.orig } : null };
+    for (const k of EDITABLE) s[k] = t[k];
+    return s;
+  });
+}
+
+/** Puts snapshots back. Returns how many tracks were still there to put back. */
+async function restoreTracks(snaps) {
+  const rows = [];
+  for (const s of snaps) {
+    const t = state.tracks.get(s.id);
+    if (!t) continue;               // the folder went away; see undo.js on staleness
+    for (const k of EDITABLE) t[k] = s[k];
+    if (s.edits) t.edits = { ...s.edits }; else delete t.edits;
+    if (s.orig) t.orig = { ...s.orig }; else delete t.orig;
+    t.albumKey = albumKeyOf(t.albumArtist || t.artist || '', t.album);
+    decorate(t);
+    rows.push(t);
+  }
+  if (rows.length) {
+    await db.putTracks(rows).catch(() => {});
+    reindex();
+    events.emit('change');
+  }
+  return rows.length;
+}
+
 export async function editTracks(tracks, patch) {
   const rows = [];
+  const before = [];
   for (const t of tracks) {
     const track = typeof t === 'string' ? state.tracks.get(t) : t;
     if (!track) continue;
+    // Taken before anything moves, and thrown away below if nothing does.
+    const was = snapshotTracks([track])[0];
     const edits = { ...(track.edits || {}) };
     /* What the file said, kept for exactly the fields that were overridden.
      *
@@ -225,12 +278,16 @@ export async function editTracks(tracks, patch) {
     track.namedArtist = true;
     decorate(track);
     rows.push(track);
+    before.push(was);
   }
 
   if (rows.length) {
     await db.putTracks(rows).catch(() => {});
     reindex();
     events.emit('change');
+    const after = snapshotTracks(rows);
+    const what = rows.length === 1 ? `the correction to “${rows[0].title}”` : `${rows.length} corrections`;
+    undo.push({ label: what, undo: () => restoreTracks(before), redo: () => restoreTracks(after) });
   }
   return rows.length;
 }
@@ -286,7 +343,7 @@ export function loadRelief(key) {
   if (!key || reliefs.has(key) || reliefMisses.has(key)) {
     return Promise.resolve(reliefs.get(key) || null);
   }
-  return db.getArt(key + '#relief').then((rec) => {
+  return db.getArt(artKeyFor(key) + '#relief').then((rec) => {
     if (rec && rec.map) { reliefs.set(key, rec); return rec; }
     reliefMisses.add(key);
     return null;
@@ -336,7 +393,6 @@ export function census() {
   const rates = new Map();
   const depths = new Map();
   let bytes = 0, known = { rate: 0, depth: 0 }, lossless = 0;
-  const LOSSLESS = new Set(['flac', 'wav', 'wave', 'aiff', 'aif', 'ape', 'wv', 'tta']);
 
   for (const t of state.tracks.values()) {
     const e = (t.name || '').slice((t.name || '').lastIndexOf('.') + 1).toLowerCase() || '?';
@@ -554,8 +610,80 @@ export function sortTracks(list, key, dir = 1) {
  * Ranked search across tracks, albums and artists. One linear pass with
  * precomputed haystacks; ~2 ms over 50k tracks, so it runs on every keystroke.
  */
+/* Containers that hold the whole signal. Used by the census and by the
+   `lossless` search filter, which have to agree about what the word means. */
+const LOSSLESS = new Set(['flac', 'wav', 'wave', 'aiff', 'aif', 'ape', 'wv', 'tta']);
+
+/* ------------------------------------------------------------------ filters
+ *
+ * The one box people actually use only ever matched text in a title, an artist
+ * and an album, while everything else the app knows sat unreachable from it.
+ *
+ * These are the questions worth being able to ask in passing — the ones that
+ * would otherwise mean building a smart shelf for a thing you wanted to know
+ * once. Each is a single comparison over a field that is already indexed, and
+ * anything not recognised as a filter stays part of the text query, so typing
+ * an ordinary search still behaves exactly as it always did.
+ */
+const FILTERS = [
+  [/^before:(\d{4})$/, (t, m) => t.year > 0 && t.year < +m[1]],
+  [/^after:(\d{4})$/, (t, m) => t.year > 0 && t.year > +m[1]],
+  [/^year:(\d{4})$/, (t, m) => t.year === +m[1]],
+  [/^>(\d+(?:\.\d+)?)min$/, (t, m) => (t.duration || 0) > +m[1] * 60],
+  [/^<(\d+(?:\.\d+)?)min$/, (t, m) => (t.duration || 0) > 0 && t.duration < +m[1] * 60],
+  [/^dr>(\d+(?:\.\d+)?)$/, (t, m) => t.dr > 0 && t.dr > +m[1]],
+  [/^dr<(\d+(?:\.\d+)?)$/, (t, m) => t.dr > 0 && t.dr < +m[1]],
+  [/^bpm>(\d+)$/, (t, m) => t.bpm > 0 && t.bpm > +m[1]],
+  [/^bpm<(\d+)$/, (t, m) => t.bpm > 0 && t.bpm < +m[1]],
+  [/^format:([a-z0-9]+)$/, (t, m) => ext(t.name || '') === m[1]],
+  [/^fav(?:ourite)?$/, (t) => isFavourite(t.id)],
+  [/^unplayed$/, (t) => !(t.playCount > 0)],
+  [/^guessed$/, (t) => !!(t.guessed && t.guessed.length)],
+  [/^edited$/, (t) => isEdited(t)],
+  [/^lossless$/, (t) => LOSSLESS.has(ext(t.name || '')) || t.bitrate > 500],
+  /* Suspected transcodes, from the encoder shelf the analysis measures. Only
+     ever true for tracks that have actually been analysed, so this finds what
+     is known rather than implying the rest are clean. */
+  [/^suspect$/, (t) => t.truncated === true],
+];
+
+/** Splits a query into the filters it names and the words it does not. */
+export function parseQuery(query) {
+  const words = [];
+  const filters = [];
+  for (const raw of String(query || '').trim().split(/\s+/)) {
+    if (!raw) continue;
+    const token = raw.toLowerCase();
+    let claimed = false;
+    for (const [re, test] of FILTERS) {
+      const m = token.match(re);
+      if (!m) continue;
+      filters.push({ token, test: (t) => test(t, m) });
+      claimed = true;
+      break;
+    }
+    if (!claimed) words.push(raw);
+  }
+  return { words, filters, text: words.join(' ') };
+}
+
 export function search(query, limit = 60) {
-  const q = norm(query).trim();
+  const parsed = parseQuery(query);
+
+  /* A query that is nothing but filters is still a query. "unplayed dr>14"
+     names no words at all and should return every track that satisfies both,
+     rather than the empty result an all-text search would give. */
+  if (parsed.filters.length && !parsed.words.length) {
+    const hits = [...state.tracks.values()].filter((t) => parsed.filters.every((f) => f.test(t)));
+    return {
+      query,
+      tracks: sortTracks(hits, 'title', 1).slice(0, limit),
+      albums: [], artists: [],
+      filtered: parsed.filters.map((f) => f.token),
+    };
+  }
+
+  const q = norm(parsed.text).trim();
   if (!q) return { tracks: [], albums: [], artists: [], query: '' };
   const terms = q.split(/\s+/);
 
@@ -573,6 +701,8 @@ export function search(query, limit = 60) {
 
   const tracks = [];
   for (const t of state.tracks.values()) {
+    // Words and filters are an AND: "beatles unplayed" means both.
+    if (parsed.filters.length && !parsed.filters.every((f) => f.test(t))) continue;
     const s = scoreOf(t.search, t.title);
     if (s) tracks.push({ s: s + (t.playCount || 0) * 0.5, t });
   }
@@ -597,6 +727,7 @@ export function search(query, limit = 60) {
     tracks: tracks.slice(0, limit).map((x) => x.t),
     albums: albums.slice(0, 24).map((x) => x.a),
     artists: artists.slice(0, 12).map((x) => x.a),
+    filtered: parsed.filters.map((f) => f.token),
   };
 }
 
@@ -618,7 +749,7 @@ export function loadArt(key) {
   if (hit) return Promise.resolve(hit);
   let p = artPending.get(key);
   if (p) return p;
-  p = db.getArt(key).then((blob) => {
+  p = db.getArt(artKeyFor(key)).then((blob) => {
     artPending.delete(key);
     const raced = artURLs.get(key);          // an import may have won the race
     if (raced) return raced;
@@ -629,6 +760,163 @@ export function loadArt(key) {
   }).catch(() => { artPending.delete(key); return null; });
   artPending.set(key, p);
   return p;
+}
+
+/* ---------------------------------------------------------- chosen artwork
+ *
+ * A picture you dropped on an album, and the same promise as a tag edit: it is
+ * an overlay, and the cover that came out of the files is still underneath it.
+ *
+ * Two records rather than one. The scanned cover keeps the album key it always
+ * had; yours goes under `key + '#own'`. That costs a set membership test on
+ * every read and buys the thing that matters — "use the original again" is a
+ * delete of one record, not an apology, and a rescan that finds a better
+ * embedded cover cannot silently overwrite the one you chose.
+ *
+ * The picture is handed to the metadata worker rather than processed here, and
+ * comes back through the identical pipeline a scanned cover uses: downscaled
+ * the same way, encoded the same way, sampled for the same accent colour, and
+ * run through the same relief pass. So a cover you chose tints its own page
+ * and lights under the pointer exactly as one found in a file does, and no
+ * view has to learn the difference.
+ */
+
+/**
+ * Album keys whose art the listener chose, each with the colour sampled from
+ * that picture.
+ *
+ * The colour is here rather than derived on demand because of where the other
+ * one lives: a scanned cover's accent is written onto the track records at
+ * import, so it comes back with the library, and a chosen cover has no track
+ * record to ride home on. Without this the album page came back untinted after
+ * every reload — the picture was right and the colour beside it was not, which
+ * is worse than either being wrong on its own.
+ */
+const ownArt = new Map();       // albumKey -> [r,g,b] | null
+
+const ownKey = (key) => key + '#own';
+
+export const hasOwnArt = (key) => ownArt.has(key);
+
+/** The record `loadArt` should read for this album. */
+const artKeyFor = (key) => (ownArt.has(key) ? ownKey(key) : key);
+
+function saveOwnArt() {
+  const out = {};
+  for (const [k, accent] of ownArt) out[k] = accent || null;
+  return db.setKV('ownArt', out).catch(() => {});
+}
+
+/** Drops every cached derivation of an album's cover, so the next read rebuilds. */
+function forgetArt(key) {
+  const url = artURLs.get(key);
+  if (url) { URL.revokeObjectURL(url); artURLs.delete(key); }
+  artMisses.delete(key);
+  artPending.delete(key);
+  reliefs.delete(key);
+  reliefMisses.delete(key);
+}
+
+/* Sent to the worker and awaited by id, because a `cover` reply arrives on the
+   same channel as scan traffic and must not be mistaken for it. */
+let coverSeq = 0;
+const coverWaits = new Map();
+
+function processCover(key, blob) {
+  const w = ensureWorker();
+  if (!w) return Promise.resolve(null);
+  const id = ++coverSeq;
+  return new Promise((resolve) => {
+    coverWaits.set(id, resolve);
+    // If the worker dies mid-flight nothing ever resolves, so bound the wait.
+    setTimeout(() => { if (coverWaits.delete(id)) resolve(null); }, 20000);
+    w.postMessage({ type: 'cover', id, key, blob });
+  });
+}
+
+const IMAGE_TYPES = /^image\/(jpeg|png|webp|gif|avif|bmp|tiff?)$/i;
+
+/**
+ * Gives an album a cover of your choosing.
+ *
+ * Returns true if it took. A file that is not an image, or one the browser
+ * cannot decode, is refused rather than stored — a broken record here would
+ * show up as a blank sleeve with no way to tell whether the picture or the
+ * album was at fault.
+ */
+export async function setArtwork(key, file) {
+  if (!key || !file) return false;
+  if (file.type && !IMAGE_TYPES.test(file.type)) return false;
+
+  const made = await processCover(key, file);
+  if (!made || !made.blob) return false;
+
+  // What is there now, so the undo can put it back exactly.
+  const hadOwn = ownArt.has(key);
+  const prevBlob = hadOwn ? await db.getArt(ownKey(key)).catch(() => null) : null;
+  const prevAccent = accents.get(key) || null;
+  const prevRelief = hadOwn ? reliefs.get(key) || await db.getArt(ownKey(key) + '#relief').catch(() => null) : null;
+
+  await putOwnArt(key, made);
+  const album = state.albumBy.get(key);
+  undo.push({
+    label: `the cover for “${album ? album.title : 'that album'}”`,
+    undo: () => (hadOwn && prevBlob
+      ? putOwnArt(key, { blob: prevBlob, accent: prevAccent, relief: prevRelief })
+      : dropOwnArt(key)),
+    redo: () => putOwnArt(key, made),
+  });
+  return true;
+}
+
+/** Writes the chosen cover and everything derived from it. */
+async function putOwnArt(key, made) {
+  ownArt.set(key, made.accent || null);
+  saveOwnArt();
+  await db.putArt(ownKey(key), made.blob).catch(() => {});
+  if (made.relief) {
+    await db.putArt(ownKey(key) + '#relief', made.relief).catch(() => {});
+  } else {
+    await db.deleteArt([ownKey(key) + '#relief']).catch(() => {});
+  }
+  forgetArt(key);
+  if (made.accent) accents.set(key, made.accent); else accents.delete(key);
+  if (made.relief) reliefs.set(key, made.relief); else reliefMisses.add(key);
+  artURLs.set(key, URL.createObjectURL(made.blob));
+  events.emit('art', [key]);
+  events.emit('change');
+  return 1;
+}
+
+/** Removes the chosen cover, revealing whatever the files supplied. */
+async function dropOwnArt(key) {
+  if (!ownArt.has(key)) return 0;
+  ownArt.delete(key);
+  saveOwnArt();
+  await db.deleteArt([ownKey(key), ownKey(key) + '#relief']).catch(() => {});
+  forgetArt(key);
+  /* The scanned cover's accent went into the album record at import and is
+     still there, so the colour comes back with the picture. */
+  accents.delete(key);
+  events.emit('art', [key]);
+  events.emit('change');
+  return 1;
+}
+
+/** Puts the album back to the cover its files came with. */
+export async function clearArtwork(key) {
+  if (!ownArt.has(key)) return false;
+  const blob = await db.getArt(ownKey(key)).catch(() => null);
+  const accent = accents.get(key) || null;
+  const relief = reliefs.get(key) || await db.getArt(ownKey(key) + '#relief').catch(() => null);
+  const album = state.albumBy.get(key);
+  await dropOwnArt(key);
+  undo.push({
+    label: `putting back the cover for “${album ? album.title : 'that album'}”`,
+    undo: () => (blob ? putOwnArt(key, { blob, accent, relief }) : 0),
+    redo: () => dropOwnArt(key),
+  });
+  return true;
 }
 
 /* ------------------------------------------------------------------ files */
@@ -979,20 +1267,68 @@ export async function rescanAll() {
 
 /* ------------------------------------------------------------------ playlists */
 
+/* The four writers below all record an inverse. A playlist is small and
+   entirely ours, so the inverses hold whole copies rather than diffs: a
+   deleted playlist comes back with its id, its contents and its place in the
+   sidebar, which is what "undo" has to mean for something you can see. */
+
+/** Re-inserts a playlist where it was, id and all. */
+async function restorePlaylist(p, at) {
+  const copy = { ...p, tracks: (p.tracks || []).slice() };
+  state.playlists.splice(Math.min(at, state.playlists.length), 0, copy);
+  await db.putPlaylist(copy).catch(() => {});
+  events.emit('playlists');
+  return 1;
+}
+
+async function dropPlaylist(id) {
+  const had = state.playlists.some((p) => p.id === id);
+  state.playlists = state.playlists.filter((p) => p.id !== id);
+  await db.deletePlaylist(id).catch(() => {});
+  events.emit('playlists');
+  return had ? 1 : 0;
+}
+
+/** Writes a set of fields onto a playlist. Returns 1 if it was still there. */
+async function patchPlaylist(id, patch) {
+  const p = state.playlists.find((x) => x.id === id);
+  if (!p) return 0;
+  for (const [k, v] of Object.entries(patch)) p[k] = Array.isArray(v) ? v.slice() : v;
+  await db.putPlaylist(p).catch(() => {});
+  events.emit('playlists');
+  return 1;
+}
+
 export async function createPlaylist(name, trackIds = []) {
   const p = { id: 'p:' + hash32(name + Date.now()), name, tracks: trackIds.slice(), createdAt: Date.now() };
   state.playlists.push(p);
   await db.putPlaylist(p).catch(() => {});
   events.emit('playlists');
+  undo.push({
+    label: `the playlist “${name}”`,
+    undo: () => dropPlaylist(p.id),
+    redo: () => restorePlaylist(p, state.playlists.length),
+  });
   return p;
 }
 
 export async function updatePlaylist(id, patch) {
   const p = state.playlists.find((x) => x.id === id);
   if (!p) return null;
+  // Only the keys actually being written, so undoing a rename does not also
+  // revert a reorder that happened in between.
+  const was = {};
+  for (const k of Object.keys(patch)) was[k] = Array.isArray(p[k]) ? p[k].slice() : p[k];
+  const now = {};
+  for (const [k, v] of Object.entries(patch)) now[k] = Array.isArray(v) ? v.slice() : v;
   Object.assign(p, patch);
   await db.putPlaylist(p).catch(() => {});
   events.emit('playlists');
+  undo.push({
+    label: 'name' in patch ? `the rename to “${p.name}”` : `the change to “${p.name}”`,
+    undo: () => patchPlaylist(id, was),
+    redo: () => patchPlaylist(id, now),
+  });
   return p;
 }
 
@@ -1000,19 +1336,92 @@ export async function addToPlaylist(id, trackIds) {
   const p = state.playlists.find((x) => x.id === id);
   if (!p) return;
   const have = new Set(p.tracks);
-  for (const t of trackIds) if (!have.has(t)) p.tracks.push(t);
+  // Only the ones that were not already in it: undoing an add of a track that
+  // was in the playlist beforehand must not remove it.
+  const added = [...new Set(trackIds)].filter((t) => !have.has(t));
+  for (const t of added) p.tracks.push(t);
+  if (!added.length) return;
   await db.putPlaylist(p).catch(() => {});
   events.emit('playlists');
+  undo.push({
+    label: added.length === 1 ? `adding it to “${p.name}”` : `adding ${added.length} tracks to “${p.name}”`,
+    undo: async () => {
+      const cur = state.playlists.find((x) => x.id === id);
+      if (!cur) return 0;
+      const drop = new Set(added);
+      return patchPlaylist(id, { tracks: cur.tracks.filter((t) => !drop.has(t)) });
+    },
+    redo: async () => {
+      const cur = state.playlists.find((x) => x.id === id);
+      if (!cur) return 0;
+      const back = new Set(cur.tracks);
+      return patchPlaylist(id, { tracks: cur.tracks.concat(added.filter((t) => !back.has(t))) });
+    },
+  });
 }
 
 export async function removePlaylist(id) {
+  const at = state.playlists.findIndex((p) => p.id === id);
+  const gone = at >= 0 ? { ...state.playlists[at], tracks: (state.playlists[at].tracks || []).slice() } : null;
   state.playlists = state.playlists.filter((p) => p.id !== id);
   await db.deletePlaylist(id).catch(() => {});
   events.emit('playlists');
+  if (gone) {
+    undo.push({
+      label: `deleting “${gone.name}”`,
+      undo: () => restorePlaylist(gone, at),
+      redo: () => dropPlaylist(id),
+    });
+  }
 }
 
-export const playlistTracks = (p) =>
-  p.tracks.map((id) => state.tracks.get(id)).filter(Boolean);
+/**
+ * The tracks in a playlist.
+ *
+ * A hand-made playlist is a list of ids. A smart one is a description, and its
+ * contents are worked out fresh every time they are asked for — so favouriting
+ * a track puts it in a "favourites added this year" list immediately, and
+ * playing one takes it out of "never played" the moment the count changes.
+ * Nothing is materialised, so nothing can go stale.
+ *
+ * The evaluator is imported lazily, and deliberately: rules.js reads the
+ * listening stats, stats.js reads the library, and a static import here would
+ * close that ring at module-load time.
+ */
+export const playlistTracks = (p) => {
+  if (!p) return [];
+  if (p.smart) return smartEval ? smartEval(p, allTracks()) : [];
+  return p.tracks.map((id) => state.tracks.get(id)).filter(Boolean);
+};
+
+/** Set by rules.js on load; see the note above for why it is not imported. */
+let smartEval = null;
+export const useRuleEngine = (fn) => { smartEval = fn; };
+
+/** Creates a playlist that describes itself rather than listing itself. */
+export async function createSmartPlaylist(name, set = {}) {
+  const p = {
+    id: 'p:' + hash32(name + Date.now()),
+    name,
+    smart: true,
+    match: set.match || 'all',
+    rules: set.rules || [],
+    sort: set.sort || 'none',
+    sortDir: set.sortDir || 1,
+    limit: set.limit || 0,
+    tracks: [],
+    createdAt: Date.now(),
+  };
+  state.playlists.push(p);
+  await db.putPlaylist(p).catch(() => {});
+  events.emit('playlists');
+  undo.push({
+    label: `the smart shelf “${name}”`,
+    undo: () => dropPlaylist(p.id),
+    redo: () => restorePlaylist(p, state.playlists.length),
+  });
+  return p;
+}
 
 /* ------------------------------------------------------------------ history */
 
@@ -1078,6 +1487,15 @@ export function toggleFavourite(id, force) {
   }
   db.setKV('favourites', favourites.ids).catch(() => {});
   events.emit('favourites', id, on);
+  /* The inverse of a toggle is the toggle back, but pinned to a value rather
+     than flipped: undoing after the same track was favourited again by hand
+     should land on "not favourited", not on whatever the flip happens to give. */
+  const name = (state.tracks.get(id) || {}).title;
+  undo.push({
+    label: on ? `favouriting${name ? ` “${name}”` : ''}` : `unfavouriting${name ? ` “${name}”` : ''}`,
+    undo: () => { toggleFavourite(id, !on); return 1; },
+    redo: () => { toggleFavourite(id, on); return 1; },
+  });
   return on;
 }
 
@@ -1089,13 +1507,14 @@ export const favouriteTracks = () =>
 
 /** Paints the stored library first, then reconnects to disk in the background. */
 export async function init() {
-  const [tracks, roots, playlists, recent, faves, sn] = await Promise.all([
+  const [tracks, roots, playlists, recent, faves, sn, own] = await Promise.all([
     db.getAllTracks().catch(() => []),
     db.getRoots().catch(() => []),
     db.getPlaylists().catch(() => []),
     db.getKV('recent').catch(() => null),
     db.getKV('favourites').catch(() => null),
     db.getKV('serial').catch(() => null),
+    db.getKV('ownArt').catch(() => null),
   ]);
 
   serial = typeof sn === 'string' && sn ? sn : makeSerial();
@@ -1107,6 +1526,16 @@ export async function init() {
   history.recent = Array.isArray(recent) ? recent : [];
   favourites.ids = Array.isArray(faves) ? faves.filter((id) => typeof id === 'string') : [];
   favourites.set = new Set(favourites.ids);
+  /* Chosen covers, and the colour each one was sampled for. Accepts a bare
+     array of keys as well as the map, because the first shape this was written
+     in had nowhere to put the colour. */
+  if (Array.isArray(own)) for (const k of own) ownArt.set(k, null);
+  else if (own && typeof own === 'object') {
+    for (const [k, accent] of Object.entries(own)) {
+      ownArt.set(k, accent || null);
+      if (accent) accents.set(k, accent);
+    }
+  }
   reindex();
   events.emit('ready');
 
