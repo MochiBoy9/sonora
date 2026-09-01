@@ -163,8 +163,17 @@ export class VirtualGrid {
 
     this.onScroll = () => this.schedule();
     viewport.addEventListener('scroll', this.onScroll, { passive: true });
+    /* The viewport, not the sizer.
+     *
+     * measure() writes the sizer's height, so an observer on the sizer is
+     * being fed its own output: the browser drops the second delivery and
+     * reports "ResizeObserver loop completed with undelivered notifications"
+     * on every mount. The sizer's width is the viewport's content width, and
+     * measure() reads it directly, so watching the viewport sees every change
+     * that matters without the write coming back round. It is also what
+     * VirtualList next door already does. */
     this.ro = new ResizeObserver(() => this.measure());
-    this.ro.observe(this.sizer);
+    this.ro.observe(this.viewport);
   }
 
   setItems(items) {
@@ -193,7 +202,14 @@ export class VirtualGrid {
     this.depth = readDepth();
 
     const rows = Math.ceil(this.items.length / cols);
-    this.sizer.style.height = rows * rowHeight + 'px';
+    /* Only when it actually moves. This runs from a ResizeObserver on the
+       sizer, so writing the sizer's height unconditionally feeds the observer
+       its own output — the browser notices, drops the second delivery, and
+       reports "ResizeObserver loop completed with undelivered notifications"
+       on every route change. Nothing was visibly broken; it was one frame of
+       wasted work and a warning in everybody's console. */
+    const h = rows * rowHeight + 'px';
+    if (this.sizer.style.height !== h) this.sizer.style.height = h;
     this.update();
   }
 
