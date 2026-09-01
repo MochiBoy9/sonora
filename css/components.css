@@ -1217,3 +1217,80 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .thead .trow-dr { font-size: calc(10px * var(--scale)); }
 
 @media (max-width: 860px) { .trow-dr { display: none; } }
+
+/* ---------------------------------------------------------------- rule builder
+
+   One row per rule: a field, a condition, a value. The operators offered
+   change with the field, because "contains" means nothing about a year.
+
+   The count under the list updates as you type, which is most of what makes a
+   builder like this usable — you can see whether you have described forty
+   tracks or four thousand before committing to it. */
+.rules-form { display: grid; gap: 14px; }
+
+.rules-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rules-list { display: grid; gap: 8px; }
+
+.rule-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.rule-row:has(.rule-unit) { grid-template-columns: minmax(0,1.1fr) minmax(0,1.2fr) minmax(0,1fr) auto auto; }
+.rule-row .input { height: 34px; font-size: calc(13px * var(--scale)); min-width: 0; }
+select.input { padding-right: 8px; }
+
+.rule-unit {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.rule-drop { flex: none; }
+.rules-add { justify-self: start; }
+
+.rules-count {
+  font-family: var(--mono);
+  font-size: calc(11.5px * var(--scale));
+  color: var(--accent);
+  line-height: 1.5;
+  padding-left: 12px;
+  border-left: 2px solid var(--accent-line);
+}
+.rules-note { color: var(--text-3); font-size: calc(12px * var(--scale)); }
+
+@media (max-width: 620px) {
+  .rule-row, .rule-row:has(.rule-unit) { grid-template-columns: 1fr 1fr; }
+  .rule-drop { grid-column: 2; justify-self: end; }
+}
+
+/* A smart playlist is marked in the sidebar: it behaves differently from one
+   you built by hand, and finding that out by surprise is worse than a glyph. */
+.side-playlist.is-smart .side-playlist-name::after {
+  content: "";
+  display: inline-block;
+  width: 5px; height: 5px;
+  margin-left: 7px;
+  vertical-align: middle;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+/* A field the tag reader took from a folder name rather than from the file.
+   Distinct from an edited field: one is a guess the app made, the other is a
+   correction you made, and conflating them would be the worst of both. */
+.edit-guess {
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--warn);
+  padding: 1px 6px;
+  margin-left: 8px;
+  box-shadow: inset 0 0 0 var(--hair) rgb(255 200 87 / .4);
+}
+.edit-field.is-guessed .input { box-shadow: inset 0 0 0 var(--hair) rgb(255 200 87 / .34); }

@@ -1553,3 +1553,16 @@
    would position against the page instead. */
 .shelf-pad { flex: none; height: 1px; pointer-events: none; }
 .shelf-run > .spine { position: absolute; bottom: 18px; }
+
+/* The description a smart shelf was built from, shown on its own page. It is
+   the thing that decides what is below it, so it belongs above the list rather
+   than buried in a menu. */
+.smart-note {
+  margin: -4px 0 14px;
+  font-family: var(--mono);
+  font-size: calc(12px * var(--scale));
+  letter-spacing: .03em;
+  color: var(--accent);
+  padding-left: 12px;
+  border-left: 2px solid var(--accent-line);
+}

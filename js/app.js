@@ -6,7 +6,7 @@ import * as player from './player.js';
 import { renderView, hasLiveSelection } from './views.js';
 import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
-import { toast, closeMenu, promptDialog, menu, dialog } from './ui.js';
+import { toast, closeMenu, promptDialog, menu, dialog, rulesDialog } from './ui.js';
 import * as session from './session.js';
 import * as stats from './stats.js';
 import * as looks from './looks.js';
@@ -194,13 +194,25 @@ function buildSidebar() {
   const playlistHead = el('div', { class: 'side-head' },
     el('span', { class: 'label', text: 'Playlists' }),
     el('button', {
-      class: 'icon-btn ghost sm', title: 'New playlist', html: ico('plus'),
-      onclick: () => {
-        promptDialog({
-          title: 'New playlist', label: 'Name', value: 'My playlist', confirm: 'Create',
-          onConfirm: async (name) => { if (name) { const p = await lib.createPlaylist(name); location.hash = '#/playlist/' + p.id; } },
-        });
-      },
+      class: 'icon-btn ghost sm', title: 'New playlist', 'aria-label': 'New playlist', html: ico('plus'),
+      onclick: (e) => menu([
+        {
+          label: 'Empty playlist', icon: 'playlist',
+          hint: 'add tracks yourself',
+          onSelect: () => promptDialog({
+            title: 'New playlist', label: 'Name', value: 'My playlist', confirm: 'Create',
+            onConfirm: async (name) => { if (name) { const p = await lib.createPlaylist(name); location.hash = '#/playlist/' + p.id; } },
+          }),
+        },
+        {
+          label: 'Smart shelf…', icon: 'sparkle',
+          hint: 'describe it once',
+          onSelect: () => rulesDialog(null, async (set) => {
+            const p = await lib.createSmartPlaylist(set.name || 'Smart shelf', set);
+            location.hash = '#/playlist/' + p.id;
+          }),
+        },
+      ], { anchor: e.currentTarget }),
     }));
 
   const playlists = el('div', { class: 'side-playlists' });
@@ -222,11 +234,17 @@ function buildSidebar() {
       return;
     }
     for (const p of lib.state.playlists) {
+      /* A smart shelf counts what it currently describes rather than what it
+         was storing, and says which kind it is — finding out that a list
+         rewrites itself by watching it change is worse than a small mark. */
+      const count = p.smart ? lib.playlistTracks(p).length : p.tracks.length;
       playlists.appendChild(el('a', {
-        class: 'side-playlist', href: '#/playlist/' + p.id, data: { route: 'playlist:' + p.id },
+        class: 'side-playlist' + (p.smart ? ' is-smart' : ''),
+        href: '#/playlist/' + p.id, data: { route: 'playlist:' + p.id },
+        title: p.smart ? `${p.name} — describes itself` : p.name,
       },
         el('span', { class: 'side-playlist-name', text: p.name }),
-        el('span', { class: 'side-playlist-count', text: String(p.tracks.length) })));
+        el('span', { class: 'side-playlist-count', text: String(count) })));
     }
     paintNav(parseHash());
   };

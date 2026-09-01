@@ -1011,8 +1011,48 @@ export async function removePlaylist(id) {
   events.emit('playlists');
 }
 
-export const playlistTracks = (p) =>
-  p.tracks.map((id) => state.tracks.get(id)).filter(Boolean);
+/**
+ * The tracks in a playlist.
+ *
+ * A hand-made playlist is a list of ids. A smart one is a description, and its
+ * contents are worked out fresh every time they are asked for — so favouriting
+ * a track puts it in a "favourites added this year" list immediately, and
+ * playing one takes it out of "never played" the moment the count changes.
+ * Nothing is materialised, so nothing can go stale.
+ *
+ * The evaluator is imported lazily, and deliberately: rules.js reads the
+ * listening stats, stats.js reads the library, and a static import here would
+ * close that ring at module-load time.
+ */
+export const playlistTracks = (p) => {
+  if (!p) return [];
+  if (p.smart) return smartEval ? smartEval(p, allTracks()) : [];
+  return p.tracks.map((id) => state.tracks.get(id)).filter(Boolean);
+};
+
+/** Set by rules.js on load; see the note above for why it is not imported. */
+let smartEval = null;
+export const useRuleEngine = (fn) => { smartEval = fn; };
+
+/** Creates a playlist that describes itself rather than listing itself. */
+export async function createSmartPlaylist(name, set = {}) {
+  const p = {
+    id: 'p:' + hash32(name + Date.now()),
+    name,
+    smart: true,
+    match: set.match || 'all',
+    rules: set.rules || [],
+    sort: set.sort || 'none',
+    sortDir: set.sortDir || 1,
+    limit: set.limit || 0,
+    tracks: [],
+    createdAt: Date.now(),
+  };
+  state.playlists.push(p);
+  await db.putPlaylist(p).catch(() => {});
+  events.emit('playlists');
+  return p;
+}
 
 /* ------------------------------------------------------------------ history */
 

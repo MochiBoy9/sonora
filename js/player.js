@@ -1255,7 +1255,13 @@ function weightedShuffle(arr) {
   }
 
   const keyed = arr.map((id) => {
-    const plays = lib.history.plays.get(id) || 0;
+    /* The count lives on the track record, which is where notePlay writes it.
+       This used to read `history.plays`, a Map that is declared and never
+       filled — so the play-count term contributed exactly nothing and the
+       shuffle was leaning on favourites and recency alone. The unit test that
+       passed had populated that Map by hand, which is how a dead read survives
+       a green test. */
+    const plays = (lib.getTrack(id) || {}).playCount || 0;
     // Diminishing returns: the fortieth listen should not count forty times.
     let w = 1 + Math.log1p(plays) * 0.55;
     if (lib.isFavourite(id)) w *= 1.5;

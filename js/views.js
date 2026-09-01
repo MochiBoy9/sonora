@@ -11,13 +11,14 @@ import * as player from './player.js';
 import * as db from './db.js';
 import { VirtualList, VirtualGrid } from './virtual.js';
 import {
-  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, Selection,
+  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, rulesDialog, Selection,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
 import { enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunning, requestDeviceTilt, stopDeviceTilt, startDeviceTilt } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
 import { mountCircles } from './circles.js';
 import { mountSound } from './sound.js';
+import * as rules from './rules.js';
 import * as offline from './offline.js';
 import * as stats from './stats.js';
 import * as band from './band.js';
@@ -506,6 +507,55 @@ function viewHome(host) {
     .sort((a, b) => b.tracks.length - a.tracks.length).slice(0, 10);
   const shelfArtists = shelf('Artists', topArtists, (a) => artistCard(a), { seeAll: '#/artists' });
   if (shelfArtists) frag.appendChild(shelfArtists);
+
+  /* This day, other years.
+   *
+   * Every play has been stamped since the history existed, and nothing has
+   * ever read those stamps for anything but ordering. A shelf of what you were
+   * playing a year ago today costs one filter and gives a local library the
+   * one thing no streaming service can honestly offer: a memory that belongs
+   * to you, computed on your machine, from a log nobody else has a copy of.
+   *
+   * Only shown when there is genuinely something there. A shelf that says
+   * "nothing yet" every day for a year is worse than no shelf. */
+  const today = new Date();
+  const anniversaries = [];
+  const seenAlbums = new Set();
+  for (const t of lib.allTracks()) {
+    if (!t.lastPlayed) continue;
+    const d = new Date(t.lastPlayed);
+    if (d.getFullYear() >= today.getFullYear()) continue;      // this year is not a memory
+    if (d.getMonth() !== today.getMonth() || d.getDate() !== today.getDate()) continue;
+    const al = lib.state.albumBy.get(t.albumKey);
+    if (al && !seenAlbums.has(al.key)) { seenAlbums.add(al.key); anniversaries.push(al); }
+  }
+  const shelfThen = shelf('On this day', anniversaries.slice(0, 10), (a) => albumCard(a));
+  if (shelfThen) frag.appendChild(shelfThen);
+
+  /* Records where one track has all the listening.
+   *
+   * Sonora counts seconds rather than plays, so it can tell the difference
+   * between a record you have listened to and a record you own. An album where
+   * one track has most of the time and the rest have almost none is a specific
+   * and common situation — either you love one song, or you never gave the
+   * thing a chance — and it is the most interesting page a local library can
+   * show you about itself.
+   */
+  const lopsided = [];
+  for (const al of lib.state.albums) {
+    if (!al.tracks || al.tracks.length < 4) continue;
+    const secs = al.tracks.map((t) => stats.forTrack(t.id) || 0);
+    const total = secs.reduce((s, v) => s + v, 0);
+    if (total < 120) continue;                                  // barely touched either way
+    const top = Math.max(...secs);
+    // Most of the listening in one track, and the rest of the record cold.
+    const share = top / total;
+    if (share > 0.7) lopsided.push({ album: al, share });
+  }
+  lopsided.sort((a, b) => b.share - a.share);
+  const shelfOne = shelf('One song from these', lopsided.slice(0, 10).map((x) => x.album),
+    (a) => albumCard(a));
+  if (shelfOne) frag.appendChild(shelfOne);
 
   // A compact "surprise me" strip: random albums, reshuffled on every visit.
   const pool = lib.state.albums.slice();
@@ -1382,7 +1432,7 @@ function viewPlaylists(host) {
       tilt3d(card.querySelector('.card-art'), { max: 8, lift: 16, scale: 1.015 });
       if (cover) paintArt(card.querySelector('.art-img'), cover);
       card.querySelector('.card-title').textContent = p.name;
-      card.querySelector('.card-sub').textContent = fmtCount(p.tracks.length, 'track');
+      card.querySelector('.card-sub').textContent = fmtCount(tracks.length, 'track') + (p.smart ? ' · describes itself' : '');
       card.querySelector('.card-fab').addEventListener('click', (e) => {
         e.stopPropagation();
         playAll(tracks, 0, { type: 'playlist', key: p.id, label: p.name });
@@ -1510,10 +1560,10 @@ function viewPlaylist(host, id) {
   const tracks0 = lib.playlistTracks(p);
   const art = artBox(tracks0[0]?.albumKey || p.id, null, 'hero-art');
   const meta = el('div', { class: 'hero-meta' },
-    el('p', { class: 'eyebrow', text: 'Playlist' }),
+    el('p', { class: 'eyebrow', text: p.smart ? 'Smart shelf' : 'Playlist' }),
     el('h1', { class: 'hero-title', text: p.name }),
     el('p', { class: 'hero-sub' },
-      el('span', { text: fmtCount(p.tracks.length, 'track') }),
+      el('span', { text: fmtCount(tracks0.length, 'track') }),
       el('span', { class: 'dot' }),
       el('span', { text: fmtTotal(tracks0.reduce((s, t) => s + (t.duration || 0), 0)) })));
   meta.appendChild(el('div', { class: 'hero-actions' },
@@ -1522,6 +1572,16 @@ function viewPlaylist(host, id) {
     el('button', {
       class: 'icon-btn', html: ico('more'), onclick: (e) => menu([
         { label: 'Rename', icon: 'edit', onSelect: () => promptDialog({ title: 'Rename playlist', label: 'Name', value: p.name, onConfirm: (n) => n && lib.updatePlaylist(p.id, { name: n }) }) },
+        p.smart && {
+          label: 'Edit the rules…', icon: 'sliders',
+          onSelect: () => rulesDialog(p, (set) => {
+            lib.updatePlaylist(p.id, {
+              name: set.name, match: set.match, rules: set.rules,
+              sort: set.sort, sortDir: set.sortDir, limit: set.limit,
+            });
+            document.dispatchEvent(new CustomEvent('sonora:refresh'));
+          }),
+        },
         { label: 'Add to queue', icon: 'queue', onSelect: () => { player.enqueue(lib.playlistTracks(p)); toast('Added to queue'); } },
         { separator: true },
         { label: 'Delete playlist', icon: 'trash', danger: true, onSelect: () => { lib.removePlaylist(p.id); location.hash = '#/playlists'; } },
@@ -1531,8 +1591,11 @@ function viewPlaylist(host, id) {
   host.appendChild(hero);
   if (tracks0[0]) applyHeroTint(hero, tracks0[0].albumKey);
 
-  if (!p.tracks.length) {
-    host.appendChild(emptyState({ icon: 'playlist', title: 'This playlist is empty', note: 'Right-click a track anywhere and choose “Add to playlist”.' }));
+  if (!tracks0.length) {
+    host.appendChild(emptyState(p.smart
+      ? { icon: 'sparkle', title: 'Nothing matches yet',
+          note: `This shelf describes ${rules.describe(p)}. Edit the rules, or give the library time to catch up.` }
+      : { icon: 'playlist', title: 'This playlist is empty', note: 'Right-click a track anywhere and choose “Add to playlist”.' }));
     enter([hero], { y: 14 });
     const off = lib.events.on('playlists', () =>
       document.dispatchEvent(new CustomEvent('sonora:refresh')));
@@ -1540,9 +1603,15 @@ function viewPlaylist(host, id) {
   }
 
   const columns = ['index', 'art', 'title', 'album', 'dr', 'duration'];
+  if (p.smart) host.appendChild(el('p', { class: 'smart-note note', text: rules.describe(p) }));
+
+  /* A smart shelf has nothing to remove from: its contents are a consequence
+     of its rules, so taking a track out would either be undone on the next
+     repaint or quietly rewrite the description. The rules are the edit. */
   const table = trackTable(host, () => lib.playlistTracks(p), {
-    origin, columns, removeLabel: 'Remove from playlist',
-    onRemove: (t) => {
+    origin, columns,
+    removeLabel: p.smart ? null : 'Remove from playlist',
+    onRemove: p.smart ? null : (t) => {
       const i = p.tracks.indexOf(t.id);
       if (i >= 0) { p.tracks.splice(i, 1); lib.updatePlaylist(p.id, { tracks: p.tracks }); }
     },
