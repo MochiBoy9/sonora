@@ -7,7 +7,7 @@
 import { el, ico, fmtTime, fmtCount } from './util.js';
 import * as player from './player.js';
 import * as lib from './library.js';
-import { paintArt, artBox, menu, trackMenu, toast, emptyState, promptDialog } from './ui.js';
+import { paintArt, artBox, levelMatchDialog, menu, trackMenu, toast, emptyState, promptDialog } from './ui.js';
 import { VirtualList } from './virtual.js';
 import { createVisualizer } from './visualizer.js';
 import { storedMode } from './stage.js';
@@ -266,6 +266,18 @@ function buildQueue(host) {
             toast(`Kept ${tracks.length} tracks as “${name}”`);
           },
         });
+      },
+    }),
+    /* G2: the queue is the list where unevenness actually bites — it is the
+       one place a 1974 master and a 2011 remaster sit next to each other by
+       construction. */
+    el('button', {
+      class: 'link-btn', text: 'Level',
+      title: 'Measure everything in the queue so the levelling has something to work with',
+      onclick: () => {
+        const tracks = player.state.queue.map((id) => lib.getTrack(id)).filter(Boolean);
+        if (tracks.length < 2) return toast('Not enough in the queue to level');
+        levelMatchDialog(tracks, player.state.origin && player.state.origin.label);
       },
     }),
     el('button', { class: 'link-btn', text: 'Clear', onclick: () => { player.clearQueue(); toast('Queue cleared'); } }));

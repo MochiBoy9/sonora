@@ -4,6 +4,7 @@ import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle, fmtTime, fmt
 import * as lib from './library.js';
 import * as player from './player.js';
 import { renderView, hasLiveSelection } from './views.js';
+import { activeFilter } from './views/shared.js';
 import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
 import { toast, closeMenu, promptDialog, menu, dialog, rulesDialog } from './ui.js';
@@ -14,13 +15,14 @@ import * as rack from './audio.js';
 import { animate, ease, reduceMotion, startDeviceTilt, deviceTiltNeedsPermission } from './motion.js';
 import { startIntro } from './intro.js';
 import { mountBackdrop } from './backdrop.js';
-import { toggleStage, isOpen as stageOpen } from './stage.js';
+import { toggleStage, showDeck, isOpen as stageOpen } from './stage.js';
 import { startRelief } from './relief.js';
 import { startOffline } from './offline.js';
 import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
 import * as db from './db.js';
 import * as keys from './keys.js';
 import * as drag from './drag.js';
+import * as radio from './radio.js';
 import * as m3u from './m3u.js';
 import * as shopWindow from './idle.js';
 import * as peakmap from './peaks.js';
@@ -638,6 +640,23 @@ function announceImport(report) {
       { duration: 6000 });
   }
 
+  /* D7: and the page that exists to be read after an import like this one.
+   *
+   * "Needs attention" was added last pass and nothing in the app has ever
+   * mentioned it — the sidebar entry was the only thing that knew. The moment
+   * it is worth a line is exactly here: right after a run that brought in
+   * files with nothing in them. */
+  if (report.failed) {
+    const a = lib.attention();
+    const needing = a.untagged.length;
+    if (needing) {
+      toast(`${fmtCount(needing, 'track')} arrived with nothing in the file`, {
+        duration: 9000,
+        action: { label: 'Needs attention', onSelect: () => (location.hash = '#/attention') },
+      });
+    }
+  }
+
   /* I2: and what it could not read. A separate toast rather than a clause,
      because the two are different news and the second one is the one somebody
      may want to act on — it carries a way to see the list rather than a
@@ -839,7 +858,15 @@ function buildDropZone() {
     depth++; show();
   });
   addEventListener('dragover', (e) => { if (!overlay.hidden) e.preventDefault(); });
-  addEventListener('dragleave', () => { if (--depth <= 0) hide(); });
+  /* Only a drag that raised the counter may lower it.
+   *
+   * C1 put drags of Sonora's own rows and cards into the app, and those carry
+   * no files — so `dragenter` above ignores them while this fired on every one
+   * of their `dragleave`s and drove `depth` negative. The next real folder drag
+   * then showed the overlay and lost it again on the first boundary crossed.
+   * Guarding on the counter rather than on the event is enough, and keeps this
+   * indifferent to what other kinds of drag the app grows later. */
+  addEventListener('dragleave', () => { if (depth > 0 && --depth <= 0) hide(); });
   addEventListener('drop', async (e) => {
     if (overlay.hidden) return;
     e.preventDefault();
@@ -847,6 +874,7 @@ function buildDropZone() {
     const root = await lib.addDataTransfer(e.dataTransfer);
     if (root) toast(`Added ${root.name}`);
     else toast('No audio files in that drop');
+    depth = 0;
   });
 }
 
@@ -938,6 +966,20 @@ function registerKeys() {
       run: () => { showShortcuts(); } });
   K({ id: 'search', group: 'Getting around', combo: '/', label: 'Search the library',
       run: () => { $('#search')?.focus(); } });
+  /* D6: and the other kind of search — inside what is already on screen.
+   *
+   * ⌘F overrides the browser's find-in-page, which is normally rude and here is
+   * the point: every long list in Sonora is virtualised, so the rows somebody
+   * is looking for are not in the document for the native find to find. This
+   * one can actually answer the question. Where the page has no filter the key
+   * is left alone and the browser keeps it. */
+  K({ id: 'find', group: 'Getting around', combo: 'Mod+F', label: 'Filter this page',
+      run: () => {
+        const f = activeFilter();
+        if (!f) return false;         // not ours: the browser keeps its find
+        f.focus();
+        return true;
+      } });
   /* The palette, not the search field. Cmd-K means "let me type what I want"
      everywhere else, and Sonora has forty actions that were previously only
      reachable by knowing where they lived. */
@@ -947,6 +989,30 @@ function registerKeys() {
       run: () => { toggleQueuePane(); } });
   K({ id: 'stage', group: 'Getting around', combo: 'V', label: 'Immersive visualiser',
       run: () => { toggleStage(backdrop); } });
+  /* F5: and the turntable, from anywhere. It was a mode of a mode — open the
+     stage, then press D — and a record on a deck is the most legible thing
+     this application draws. */
+  /* G4: to the reference and back, which is one key because it is one action —
+     you are comparing, and a comparison you have to set up twice is a
+     comparison you stop making. */
+  K({ id: 'reference', group: 'Playback', combo: 'X', label: 'Compare against your reference',
+      active: () => !!player.referenceTrack(),
+      run: async () => {
+        const ref = player.referenceTrack();
+        if (!ref) { toast('No reference track — pick one from a track menu'); return; }
+        const on = player.onReference();
+        if (!(await player.toggleReference())) {
+          toast(on ? 'Nothing to go back to' : `Already on “${ref.title}”`);
+          return;
+        }
+        toast(on ? 'Back' : `Reference — “${ref.title}”`, { duration: 2400 });
+      } });
+  K({ id: 'deck', group: 'Getting around', combo: 'D', label: 'The turntable',
+      /* Explicitly, rather than by registration order: the stage registers the
+         same key for turning the record over once it is open, and which of the
+         two answers must not depend on which module happened to load first. */
+      active: () => !stageOpen(),
+      run: () => { showDeck(backdrop); } });
   K({ id: 'sound', group: 'Getting around', combo: 'E', label: 'The Sound page',
       run: () => { location.hash = '#/sound'; } });
   K({ id: 'escape', group: 'Getting around', combo: 'Escape', label: 'Close whatever is open',
@@ -1273,6 +1339,7 @@ async function boot() {
   document.addEventListener('sonora:redo', () => runUndo(true));
   document.addEventListener('sonora:theme', (e) => applyTheme(e.detail));
   document.addEventListener('sonora:stage', () => toggleStage(backdrop));
+  document.addEventListener('sonora:deck', () => showDeck(backdrop));
   document.addEventListener('sonora:setting', (e) => {
     if (e.detail.name === 'accent') applyAccent();
     if (e.detail.name === 'backdrop') backdrop?.setEnabled(e.detail.value);
@@ -1333,6 +1400,33 @@ async function boot() {
     : `Couldn't play “${t.title}”`, { duration: 4200 }));
   player.events.on('unsupported', (t) => toast(
     `No browser decodes ${formatName(t.name || '')} — “${t.title}” was skipped`, { duration: 4200 }));
+
+  /* E1: the queue ran out, and the app says so rather than simply stopping.
+   *
+   * One button, never automatic. The seed is `state.origin` — the artist page,
+   * the record, the shelf the queue came from — which has been recorded since
+   * the "from" tags landed and read back by nothing until now. Silence is a
+   * perfectly good answer, so the toast times out and takes the offer with it.
+   *
+   * A stop that was asked for gets no offer at all: somebody who set "stop at
+   * the end of this record" has already answered the question. */
+  player.events.on('queue-ended', ({ reason, origin }) => {
+    if (reason !== 'end') return;
+    const played = player.state.queue.slice();
+    const on = radio.continuation(origin, played);
+    if (!on || !on.tracks.length) return;
+    toast(`That's the end of the queue — keep going with ${on.label}?`, {
+      duration: 14000,
+      action: {
+        label: 'Keep playing',
+        onSelect: () => {
+          player.playTracks(on.tracks, 0, { type: 'radio', label: on.label });
+          toast(`Playing on — ${on.label}`);
+        },
+      },
+    });
+  });
+
   lib.events.on('art', applyAccent);
 
   await player.init();

@@ -13,6 +13,7 @@ import * as player from '../player.js';
 import { emptyState, paintArt, placeholderStyle, sleeve, toast } from '../ui.js';
 import { el, fmtCount } from '../util.js';
 import { VirtualGrid } from '../virtual.js';
+import * as drag from '../drag.js';
 import { MODES } from '../visualizer.js';
 import { backCover } from './album.js';
 import { albumCard, decode, letterOf, markTransition, renderAlbumCard, shelf, sortControl, thicknessOf } from './shared.js';
@@ -57,8 +58,12 @@ export function viewAlbums(host) {
   const sorter = sortControl({
     store: ALBUM_SORT,
     fallback: 'artist',
-    keys: [['artist', 'Artist'], ['title', 'Title'], ['year', 'Year'], ['added', 'Recently added'],
-           ['length', 'Length'], ['tracks', 'Track count'], ['plays', 'Times played'], ['played', 'Last played']],
+    keys: [['artist', 'Artist'], ['title', 'Title'], ['year', 'Year'], ['released', 'Original year'],
+           ['added', 'Recently added'], ['length', 'Length'], ['tracks', 'Track count'],
+           ['plays', 'Times played'], ['played', 'Last played'],
+           // F3 and F1: the two orders that are not rules — one computed from
+           // the covers, one put there by hand.
+           ['colour', 'Colour'], ['arranged', 'However you left it']],
     onChange: () => { setMode(mode, true); },
   });
   bar.appendChild(sorter.node);
@@ -97,14 +102,40 @@ export function viewAlbums(host) {
   function mountGrid(into) {
     const grid = new VirtualGrid({
       viewport: host, minCell: 168, gap: 22, aspect: 1, footer: 64,
-      create: () => albumCard(null),
+      create: () => {
+        const card = albumCard(null);
+        /* F1: in "However you left it", a record can be dragged to a place on
+           the wall. In every other order it cannot, because dropping a record
+           somewhere in an alphabetical wall is a request the wall has no way
+           to honour — it would be re-sorted away on the next repaint. The card
+           keeps its ordinary track-drag everywhere else, so this only takes
+           over the gesture where it means something. */
+        card.addEventListener('dragover', (e) => {
+          if (sorter.state.key !== 'arranged' || !drag.draggingAlbum()) return;
+          e.preventDefault();
+          e.stopPropagation();
+          card.classList.add('is-drop-before');
+        });
+        card.addEventListener('dragleave', () => card.classList.remove('is-drop-before'));
+        card.addEventListener('drop', (e) => {
+          card.classList.remove('is-drop-before');
+          const moving = drag.draggingAlbum();
+          if (sorter.state.key !== 'arranged' || !moving) return;
+          e.preventDefault();
+          e.stopPropagation();
+          lib.arrangeAlbum(moving, card.dataset.key);
+          drag.endDrag();
+        });
+        return card;
+      },
       render: (node, album) => renderAlbumCard(node, album),
     });
     grid.setItems(ordered());
+    host.classList.toggle('is-arranging', sorter.state.key === 'arranged');
     const off = lib.events.on('change', () => grid.setItems(ordered()));
     const offArt = lib.events.on('art', () => grid.refresh());
     void into;
-    return () => { off(); offArt(); grid.destroy(); };
+    return () => { host.classList.remove('is-arranging'); off(); offArt(); grid.destroy(); };
   }
 
   setMode(mode);
@@ -113,6 +144,7 @@ export function viewAlbums(host) {
 }
 
 const ALBUM_VIEW = 'sonora:albumview';
+const FLOOR_AXIS = 'sonora:flooraxis';
 const ALBUM_SORT = 'sonora:albumsort';
 export const ARTIST_SORT = 'sonora:artistsort';
 
@@ -379,23 +411,33 @@ export function mountFloor(host, viewport) {
    *
    * `lanesFor()` already works the decades out to place the markers, so this
    * reads them off `rows` rather than computing anything of its own. */
-  const rail = el('nav', { class: 'floor-rail', 'aria-label': 'Decades' });
+  const rail = el('nav', { class: 'floor-rail', 'aria-label': 'Where you are' });
   hud.appendChild(rail);
   let railBtns = [];
 
+  /* F4: which axis the room is walked along. On the HUD rather than in the
+     page toolbar, because it is a property of this room and the toolbar's sort
+     control is hidden here for exactly that reason. */
+  let axis = 'year';
+  try { const v = localStorage.getItem(FLOOR_AXIS); if (v) axis = v; } catch { /* private */ }
+
+  const axisBar = el('div', { class: 'segmented quiet floor-axis', role: 'tablist', 'aria-label': 'Walk the room by' });
+  hud.appendChild(axisBar);
+
   function buildRail() {
+    const spec = FLOOR_AXES[axis] || FLOOR_AXES.year;
     rail.textContent = '';
     railBtns = [];
     const seen = new Set();
     for (let i = 0; i < rows.length; i++) {
       const lane = rows[i];
-      const key = lane.undated ? 'undated' : Math.floor(lane.year / 10) * 10;
+      const key = lane.undated ? 'undated' : spec.group(lane.year);
       if (seen.has(key)) continue;
       seen.add(key);
       const btn = el('button', {
         class: 'floor-rail-btn',
-        text: lane.undated ? 'No year' : String(key).slice(2) + 's',
-        title: lane.undated ? 'Records with no year' : String(key) + 's',
+        text: lane.undated ? spec.none : spec.groupName(key),
+        title: lane.undated ? spec.none : spec.groupTitle(key),
       });
       btn.dataset.row = i;
       btn.addEventListener('click', () => walkTo(i));
@@ -487,37 +529,156 @@ export function mountFloor(host, viewport) {
    * behind a wider gap, so the timeline stays honest about what it is showing
    * and the undated pile is somewhere you can still walk to.
    */
+  /* F4: the room, walked along something other than the year.
+   *
+   * The depth axis was the release year and that was the whole of what the
+   * Floor was. The room itself — the perspective, the lanes, the walk, the
+   * markings on the ground — has nothing to do with which number is on the
+   * axis, so the same room walked by when you first heard something, or by how
+   * much you have played it, is three rooms for the cost of one function.
+   *
+   * Each axis says how to get a lane number out of an album, what to call a
+   * lane, how to group lanes on the rail, and whether the distance between two
+   * lanes means anything. The year's gaps are the point of the year — a
+   * collection with nothing between 1979 and 1994 should feel like it — and
+   * genre has no such thing, so `spaced` decides whether a drought costs you a
+   * walk or not.
+   */
+  const FLOOR_AXES = {
+    year: {
+      label: 'Release year',
+      spaced: true,
+      of: (a) => a.originalYear || a.year || 0,
+      name: (v) => String(v),
+      none: 'No year',
+      group: (v) => Math.floor(v / 10) * 10,
+      groupName: (g) => String(g).slice(2) + 's',
+      groupTitle: (g) => g + 's',
+      mark: (v, prev) => (Math.floor(v / 10) * 10 !== prev ? `${Math.floor(v / 10) * 10}s` : ''),
+    },
+    added: {
+      /* When it arrived, by month. Not by day: a library imported in one
+         afternoon would be a single lane, and a walk of one step is not a
+         walk. */
+      label: 'When you added it',
+      spaced: true,
+      of: (a) => {
+        if (!a.addedAt) return 0;
+        const d = new Date(a.addedAt);
+        return d.getFullYear() * 12 + d.getMonth();
+      },
+      name: (v) => new Date(Math.floor(v / 12), v % 12, 1).toLocaleString(undefined, { month: 'short', year: 'numeric' }),
+      none: 'Unknown',
+      group: (v) => Math.floor(v / 12),
+      groupName: (g) => String(g),
+      groupTitle: (g) => String(g),
+      mark: (v, prev) => (Math.floor(v / 12) !== prev ? String(Math.floor(v / 12)) : ''),
+    },
+    heard: {
+      // When you last put it on, by month — the room as a memory of an
+      // evening rather than as a catalogue.
+      label: 'When you last played it',
+      spaced: true,
+      of: (a) => {
+        if (!a.lastPlayed) return 0;
+        const d = new Date(a.lastPlayed);
+        return d.getFullYear() * 12 + d.getMonth();
+      },
+      name: (v) => new Date(Math.floor(v / 12), v % 12, 1).toLocaleString(undefined, { month: 'short', year: 'numeric' }),
+      none: 'Never played',
+      group: (v) => Math.floor(v / 12),
+      groupName: (g) => String(g),
+      groupTitle: (g) => String(g),
+      mark: (v, prev) => (Math.floor(v / 12) !== prev ? String(Math.floor(v / 12)) : ''),
+    },
+    plays: {
+      /* Bands rather than exact counts, because the difference between 41 and
+         42 plays is not a room you want to walk through. Logarithmic, for the
+         same reason the wear on a sleeve is. */
+      label: 'How much you have played it',
+      spaced: false,
+      of: (a) => Math.round(Math.log1p(a.plays || 0) * 2),
+      name: (v) => {
+        const lo = Math.round(Math.expm1(v / 2));
+        const hi = Math.round(Math.expm1((v + 1) / 2)) - 1;
+        return lo === 0 ? 'Never' : hi <= lo ? `${lo} plays` : `${lo}–${hi} plays`;
+      },
+      none: 'Never',
+      group: (v) => v,
+      // On the rail these are the only labels somebody reads while walking, so
+      // they say what they mean rather than printing a bare number that could
+      // be a year, a count or a band.
+      groupName: (g) => (g === 0 ? 'None' : Math.round(Math.expm1(g / 2)) + '+'),
+      groupTitle: (g) => (g === 0 ? 'Never played' : Math.round(Math.expm1(g / 2)) + '+ plays'),
+      mark: (v) => (v === 0 ? 'Never played' : ''),
+    },
+  };
+
   function lanesFor(albums) {
-    const byYear = new Map();
-    const undated = [];
+    const spec = FLOOR_AXES[axis] || FLOOR_AXES.year;
+    const byKey = new Map();
+    const none = [];
     for (const a of albums) {
-      if (a.year > 0) {
-        if (!byYear.has(a.year)) byYear.set(a.year, []);
-        byYear.get(a.year).push(a);
-      } else undated.push(a);
+      const v = spec.of(a);
+      if (!v && v !== 0) { none.push(a); continue; }
+      if (spec === FLOOR_AXES.year && !v) { none.push(a); continue; }
+      if ((axis === 'added' || axis === 'heard') && !v) { none.push(a); continue; }
+      if (!byKey.has(v)) byKey.set(v, []);
+      byKey.get(v).push(a);
     }
 
-    const years = [...byYear.keys()].sort((x, y) => x - y);
+    const keys = [...byKey.keys()].sort((x, y) => x - y);
     const out = [];
     let prev = null;
-    let lastDecade = null;
-    for (const y of years) {
-      // Distance to walk before this year, from however long the drought was.
-      const gap = prev === null ? 0 : Math.min(GAP_MAX, (y - prev - 1) * GAP_DEPTH);
-      const decade = Math.floor(y / 10) * 10;
+    let lastGroup = null;
+    for (const v of keys) {
+      // Distance to walk before this lane, from however long the drought was —
+      // but only on an axis where a drought means something.
+      const gap = prev === null || !spec.spaced
+        ? 0 : Math.min(GAP_MAX, (v - prev - 1) * GAP_DEPTH);
       out.push({
-        year: y,
-        albums: byYear.get(y),
+        year: v,
+        albums: byKey.get(v),
         gap,
-        mark: decade !== lastDecade ? `${decade}s` : '',
+        mark: spec.mark(v, lastGroup),
+        name: spec.name(v),
       });
-      lastDecade = decade;
-      prev = y;
+      lastGroup = spec.group(v);
+      prev = v;
     }
-    if (undated.length) {
-      out.push({ year: 0, albums: undated, gap: years.length ? 1.4 : 0, mark: 'No year', undated: true });
+    if (none.length) {
+      out.push({ year: 0, albums: none, gap: keys.length ? 1.4 : 0, mark: spec.none, name: spec.none, undated: true });
     }
     return out;
+  }
+
+  function buildAxisBar() {
+    axisBar.textContent = '';
+    for (const [id, spec] of Object.entries(FLOOR_AXES)) {
+      axisBar.appendChild(el('button', {
+        class: 'seg' + (id === axis ? ' is-on' : ''),
+        role: 'tab', 'aria-selected': String(id === axis),
+        text: spec.label, title: 'Walk the room by ' + spec.label.toLowerCase(),
+        onclick: () => setAxis(id),
+      }));
+    }
+  }
+
+  function setAxis(next) {
+    if (next === axis || !FLOOR_AXES[next]) return;
+    axis = next;
+    try { localStorage.setItem(FLOOR_AXIS, axis); } catch { /* private */ }
+    buildAxisBar();
+    stage.setAttribute('aria-label',
+      `Albums by ${FLOOR_AXES[axis].label.toLowerCase()}. Scroll to walk, left and right arrows to walk sideways, ` +
+      'Enter to step into the room, P to walk to what is playing.');
+    // Back to the front of the room: a camera left at row forty of the old
+    // axis lands somewhere arbitrary in the new one.
+    camX = 0;
+    build();
+    buildRail();
+    resize();
+    viewport.scrollTo({ top: 0, behavior: 'instant' });
   }
 
   function build() {
@@ -815,6 +976,7 @@ export function mountFloor(host, viewport) {
   const ro = new ResizeObserver(() => { resize(); place(); });
   ro.observe(viewport);
 
+  buildAxisBar();
   build();
   buildRail();
   resize();
@@ -896,7 +1058,51 @@ export function mountCrate(host, ordered) {
    * other way — the same eleven nodes, redistributed, which costs nothing —
    * and the count says the rest. */
   box.append(rail, meta, hint);
-  host.appendChild(box);
+
+  /* F2: the ones left out.
+   *
+   * Records you have played this week do not go back in the crate — they end
+   * up in a pile beside the turntable, and that pile is a real index: it is
+   * the answer to "what have I actually been listening to" without asking
+   * anybody to count anything. Both numbers are already rolled up per album,
+   * so this is one more reading of what the library holds rather than anything
+   * new to compute.
+   *
+   * Drawn lying flat and overlapping, because that is what a pile looks like.
+   * Absent entirely in a week where nothing was played — an empty pile is a
+   * shelf with a label on it. */
+  const pile = el('div', { class: 'crate-pile', 'aria-label': 'Played this week' });
+  host.append(pile, box);
+
+  const WEEK = 7 * 24 * 3600 * 1000;
+  function paintPile() {
+    const recent = lib.state.albums
+      .filter((al) => al.lastPlayed && Date.now() - al.lastPlayed < WEEK)
+      .sort((a, b) => b.lastPlayed - a.lastPlayed)
+      .slice(0, 8);
+    pile.hidden = !recent.length;
+    if (pile.hidden) { pile.textContent = ''; return; }
+    pile.textContent = '';
+    pile.appendChild(el('span', { class: 'crate-pile-label label', text: 'Left out this week' }));
+    const stack = el('div', { class: 'crate-pile-stack' });
+    recent.forEach((al, i) => {
+      const card = el('button', {
+        class: 'crate-pile-card', title: `${al.title} — ${al.artist}`,
+        'aria-label': `${al.title} by ${al.artist}`,
+        onclick: () => (location.hash = '#/album/' + al.key),
+      }, el('img', { class: 'art-img', alt: '', decoding: 'async' }));
+      // Each one sits a little further along and at its own slight angle, the
+      // way a pile of sleeves actually settles. Derived from the key so a
+      // record keeps its angle between visits rather than twitching.
+      const tilt = ((al.key.charCodeAt(0) + i * 7) % 9) - 4;
+      card.style.setProperty('--i', String(i));
+      card.style.setProperty('--tilt', tilt + 'deg');
+      paintArt(card.querySelector('.art-img'), al.key);
+      stack.appendChild(card);
+    });
+    pile.appendChild(stack);
+  }
+  paintPile();
 
   let albums = ordered ? ordered() : lib.state.albums;
   let at = 0;
@@ -1046,7 +1252,11 @@ export function mountCrate(host, ordered) {
   if (document.activeElement === document.body || !document.activeElement) {
     box.focus({ preventScroll: true });
   }
-  const off = lib.events.on('change', paint);
-  const offArt = lib.events.on('art', paint);
-  return () => { off(); offArt(); box.remove(); cards.clear(); };
+  const repaint = () => { paint(); paintPile(); };
+  const off = lib.events.on('change', repaint);
+  const offArt = lib.events.on('art', repaint);
+  // F2: the pile is a fact about what has been played, so it moves when the
+  // history does rather than only when the library changes.
+  const offHistory = lib.events.on('history', paintPile);
+  return () => { off(); offArt(); offHistory(); box.remove(); pile.remove(); cards.clear(); };
 }

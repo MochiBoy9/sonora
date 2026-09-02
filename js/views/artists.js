@@ -4,12 +4,12 @@ import * as lib from '../library.js';
 import { enter } from '../motion.js';
 import * as player from '../player.js';
 import { artBox, emptyState, menu, playFab, sectionHead, trackMenu, trackRowFactory } from '../ui.js';
-import { cmpText, el, fmtCount, fmtTotal, ico } from '../util.js';
+import { cmpText, el, fmtCount, fmtTotal, ico, norm } from '../util.js';
 import { VirtualGrid } from '../virtual.js';
 import { applyHeroTint } from './album.js';
 import { ARTIST_SORT } from './albums.js';
 import { bandOverview } from './band.js';
-import { albumCard, artistCard, artistOf, decode, notFound, playAll, renderArtistCard, shuffleAll, sortControl } from './shared.js';
+import { albumCard, artistCard, artistOf, decode, notFound, pageFilter, playAll, renderArtistCard, shuffleAll, sortControl } from './shared.js';
 
 /* ------------------------------------------------------------------ ARTISTS */
 
@@ -98,9 +98,36 @@ export function viewArtist(host, key) {
   section.appendChild(list);
   host.appendChild(section);
 
+  /* D6: an artist with forty records is a page you scroll rather than read.
+     The field narrows the wall as well as being the way to find one track. */
   const albumsBlock = el('section', { class: 'block' }, sectionHead('Albums'));
   const grid = el('div', { class: 'grid' });
-  for (const a of artist.albumList) grid.appendChild(albumCard(a));
+  let finder = null;
+  if (artist.albumList.length > 12) {
+    finder = pageFilter({
+      placeholder: `Filter ${artist.name}`,
+      onChange: () => {
+        const v = finder.value;
+        let shown = 0;
+        for (const card of grid.children) {
+          const hit = !v || norm(card.dataset.search || '').includes(v);
+          card.hidden = !hit;
+          if (hit) shown++;
+        }
+        finder.report(shown, grid.children.length);
+      },
+    });
+    albumsBlock.appendChild(el('div', { class: 'toolbar toolbar-thin' }, finder.node));
+  }
+  for (const a of artist.albumList) {
+    const card = albumCard(a);
+    // Matched against what is printed on the card plus the tracks inside it,
+    // so "ocean" finds the record with the song on it, not only the record
+    // called Ocean.
+    card.dataset.search = `${a.title} ${a.artist} ${a.year || ''} ` +
+      a.tracks.map((t) => t.title).join(' ');
+    grid.appendChild(card);
+  }
   albumsBlock.appendChild(grid);
   host.appendChild(albumsBlock);
 
@@ -118,7 +145,7 @@ export function viewArtist(host, key) {
   };
   const off = player.events.on('track', refresh);
   const offState = player.events.on('state', refresh);
-  return () => { off(); offState(); };
+  return () => { off(); offState(); finder?.destroy(); };
 }
 
 /* ------------------------------------------------------------------ PLAYLISTS */

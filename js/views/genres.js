@@ -62,7 +62,7 @@ export function viewGenre(host, key) {
     el('p', { class: 'page-sub', text: `${fmtCount(g.tracks.length, 'track')} · ${fmtCount(g.albums.size, 'album')} · ${fmtTotal(g.duration)}` }));
   host.appendChild(head);
 
-  host.appendChild(el('div', { class: 'toolbar' },
+  const bar = el('div', { class: 'toolbar' },
     el('button', {
       class: 'btn primary', html: ico('play') + '<span>Play</span>',
       onclick: () => playAll(g.tracks, 0, { type: 'genre', key: g.key, label: g.label }),
@@ -71,9 +71,17 @@ export function viewGenre(host, key) {
       class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>',
       onclick: () => playAll(g.tracks, Math.floor(Math.random() * g.tracks.length),
         { type: 'genre', key: g.key, label: g.label }),
-    })));
+    }));
+  host.appendChild(bar);
 
-  return trackTable(host, () => g.tracks, { origin: { type: 'genre', key: g.key, label: g.label } });
+  const table = trackTable(host, () => g.tracks, {
+    origin: { type: 'genre', key: g.key, label: g.label },
+    // D6: a genre can be four hundred tracks, which is exactly the page where
+    // "which of these" is the only question anybody has.
+    filter: g.tracks.length > 24 ? `Filter ${g.label}` : false,
+  });
+  if (table.filter) bar.appendChild(table.filter.node);
+  return () => table.destroy();
 }
 
 /* ------------------------------------------------------------------ L9

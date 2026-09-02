@@ -63,6 +63,21 @@ function commands() {
     { label: 'Play the good bit', icon: 'play', when: playing && !!player.hookOf(player.state.current),
       hint: 'jump to the part that repeats',
       run: () => { if (!player.playHook()) toast('No repeated section found'); } },
+    /* G4: both halves of the switch, named for what each one does — "toggle
+       reference" is a word about the mechanism and not about listening. */
+    { label: 'Compare against your reference', icon: 'target', keys: 'X',
+      when: !!player.referenceTrack() && !player.onReference(),
+      hint: player.referenceTrack() ? player.referenceTrack().title : '',
+      run: () => player.toggleReference() },
+    { label: 'Back from the reference', icon: 'target', keys: 'X',
+      when: player.onReference(),
+      run: () => player.toggleReference() },
+    { label: 'Use this as the reference', icon: 'target', when: playing,
+      hint: 'compare other records against it',
+      run: () => {
+        const t = player.state.current;
+        toast(player.setReference(t) ? `“${t.title}” is the reference` : 'No reference track');
+      } },
 
     { label: 'Sleep in 30 minutes', icon: 'clock', run: () => { player.setSleep(30); toast('Sleeping in 30 minutes'); } },
     { label: 'Stop after this track', icon: 'clock', when: playing,
@@ -89,6 +104,11 @@ function commands() {
     { label: 'Settings', icon: 'settings', run: go('#/settings') },
 
     { label: 'Visualiser', icon: 'expand', keys: 'V', run: () => document.dispatchEvent(new CustomEvent('sonora:stage')) },
+    /* F5: the deck, by name. It is the thing people describe to other people
+       about this app, and it used to be reachable only by knowing a letter. */
+    { label: 'Put it on the turntable', icon: 'album', keys: 'D',
+      hint: 'the arm is the playhead',
+      run: () => document.dispatchEvent(new CustomEvent('sonora:deck')) },
     { label: 'Queue', icon: 'queue', keys: 'Q', run: () => document.dispatchEvent(new CustomEvent('sonora:toggle-queue')) },
     { label: 'Keyboard shortcuts', icon: 'keys', keys: '?', run: () => document.dispatchEvent(new CustomEvent('sonora:shortcuts')) },
     { label: 'Add music', icon: 'plus', run: () => document.dispatchEvent(new CustomEvent('sonora:add-music')) },

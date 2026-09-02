@@ -1437,6 +1437,97 @@ export function sortTracks(list, key, dir = 1) {
  * dropping the row: an album with no year is a real album, and hiding it because
  * a tag is absent would be the library lying about what is in it.
  */
+/* ------------------------------------------------------------------ F1
+ *
+ * The order somebody put the records in.
+ *
+ * Every view in the app is sorted by a rule, and a real shelf is not: it is
+ * sorted by reasons that have no comparator — this next to that because they
+ * were bought the same afternoon. This is the one arrangement Sonora cannot
+ * compute, which is exactly why it has to be stored.
+ *
+ * A list of album keys. Anything not in it is unplaced and sorts behind, so
+ * arranging four records out of four hundred is a sensible thing to do rather
+ * than a commitment to arranging all of them.
+ */
+let arranged = [];
+let arrangedAt = null;             // key -> position, rebuilt when the list moves
+
+export function albumOrder() {
+  if (!arrangedAt) {
+    arrangedAt = new Map();
+    arranged.forEach((key, i) => arrangedAt.set(key, i));
+  }
+  return arrangedAt;
+}
+
+export const isArranged = () => arranged.length > 0;
+
+/** Puts one record before another, or at the end when `beforeKey` is null. */
+export async function arrangeAlbum(key, beforeKey) {
+  if (!key || key === beforeKey) return;
+  /* The first drag is what turns a computed order into a placed one. Seeding
+     from what is currently on screen means the record lands where it was
+     dropped rather than at the front of an otherwise empty arrangement. */
+  if (!arranged.length) arranged = state.albums.map((a) => a.key);
+  arranged = arranged.filter((k) => k !== key);
+  const at = beforeKey ? arranged.indexOf(beforeKey) : -1;
+  if (at >= 0) arranged.splice(at, 0, key); else arranged.push(key);
+  arrangedAt = null;
+  await db.setKV('albumOrder', arranged).catch(() => {});
+  events.emit('change');
+}
+
+/** Throws the arrangement away and lets the rules order the wall again. */
+export async function clearArrangement() {
+  if (!arranged.length) return;
+  arranged = [];
+  arrangedAt = null;
+  await db.setKV('albumOrder', []).catch(() => {});
+  events.emit('change');
+}
+
+/* F3: a wall arranged by colour.
+ *
+ * The importer already samples an accent out of every cover and stores it, and
+ * it has only ever been used to tint a header. Hue is the axis that makes a
+ * collection look like a collection rather than a database — it is the one
+ * arrangement a record shop would actually recognise.
+ *
+ * Sorted by hue, then by how saturated it is, so the greys and the near-blacks
+ * gather at one end instead of being scattered through the spectrum at
+ * whatever arbitrary hue a nearly-colourless pixel computes to. An album with
+ * no cover has no colour and sorts last: it is not "red", it is absent.
+ */
+export function hueOf(album) {
+  const rgb = album && accentFor(album.key);
+  if (!rgb) return null;
+  const [r, g, b] = rgb.map((v) => v / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const d = max - min;
+  const light = (max + min) / 2;
+  if (d < 0.02) return { h: 0, s: 0, l: light };
+  let h = max === r ? ((g - b) / d + (g < b ? 6 : 0))
+        : max === g ? (b - r) / d + 2
+        : (r - g) / d + 4;
+  return { h: h * 60, s: d / (1 - Math.abs(2 * light - 1)), l: light };
+}
+
+function cmpColour(a, b) {
+  const x = hueOf(a), y = hueOf(b);
+  if (!x && !y) return 0;
+  if (!x) return 1;                       // no cover: last, in both directions
+  if (!y) return -1;
+  // Near-grey has no meaningful hue; grouped by lightness at the far end
+  // rather than dropped into the middle of the rainbow.
+  const grey = 0.14;
+  if (x.s < grey || y.s < grey) {
+    if (x.s < grey && y.s < grey) return x.l - y.l;
+    return x.s < grey ? 1 : -1;
+  }
+  return x.h - y.h || y.s - x.s;
+}
+
 export function sortAlbums(list, key, dir = 1) {
   const by = {
     artist: (a, b) => cmpText(a.artist, b.artist) || (a.year - b.year) || cmpText(a.title, b.title),
@@ -1449,7 +1540,22 @@ export function sortAlbums(list, key, dir = 1) {
     tracks: (a, b) => a.tracks.length - b.tracks.length,
     plays:  (a, b) => (a.plays || 0) - (b.plays || 0),
     played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
+    colour: cmpColour,
   }[key] || ((a, b) => cmpText(a.artist, b.artist));
+  /* F1: an order somebody put the records in by hand wins over every rule.
+   *
+   * A real shelf is sorted by things you cannot express — this next to that
+   * because of who you were with. Anything the listener has not placed keeps
+   * its computed order and follows behind, so arranging four records does not
+   * throw the other four hundred into an arbitrary heap. */
+  if (key === 'arranged') {
+    const at = albumOrder();
+    return list.slice().sort((a, b) => {
+      const x = at.has(a.key) ? at.get(a.key) : Infinity;
+      const y = at.has(b.key) ? at.get(b.key) : Infinity;
+      return (x - y) || cmpText(a.artist, b.artist) || cmpText(a.title, b.title);
+    });
+  }
   return list.slice().sort((a, b) => by(a, b) * dir || cmpText(a.title, b.title));
 }
 
@@ -1532,6 +1638,37 @@ const FILTERS = [
      ever true for tracks that have actually been analysed, so this finds what
      is known rather than implying the rest are clean. */
   [/^suspect$/, (t) => t.truncated === true],
+];
+
+/* D3: the same filters, written down.
+ *
+ * Everything above is typed, and nothing anywhere in the app says any of it
+ * exists — which makes it a feature for whoever read the source. This table is
+ * what the search page offers as chips: the token to insert, what it does in
+ * words, and whether it takes an argument (so the page knows to put the caret
+ * inside rather than after it).
+ *
+ * Deliberately not every filter. The comparisons come in pairs and offering
+ * ten variants of "before/after" turns a hint into a manual; one of each shape
+ * is enough to teach the shape, and the shape is the thing worth learning.
+ */
+export const FILTER_HINTS = [
+  { token: 'fav', label: 'Favourites', note: 'marked with a star' },
+  { token: 'unplayed', label: 'Never played', note: 'no play count' },
+  { token: 'rated', label: 'Rated', note: 'any number of stars' },
+  { token: 'rating>=4', label: 'Four stars or more', arg: true },
+  { token: 'noted', label: 'Has a note', note: 'a comment in the file' },
+  { token: 'lossless', label: 'Lossless', note: 'FLAC, WAV, ALAC and friends' },
+  { token: 'suspect', label: 'Suspected transcode', note: 'measured, not guessed' },
+  { token: 'guessed', label: 'Read from the folder', note: 'nothing in the file' },
+  { token: 'edited', label: 'Corrected by you' },
+  { token: 'reissue', label: 'Reissues', note: 'pressed later than recorded' },
+  { token: 'after:1990', label: 'After a year', arg: true },
+  { token: 'dr>14', label: 'Wide dynamic range', arg: true },
+  { token: 'bpm>120', label: 'Faster than', arg: true },
+  { token: '>6min', label: 'Longer than', arg: true },
+  { token: 'format:flac', label: 'One format', arg: true },
+  { token: 'note:vinyl', label: 'Search the notes', arg: true },
 ];
 
 /** Splits a query into the filters it names and the words it does not. */
@@ -2691,7 +2828,7 @@ export const favouriteTracks = () =>
 
 /** Paints the stored library first, then reconnects to disk in the background. */
 export async function init() {
-  const [tracks, roots, playlists, recent, faves, sn, own, savedRuns, savedFolders] = await Promise.all([
+  const [tracks, roots, playlists, recent, faves, sn, own, savedRuns, savedFolders, savedOrder] = await Promise.all([
     db.getAllTracks().catch(() => []),
     db.getRoots().catch(() => []),
     db.getPlaylists().catch(() => []),
@@ -2701,6 +2838,7 @@ export async function init() {
     db.getKV('ownArt').catch(() => null),
     db.getKV('importRuns').catch(() => null),
     db.getKV('playlistFolders').catch(() => null),
+    db.getKV('albumOrder').catch(() => null),
   ]);
 
   serial = typeof sn === 'string' && sn ? sn : makeSerial();
@@ -2730,6 +2868,13 @@ export async function init() {
   }
   if (Array.isArray(savedRuns)) {
     runs = savedRuns.filter((r) => r && typeof r.at === 'number').slice(0, RUN_LIMIT);
+  }
+  // F1: the order the records were put in. Kept as written even where a key no
+  // longer names an album — a folder switched off today is switched on again
+  // tomorrow, and the record should go back where it was rather than to the end.
+  if (Array.isArray(savedOrder)) {
+    arranged = savedOrder.filter((k) => typeof k === 'string');
+    arrangedAt = null;
   }
 
   reindex();

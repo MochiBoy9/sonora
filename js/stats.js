@@ -328,6 +328,145 @@ export function byMode(mode = 'artist', { limit = 60, from = null, to = null } =
   return out.slice(0, limit);
 }
 
+/* ------------------------------------------------------------------ habits
+ *
+ * A3: what the day log can notice about a person.
+ *
+ * With a date on every credit the app can see shape rather than just size —
+ * the record that is only ever Sunday morning, the fortnight one artist took
+ * over completely, the day of the week that is actually the listening day.
+ *
+ * Two rules govern everything below. It is an observation, never a
+ * recommendation: "you mostly play this on Sundays" describes the listener to
+ * themselves, which is a different act from selling them something, and the
+ * moment it becomes "so here's more like it" it has changed sides. And it
+ * refuses to speak from too little: every threshold here exists so that a
+ * fortnight of use does not get told what its habits are.
+ */
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** Seconds per artist per weekday over a window. */
+function artistWeekdays(from, to) {
+  const by = new Map();               // artistKey -> { label, week: [7], total }
+  for (const [day, bucket] of days) {
+    if (from && day < from) continue;
+    if (to && day > to) continue;
+    const [y, m, d] = day.split('-').map(Number);
+    const w = new Date(y, m - 1, d).getDay();
+    for (const [id, secs] of bucket) {
+      const t = lib.getTrack(id);
+      if (!t) continue;
+      const key = t.artistKey || norm(t.artist);
+      if (!key) continue;
+      let row = by.get(key);
+      if (!row) by.set(key, row = { key, label: t.albumArtist || t.artist || 'Unknown Artist', week: new Array(7).fill(0), total: 0 });
+      row.week[w] += secs;
+      row.total += secs;
+    }
+  }
+  return by;
+}
+
+/**
+ * The observations worth making, most interesting first.
+ *
+ * Returns `[{ text, href }]`. An empty array is the normal answer for a new
+ * library and is not a failure — nothing here is worth saying until there is
+ * enough of a history for it to be true.
+ */
+export function habits({ minDays = 21 } = {}) {
+  if (days.size < minDays) return [];
+  const from = daysAgo(180);
+  const to = dayKey();
+  const out = [];
+
+  /* One artist, one weekday. The interesting claim, and the one that needs
+     the most guarding: it takes at least an hour of that artist spread over at
+     least four separate days, so a single long Sunday cannot manufacture it. */
+  const artists = artistWeekdays(from, to);
+  for (const row of artists.values()) {
+    if (row.total < 3600) continue;
+    let best = 0;
+    for (let i = 1; i < 7; i++) if (row.week[i] > row.week[best]) best = i;
+    const share = row.week[best] / row.total;
+    if (share < 0.45) continue;
+    const spread = daysWithArtist(row.key, from, to);
+    if (spread < 4) continue;
+    out.push({
+      score: share * Math.log1p(row.total / 3600),
+      text: `You mostly play ${row.label} on a ${WEEKDAYS[best]}.`,
+      href: '#/artist/' + encodeURIComponent(row.key),
+    });
+  }
+
+  /* A fortnight something took over. Read over the last six months in
+     two-week steps rather than every offset — the claim is "there was a
+     fortnight", not "there was this exact fortnight", and fourteen overlapping
+     versions of the same observation is not fourteen observations. */
+  const run = dominantRun(from, to);
+  if (run) out.push(run);
+
+  /* And the plainest one: which day of the week this actually happens on.
+     Last, because it is true of nearly everybody and therefore the least
+     surprising thing here. */
+  const week = byWeekday(from, to);
+  const total = week.reduce((n, w) => n + w.seconds, 0);
+  if (total > 6 * 3600) {
+    let best = 0;
+    for (let i = 1; i < 7; i++) if (week[i].seconds > week[best].seconds) best = i;
+    const share = week[best].seconds / total;
+    if (share > 0.24) {
+      out.push({
+        score: share,
+        text: `${WEEKDAYS[best]} is your listening day — about ${Math.round(share * 100)}% of the last six months.`,
+        href: '#/circles',
+      });
+    }
+  }
+
+  out.sort((a, b) => b.score - a.score);
+  return out.map(({ text, href }) => ({ text, href }));
+}
+
+/** How many separate days an artist turned up on, which is what makes it a habit. */
+function daysWithArtist(key, from, to) {
+  let n = 0;
+  for (const [day, bucket] of days) {
+    if (from && day < from) continue;
+    if (to && day > to) continue;
+    for (const id of bucket.keys()) {
+      const t = lib.getTrack(id);
+      if (t && (t.artistKey || norm(t.artist)) === key) { n++; break; }
+    }
+  }
+  return n;
+}
+
+/** The fortnight one artist held the most of, if any held enough to mention. */
+function dominantRun(from, to) {
+  const all = byDay(from, to);
+  if (all.length < 21) return null;
+  let best = null;
+  for (let i = 0; i + 14 <= all.length; i += 7) {
+    const slice = all.slice(i, i + 14);
+    const rows = byMode('artist', { limit: 3, from: slice[0].day, to: slice[slice.length - 1].day });
+    const top = rows[0];
+    if (!top || top.seconds < 2 * 3600 || top.share < 0.4) continue;
+    if (!best || top.share > best.share) {
+      best = { share: top.share, label: top.label, key: top.key, day: slice[0].day };
+    }
+  }
+  if (!best) return null;
+  const [y, m] = best.day.split('-').map(Number);
+  const month = new Date(y, m - 1, 1).toLocaleString(undefined, { month: 'long' });
+  return {
+    score: best.share + 0.2,        // a run is more interesting than a weekday
+    text: `For a fortnight in ${month} it was mostly ${best.label} — ${Math.round(best.share * 100)}% of everything you played.`,
+    href: '#/artist/' + encodeURIComponent(best.key),
+  };
+}
+
 /** Everything this listener has ever been credited for, wiped. */
 export async function reset() {
   totals = new Map();

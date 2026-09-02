@@ -413,6 +413,25 @@ export function mountSound(host) {
     return row;
   }
 
+  /* G5: the two gain-reduction meters, and the frame loop that drives them. */
+  const grMeters = [];
+
+  function reductionRow() {
+    const make = (name, pick) => {
+      const fill = el('i', { class: 'gr-fill' });
+      const bar = el('span', {
+        class: 'gr', role: 'meter', 'aria-label': name + ' gain reduction',
+        'aria-valuemin': '-12', 'aria-valuemax': '0', 'aria-valuenow': '0',
+      }, fill, el('i', { class: 'gr-ticks', 'aria-hidden': 'true' }));
+      const val = el('span', { class: 'rack-val gr-val', text: '0.0' });
+      grMeters.push({ pick, fill, bar, val, at: 0 });
+      return el('div', { class: 'rack-row gr-row' },
+        el('span', { class: 'rack-name', text: name, title: `How much the ${name.toLowerCase()} is pulling the level down` }),
+        bar, val);
+    };
+    return el('div', { class: 'gr-pair' }, make('Compressor', 'comp'), make('Limiter', 'limit'));
+  }
+
   function toggleRow(name, get, set, hint) {
     const btn = el('button', {
       class: 'preset', text: 'Off',
@@ -538,7 +557,15 @@ export function mountSound(host) {
       get: () => Math.round(rack.state.comp.release * 1000), set: (v) => rack.setComp({ release: v / 1000 }),
       format: (v) => v + ' ms' }),
     toggleRow('Limiter', () => rack.state.limiter, (v) => rack.set({ limiter: v }),
-      'A brickwall at −1.5 dB, so a boost cannot clip'));
+      'A brickwall at −1.5 dB, so a boost cannot clip'),
+    /* G5: what the two of them are actually doing.
+     *
+     * Both meters read downward from zero, because gain reduction is negative
+     * and a bar that grows upward for "quieter" is a bar that lies about its
+     * own direction. Twelve decibels of scale: past that the setting is wrong
+     * rather than interesting, and a meter that never reaches its end is a
+     * meter with no resolution where the work happens. */
+    reductionRow());
 
   const spaceStrip = el('div', { class: 'preset-strip' });
   for (const [id, spec] of Object.entries(rack.SPACES)) {
@@ -854,6 +881,25 @@ export function mountSound(host) {
     const target = live ? Math.min(1, player.analysis().level * 1.6) : 0;
     sig += (target - sig) * Math.min(1, dt / (target > sig ? 60 : 260));
     grid.style.setProperty('--sig', sig.toFixed(3));
+
+    /* G5. Read on the same frame as everything else, so the meters cost one
+       call rather than one each. Fast down, slow back up: a gain-reduction
+       meter has to catch the transient that caused the reduction, and a
+       symmetric smoothing either misses it or leaves the needle hanging. */
+    if (grMeters.length) {
+      const r = rack.reduction();
+      for (const m of grMeters) {
+        const on = m.pick === 'comp' ? r.compOn : r.limitOn;
+        const want = on ? Math.max(-12, Math.min(0, r[m.pick] || 0)) : 0;
+        m.at += (want - m.at) * Math.min(1, dt / (want < m.at ? 45 : 320));
+        const pct = Math.min(1, Math.abs(m.at) / 12);
+        m.fill.style.transform = `scaleX(${pct.toFixed(4)})`;
+        m.bar.classList.toggle('is-idle', !on);
+        m.bar.setAttribute('aria-valuenow', m.at.toFixed(1));
+        const text = on ? (m.at > -0.05 ? '0.0' : m.at.toFixed(1)) : '—';
+        if (m.val.textContent !== text) m.val.textContent = text;
+      }
+    }
   });
   offs.push(stopLamp);
 

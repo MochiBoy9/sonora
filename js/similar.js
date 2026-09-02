@@ -35,7 +35,9 @@ const AXES = [
   { key: 'bpm',      span: 120,  weight: 1,    label: 'tempo' },
   { key: 'centroid', span: 4200, weight: 1,    label: 'brightness' },
   { key: 'dr',       span: 14,   weight: 0.8,  label: 'dynamics' },
-  { key: 'shelfHz',  span: 12000, weight: 0.25, label: 'the way it was cut' },
+  // "mastering" rather than "the way it was cut", because the labels are read
+  // in the template "similar X and Y" and only one of those two survives it.
+  { key: 'shelfHz',  span: 12000, weight: 0.25, label: 'mastering' },
 ];
 
 /** Averages an album's measured tracks onto one point. Null where nothing was. */
@@ -74,10 +76,13 @@ function nearness(a, b) {
     const d = Math.min(1, Math.abs(a[key] - b[key]) / span);
     total += (1 - d) * weight;
     used += weight;
-    if (d < 0.12) agreed.push(label);
+    if (d < 0.12) agreed.push({ label, d });
   }
   if (!used) return null;
-  return { score: total / used, agreed };
+  // Closest first, so the printed reason names what actually carried the
+  // verdict rather than whatever happened to be first in the table.
+  agreed.sort((x, y) => x.d - y.d);
+  return { score: total / used, agreed: agreed.map((x) => x.label) };
 }
 
 /* Cached per album key and thrown away whenever the library changes, which is
@@ -132,10 +137,17 @@ function sharesGenre(a, b) {
   return b.tracks.some((t) => mine.has((t.genre || '').toLowerCase()));
 }
 
-/** The printed reason, in the terms the axes are named in. */
+/**
+ * The printed reason, in the terms the axes are named in.
+ *
+ * Two at most. Four measurements agreeing is a better match than two, and
+ * "similar tempo, brightness, dynamics and the way it was cut" is a sentence
+ * nobody reads to the end — the score already carries how close it is, so the
+ * words only have to say what kind of close.
+ */
 export function reasonFor(hit) {
-  const list = hit && hit.agreed ? hit.agreed : [];
+  const list = (hit && hit.agreed ? hit.agreed : []).slice(0, 2);
   if (!list.length) return 'measures out nearby';
   if (list.length === 1) return 'similar ' + list[0];
-  return 'similar ' + list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1];
+  return `similar ${list[0]} and ${list[1]}`;
 }

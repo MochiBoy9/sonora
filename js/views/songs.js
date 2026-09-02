@@ -3,7 +3,7 @@
 import * as lib from '../library.js';
 import { enter } from '../motion.js';
 import { el, fmtCount, fmtTotal, ico } from '../util.js';
-import { columnHeader, decode, letterRail, playAll, shuffleAll, trackTable } from './shared.js';
+import { columnHeader, decode, letterRail, pageFilter, playAll, shuffleAll, trackTable } from './shared.js';
 
 /* ------------------------------------------------------------------ SONGS */
 
@@ -16,11 +16,16 @@ export function viewSongs(host) {
     el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Songs' }),
     el('p', { class: 'page-sub', text: `${fmtCount(all.length, 'track')} · ${fmtTotal(all.reduce((s, t) => s + (t.duration || 0), 0))}` }));
-  const get = () => lib.sortTracks(lib.allTracks(), songSort.key, songSort.dir);
+  /* D6: the list, narrowed to whatever is typed in the toolbar. Play all and
+     Shuffle read the same function, so they act on what is on screen — which
+     is the only reading that makes sense once a filter is showing. */
+  const filter = pageFilter({ onChange: () => { table.update(); syncRail(); } });
+  const get = () => lib.sortTracks(lib.allTracks().filter(filter.keep), songSort.key, songSort.dir);
 
   const bar = el('div', { class: 'toolbar' },
     el('button', { class: 'btn primary', html: ico('play') + '<span>Play all</span>', onclick: () => playAll(get(), 0, { type: 'all', label: 'All songs' }) }),
-    el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(get(), { type: 'all', label: 'All songs' }) }));
+    el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(get(), { type: 'all', label: 'All songs' }) }),
+    filter.node);
 
   host.appendChild(head);
   host.appendChild(bar);
@@ -52,6 +57,7 @@ export function viewSongs(host) {
   const frame = host.parentElement || host;
   frame.appendChild(rail.node);
   const syncRail = () => {
+    filter.report(table.tracks.length, lib.trackCount());
     rail.node.hidden = !LETTERED.has(songSort.key) || table.tracks.length < 40;
     if (!rail.node.hidden) rail.measure();
   };
@@ -60,5 +66,5 @@ export function viewSongs(host) {
   enter([head, bar], { y: 10 });
 
   const off = lib.events.on('change', () => { table.update(); syncRail(); });
-  return () => { off(); rail.node.remove(); table.destroy(); };
+  return () => { off(); filter.destroy(); rail.node.remove(); table.destroy(); };
 }

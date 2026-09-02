@@ -6,6 +6,7 @@ import * as player from './player.js';
 import { animate, ease, enter, spring, settled } from './motion.js';
 import * as rules from './rules.js';
 import * as drag from './drag.js';
+import * as rack from './audio.js';
 
 /* ------------------------------------------------------------------ artwork */
 
@@ -273,7 +274,16 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
        so a table of five hundred rows does not become three thousand. */
     if (columns.includes('rating')) html += ratingMarkup;
     if (columns.includes('duration')) html += '<div class="trow-time"></div>';
+    /* E3: the good bit, on the row.
+     *
+     * The analysis finds the most-repeated section of every track it has
+     * played, with a confidence figure, and until now ⌘K and typing was the
+     * only door. Hidden on every row whose track has no hook — which is every
+     * row until it has been listened to once, and every through-composed piece
+     * for ever — because a control that does nothing on half a library is
+     * worse than one that is sometimes not there. */
     html += '<div class="trow-actions">' +
+      `<button class="icon-btn ghost trow-hook" aria-label="Play the good bit" title="Play the part that repeats" hidden>${ico('sparkle')}</button>` +
       `<button class="icon-btn ghost trow-fav" aria-label="Favourite" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>` +
       `<button class="icon-btn ghost trow-more" aria-label="More">${ico('more')}</button></div>`;
     row.innerHTML = html;
@@ -285,6 +295,11 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
     row.addEventListener('click', (e) => {
       if (e.target.closest('.trow-play')) return onPlay?.(parseInt(row.dataset.index, 10));
       if (e.target.closest('.trow-fav')) return toggleRowFavourite(row);
+      if (e.target.closest('.trow-hook')) {
+        const t = lib.getTrack(row.dataset.id);
+        if (t && !player.playHook(t)) toast('No repeated section found');
+        return;
+      }
       const star = e.target.closest('.rating-star');
       if (star) {
         const t = lib.getTrack(row.dataset.id);
@@ -396,6 +411,13 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
       played.classList.toggle('is-none', !track.lastPlayed);
     }
 
+    const hookBtn = row.querySelector('.trow-hook');
+    if (hookBtn) {
+      const hook = player.hookOf(track);
+      hookBtn.hidden = !hook;
+      if (hook) hookBtn.title = `The part that repeats — ${fmtTime(hook.at)}`;
+    }
+
     const rating = row.querySelector('.trow-rating');
     if (rating) paintRating(rating, track.rating || 0);
 
@@ -454,6 +476,82 @@ export function wireRating(strip, get, set) {
     e.stopPropagation();
     set(next);
   });
+}
+
+
+/* ------------------------------------------------------------------ racks */
+
+/* G3/G6: what each binding scope is called, and how to tell whether the track
+   currently playing falls under one. Album and artist were the only two; the
+   three that people actually reach for — one track, one genre, one folder —
+   and the one that needs no thought at all, the output device, are the rest. */
+const BIND_LABELS = {
+  track:  { noun: 'this track', of: (t) => t.id },
+  album:  { noun: 'this album', of: (t) => t.albumKey },
+  artist: { noun: 'this artist', of: (t) => t.artistKey },
+  folder: { noun: 'this folder', of: (t) => (t.rootId || '') + '/' + String(t.path || '').replace(/[^/]*$/, '') },
+  genre:  { noun: 'this genre', of: (t) => (t.genre || '').trim().toLowerCase() },
+  output: { noun: 'this output', of: () => rack.outputKey() },
+};
+
+/**
+ * Picks the rack something should arrive with.
+ *
+ * A dialog rather than a submenu because the list is long — eleven presets
+ * plus however many racks you have saved — and because the row that matters
+ * most is the one at the top saying there is no rack, which a submenu buries.
+ */
+export async function rackPicker(scope, key, label) {
+  const spec = BIND_LABELS[scope] || BIND_LABELS.album;
+  const current = rack.bindingOf(scope, key);
+  const saved = await rack.savedRacks();
+  const list = el('div', { class: 'rack-pick' });
+
+  const row = (id, name, note) => {
+    const on = (id || null) === (current || null);
+    return el('button', {
+      class: 'rack-pick-row' + (on ? ' is-on' : ''),
+      onclick: async () => {
+        await rack.bindTo(scope, key, id);
+        closeDialog();
+        /* Takes effect on the next track that asks for it. Saying so is the
+           honest thing: the change is real but you will not hear it until the
+           record comes round, and silence here reads as a control that did
+           nothing. */
+        const now = player.state.current;
+        const mine = !!now && spec.of(now) === key;
+        if (mine) await rack.followTrack(now);
+        toast(id
+          ? (mine ? `“${label}” is on the ${name} rack` : `“${label}” will arrive on the ${name} rack`)
+          : `“${label}” goes back to your rack`);
+      },
+    },
+      el('span', { class: 'rack-pick-name', text: name }),
+      note ? el('span', { class: 'rack-pick-note', text: note }) : null,
+      el('span', { class: 'rack-pick-mark', html: on ? ico('star-fill') : '' }));
+  };
+
+  list.appendChild(row(null, 'Your rack', 'whatever the Sound page says'));
+  if (saved.length) {
+    list.appendChild(el('p', { class: 'rack-pick-head', text: 'Saved' }));
+    for (const r of saved) list.appendChild(row(r.name, r.name));
+  }
+  list.appendChild(el('p', { class: 'rack-pick-head', text: 'Presets' }));
+  for (const p of rack.PRESETS) list.appendChild(row(p.id, p.label));
+
+  let closeDialog = () => {};
+  const d = dialog({
+    title: `A rack for ${spec.noun}`,
+    body: el('div', {},
+      el('p', { class: 'dialog-note', text:
+        `Sonora puts this chain in circuit whenever ${spec.noun} plays, ` +
+        'and takes it out again afterwards. Your own rack is never overwritten. ' +
+        'The most specific binding wins: a track beats its album, which beats its artist.' }),
+      list),
+    width: 460,
+    actions: [{ label: 'Done' }],
+  });
+  closeDialog = () => d.close();
 }
 
 /* ------------------------------------------------------------------ menus */
@@ -527,6 +625,95 @@ addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 addEventListener('resize', closeMenu);
 
 /** Standard menu for a set of tracks. */
+/**
+ * E2: puts a station on, from one record.
+ *
+ * Lives here rather than in `radio.js` so that the menu, the album page and
+ * anything else that wants it all start the same thing the same way — and so
+ * the import stays one-directional: ui knows about radio, radio does not know
+ * about ui.
+ */
+export async function startStation(albumKey) {
+  const { station } = await import('./radio.js');
+  const al = lib.state.albumBy.get(albumKey);
+  const tracks = station(albumKey);
+  if (!tracks.length) return toast('Nothing near this one yet — play a few records first');
+  player.playTracks(tracks, 0, { type: 'radio', key: albumKey, label: al ? `${al.title} station` : 'Station' });
+  toast(al ? `Station from “${al.title}”` : 'Station on');
+}
+
+/**
+ * G2: measures a run of tracks so the levelling actually has something to
+ * level with, and says how even it was to begin with.
+ *
+ * A dialog rather than a toast, because it is minutes of decoding on a long
+ * list and something that cannot be watched or stopped is something people
+ * will not start. It says the spread first — "these are already within 1.4 dB
+ * of each other" is often the whole answer, and the honest response to it is
+ * to not do the work.
+ */
+export function levelMatchDialog(tracks, label) {
+  const list = tracks.filter(Boolean);
+  if (!list.length) return toast('Nothing to level');
+  const before = player.levelCoverage(list);
+
+  const note = el('p', { class: 'dialog-note' });
+  const fill = el('i', { class: 'progress-fill' });
+  const bar = el('div', {
+    class: 'progress', hidden: true, role: 'progressbar',
+    'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': 'Measuring',
+  }, fill);
+  const count = el('p', { class: 'muted', hidden: true });
+
+  const say = () => {
+    note.textContent = before.missing
+      ? `${before.known} of ${before.total} tracks have a level Sonora can read` +
+        (before.spreadDb ? `, and those span ${before.spreadDb} dB.` : '.') +
+        ` Measuring the other ${before.missing} takes a few seconds each and happens once.`
+      : `Every track here already has a level, spanning ${before.spreadDb} dB. There is nothing to measure.`;
+  };
+  say();
+
+  let job = null;
+  let close = () => {};
+  const d = dialog({
+    title: `Level-match ${label ? `“${label}”` : 'this list'}`,
+    width: 460,
+    body: el('div', {}, note, bar, count),
+    actions: [
+      { label: before.missing ? 'Not now' : 'Close', onSelect: () => job?.cancel() },
+      before.missing ? {
+        label: `Measure ${before.missing}`, primary: true,
+        /* Returning false is how this dialog's actions say "stay open" — the
+           work takes minutes and the progress is the reason to keep it up. */
+        onSelect: () => {
+          if (job) return false;
+          const btn = d.panel.querySelector('.dialog-actions .btn.primary');
+          if (btn) { btn.disabled = true; btn.textContent = 'Measuring…'; }
+          bar.hidden = false;
+          count.hidden = false;
+          job = player.levelMatch(list, {
+            onProgress: (n, total) => {
+              count.textContent = `${n} of ${total}`;
+              fill.style.transform = `scaleX(${(n / total).toFixed(3)})`;
+              bar.setAttribute('aria-valuenow', String(Math.round((n / total) * 100)));
+            },
+          });
+          job.done.then((r) => {
+            close();
+            toast(r.stopped
+              ? `Stopped after ${r.measured} — what was measured is kept`
+              : `Levelled ${r.known} of ${r.total}${r.spreadDb ? ` · they spanned ${r.spreadDb} dB` : ''}`);
+          });
+          return false;
+        },
+      } : null,
+    ].filter(Boolean),
+  });
+  close = () => d.close();
+  return d;
+}
+
 export function trackMenu(tracks, opts = {}) {
   const first = tracks[0];
   // A menu over several tracks offers the edit that changes something: if any
@@ -549,8 +736,52 @@ export function trackMenu(tracks, opts = {}) {
       },
     },
     { label: 'Add to playlist…', icon: 'plus', onSelect: () => addToPlaylistDialog(tracks) },
+    /* G2: only where there is a run long enough for the unevenness to be the
+       problem. Over three tracks it is not a playlist, it is three tracks. */
+    tracks.length > 3 && {
+      label: 'Level-match these…', icon: 'sliders',
+      hint: `${tracks.length}`,
+      onSelect: () => levelMatchDialog(tracks, opts.origin && opts.origin.label),
+    },
+    /* E2: a station from here. Seeded from the record this track is on, which
+       is the album the "Near this one" shelf is already computed for — so this
+       costs nothing new and is the same measure, played rather than looked
+       at. */
+    first && tracks.length === 1 && {
+      label: 'Start a station from this', icon: 'circles',
+      hint: 'this record, then things near it',
+      onSelect: () => startStation(first.albumKey),
+    },
     first && { label: 'Go to album', icon: 'album', onSelect: () => (location.hash = '#/album/' + first.albumKey) },
     first && { label: 'Go to artist', icon: 'artist', onSelect: () => (location.hash = '#/artist/' + first.artistKey) },
+    /* G3: the two bindings people actually want, on the row where the track is.
+       One badly mastered single on an otherwise fine record is the case that
+       makes anybody want this at all, and a genre is where most listeners
+       would put a rack if you asked them. */
+    first && tracks.length === 1 && { separator: true },
+    /* G4: the record you measure other records against. One per library —
+       a "reference" you have four of is a playlist. */
+    first && tracks.length === 1 && {
+      label: player.referenceTrack() && player.referenceTrack().id === first.id
+        ? 'Stop using this as the reference'
+        : 'Use as the reference', 
+      icon: 'target',
+      hint: 'compare against it from anywhere',
+      onSelect: () => {
+        const on = player.setReference(first);
+        toast(on ? `“${first.title}” is the reference` : 'No reference track');
+      },
+    },
+    first && tracks.length === 1 && {
+      label: 'Rack for this track…', icon: 'sliders',
+      hint: rack.bindingOf('track', first.id) || '',
+      onSelect: () => rackPicker('track', first.id, first.title),
+    },
+    first && tracks.length === 1 && (first.genre || '').trim() && {
+      label: `Rack for ${first.genre}…`, icon: 'sliders',
+      hint: rack.bindingOf('genre', first.genre.trim().toLowerCase()) || '',
+      onSelect: () => rackPicker('genre', first.genre.trim().toLowerCase(), first.genre),
+    },
     opts.onRemove && { separator: true },
     opts.onRemove && { label: opts.removeLabel || 'Remove', icon: 'trash', danger: true, onSelect: opts.onRemove },
     /* Only offered where the analysis actually found a repeat. On anything

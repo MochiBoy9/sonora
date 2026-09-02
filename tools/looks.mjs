@@ -340,6 +340,17 @@ async function sweep(scheme, width, height) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 
   await page.addInitScript(() => { delete window.showDirectoryPicker; delete window.showOpenFilePicker; });
+  /* The clock, pinned to an afternoon.
+   *
+   * Home greets by hour and the intro picks its line the same way, so a sweep
+   * that wrote its goldens in the morning disagrees with every sweep run after
+   * noon — for a reason that has nothing to do with what changed. Only
+   * `getHours` is pinned, and nothing else in the app reads it: the day log
+   * keys off the date, which stays real. */
+  await page.addInitScript(() => {
+    const real = Date.prototype.getHours;
+    Date.prototype.getHours = function () { return this === undefined ? real.call(this) : 14; };
+  });
   await page.goto('http://127.0.0.1:8123/index.html', { waitUntil: 'networkidle' });
   await page.waitForSelector('body.is-ready', { timeout: 30000 });
   await page.waitForSelector('#intro', { state: 'detached', timeout: 30000 });
@@ -369,6 +380,17 @@ async function sweep(scheme, width, height) {
   await page.waitForFunction(() => !document.querySelector('.playerbar')?.classList.contains('is-playing'),
                              null, { timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(400);
+
+  /* Any toast still on screen is swept away before the sweep starts.
+   *
+   * A toast is transient by definition, so a golden that happens to contain
+   * one is a golden that depends on how long the run took to get here — and
+   * the day somebody adds a toast with a longer duration, thirty photographs
+   * disagree with the goldens for a reason that has nothing to do with what
+   * any of them are of. Observed: the import report's "needs attention" toast
+   * outlived the setup and printed itself across four pages. */
+  await page.evaluate(() => { for (const t of document.querySelectorAll('.toast')) t.remove(); });
+  await page.waitForTimeout(120);
 
   const tag = `${scheme}-${width}`;
 

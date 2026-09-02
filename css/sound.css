@@ -515,3 +515,53 @@
   font-size: calc(11px * var(--scale));
   pointer-events: none;
 }
+
+/* F6: the "show me" beside the drift setting.
+   The row already spends all three of its columns on the label, the slider and
+   its readout, so this takes a line of its own under them rather than a fourth
+   column that would push the slider into nothing. */
+.look-row .look-demo {
+  grid-column: 1 / -1;
+  justify-self: end;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+/* G5: gain reduction, as two meters.
+ *
+ * They read right-to-left from zero, because reduction is negative and a bar
+ * that grows rightward for "quieter" points the wrong way. The ticks are every
+ * three decibels, drawn as a repeating gradient so the scale costs no
+ * elements. */
+.gr-pair { display: contents; }
+.gr-row .gr {
+  position: relative;
+  height: 8px;
+  min-width: 0;
+  background: rgb(var(--bg-rgb) / .65);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  overflow: hidden;
+  border-radius: 1px;
+}
+.gr-fill {
+  position: absolute;
+  inset: 0;
+  /* Anchored at the right, so the bar eats leftward into the meter — the
+     direction the level is actually going. */
+  transform-origin: 100% 50%;
+  transform: scaleX(0);
+  background: linear-gradient(90deg, var(--warn), rgb(var(--accent-rgb) / .85));
+  transition: none;
+}
+.gr-ticks {
+  position: absolute;
+  inset: 0;
+  /* `--line` is already the hairline colour in both themes, so the ticks need
+     no token of their own — and inherit the theme for free. */
+  background: repeating-linear-gradient(90deg,
+    transparent 0 calc(25% - 1px), var(--line) calc(25% - 1px) 25%);
+  pointer-events: none;
+}
+.gr.is-idle { opacity: .4; }
+.gr.is-idle .gr-fill { transform: scaleX(0); }
+.gr-val { font-variant-numeric: tabular-nums; }

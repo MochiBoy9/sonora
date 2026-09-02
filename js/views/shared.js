@@ -100,8 +100,29 @@ export const hasLiveSelection = () => {
   return false;
 };
 
-export function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel, sortKey } = {}) {
-  let tracks = getTracks();
+export function trackTable(host, getTracks, { origin, columns, onRemove, removeLabel, sortKey, filter } = {}) {
+  /* D6: an optional filter over this page's own list.
+   *
+   * Built here rather than by each page so that every long list behaves the
+   * same way — same field, same `/` key, same "23 of 400" readout — and so a
+   * page only has to say where the field goes. `read()` is what everything
+   * below uses in place of `getTracks`, which means Play all and Shuffle on
+   * the page above act on what is actually on screen. */
+  const finder = filter
+    ? pageFilter({
+      placeholder: typeof filter === 'string' ? filter : 'Filter these',
+      onChange: () => api.update(),
+    })
+    : null;
+  const read = () => {
+    const all = getTracks();
+    if (!finder) return all;
+    const kept = all.filter(finder.keep);
+    finder.report(kept.length, all.length);
+    return kept;
+  };
+
+  let tracks = read();
 
   /* Building a thirty-track playlist used to be thirty right-clicks. Rows can
      be picked now, and every action that took one track takes the picked set
@@ -240,7 +261,7 @@ export function trackTable(host, getTracks, { origin, columns, onRemove, removeL
     bar,
     selection,
     update() {
-      tracks = getTracks();
+      tracks = read();
       list.setItems(tracks);
       // The list changed underneath the selection; anything gone is gone.
       selection.prune(tracks);
@@ -249,17 +270,98 @@ export function trackTable(host, getTracks, { origin, columns, onRemove, removeL
     refresh() { list.refresh(); },
     destroy() {
       offFav();
+      finder?.destroy();
       document.removeEventListener('keydown', onKey);
       liveTables.delete(api);
       bar.remove();
       list.destroy();
     },
     get tracks() { return tracks; },
+    /** The filter field, for the page to put in its own toolbar. Null without one. */
+    filter: finder,
   };
 
   liveTables.add(api);
   return api;
 }
+
+/**
+ * D6: search inside what you are looking at.
+ *
+ * Search is global, and on a four-hundred-track artist page or a long playlist
+ * the question is nearly always "which of *these*" — for which the answer
+ * today is to search the whole library and read past everything else.
+ *
+ * A small field that narrows the list in place. It is deliberately not the
+ * filter language: this is a substring over title, artist and album, because
+ * the thing being asked is "the one with 'ocean' in it" and a second query
+ * syntax on the same page would be one too many.
+ *
+ * ⌘F reaches it — see `activeFilter` below for why that key and not `/`.
+ *
+ * Returns `{ node, keep, value }`. `keep` is the predicate to run over the
+ * page's own list; the caller stays in charge of what the list is.
+ */
+export function pageFilter({ onChange, placeholder = 'Filter these' } = {}) {
+  let value = '';
+  const input = el('input', {
+    class: 'input page-filter-input', type: 'search',
+    placeholder, autocomplete: 'off', spellcheck: 'false',
+    'aria-label': placeholder,
+  });
+  const count = el('span', { class: 'page-filter-count', hidden: true, role: 'status' });
+  const node = el('div', { class: 'page-filter' },
+    el('span', { class: 'page-filter-ico', html: ico('search') }), input, count);
+
+  input.addEventListener('input', () => {
+    value = norm(input.value.trim());
+    onChange?.();
+  });
+  input.addEventListener('keydown', (e) => {
+    // Escape empties it before it does anything else — otherwise the first
+    // press clears the browser's own search field decoration and the second
+    // one closes something behind the page.
+    if (e.key === 'Escape' && input.value) { e.stopPropagation(); input.value = ''; value = ''; onChange?.(); }
+    e.stopPropagation();       // the list's type-to-jump must not see typing here
+  });
+
+  const api = {
+    node,
+    focus() { input.focus(); input.select(); },
+    destroy() { if (currentFilter === api) currentFilter = null; },
+    get value() { return value; },
+    keep: (t) => !value || norm(`${t.title} ${t.artist} ${t.album}`).includes(value),
+    /** Says how much was hidden, so a short list is not mistaken for a short library. */
+    report(shown, total) {
+      const on = !!value && shown !== total;
+      count.hidden = !on;
+      if (on) count.textContent = `${shown} of ${total}`;
+    },
+  };
+
+  currentFilter = api;
+  return api;
+}
+
+/*
+ * Which page filter is on screen, for the one keyboard handler that reaches it.
+ *
+ * The key is ⌘F rather than `/` on purpose, and the reasoning is worth writing
+ * down because `/` is the obvious choice. `/` is already registered — it
+ * focuses the *library* search, it is in the shortcut list, and there is a test
+ * that says so; adding a second listener for it would be two owners racing over
+ * one key, which works until the day it doesn't.
+ *
+ * ⌘F is the better fit anyway. "Find on this page" is exactly what this is, and
+ * the browser's own find cannot do the job here: every long list in Sonora is
+ * virtualised, so the rows the listener is looking for are not in the document
+ * to be found. Overriding a shortcut is defensible when the native version is
+ * broken by the page's own construction, which this one is.
+ */
+let currentFilter = null;
+
+/** The filter field on the current page, if it has one. */
+export const activeFilter = () => (currentFilter && currentFilter.node.isConnected ? currentFilter : null);
 
 export function columnHeader(columns, sortState, onSort) {
   const head = el('div', { class: 'trow thead' });

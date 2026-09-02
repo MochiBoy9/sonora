@@ -56,8 +56,19 @@ export function startAlbumDrag(e, albumKeys, label) {
     const al = lib.state.albumBy.get(key);
     if (al) for (const t of al.tracks) ids.push(t.id);
   }
-  return startTrackDrag(e, ids, label);
+  if (!startTrackDrag(e, ids, label)) return false;
+  /* F1: the same drag, seen a second way.
+   *
+   * A record dragged onto a playlist is its tracks; a record dragged to a
+   * place on the wall is the record. Rather than two kinds of drag with two
+   * sets of plumbing, one drag carries both readings and each target takes
+   * whichever it can use. */
+  if (albumKeys.length === 1) payload.album = albumKeys[0];
+  return true;
 }
+
+/** The album being dragged, for a target that arranges records rather than tracks. */
+export const draggingAlbum = () => (payload && payload.album) || null;
 
 export function endDrag() {
   payload = null;

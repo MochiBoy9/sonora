@@ -56,7 +56,9 @@ export function viewRecent(host) {
   const table = trackTable(host, get, {
     origin,
     columns: ['index', 'art', 'title', 'album', 'played', 'duration'],
+    filter: 'Filter what you played',
   });
+  if (table.filter) bar.appendChild(table.filter.node);
   enter([head, bar], { y: 10 });
 
   /* The list reorders under you as you listen, which is correct and would be
@@ -218,7 +220,9 @@ export function viewFavourites(host) {
     columns: ['index', 'art', 'title', 'album', 'duration'],
     removeLabel: 'Remove from favourites',
     onRemove: (t) => lib.toggleFavourite(t.id, false),
+    filter: 'Filter your favourites',
   });
+  if (table.filter) bar.appendChild(table.filter.node);
   enter([head, bar], { y: 10 });
 
   // Unstarring from this page removes the row, so the list is rebuilt rather
@@ -348,6 +352,11 @@ export function viewPlaylist(host, id) {
   const columns = ['index', 'art', 'title', 'album', 'dr', 'duration'];
   if (p.smart) host.appendChild(el('p', { class: 'smart-note note', text: rules.describe(p) }));
 
+  /* Put in the document before the list is built, because the list owns
+     everything appended to `host` after this point. */
+  const filterBar = el('div', { class: 'toolbar toolbar-thin' });
+  host.appendChild(filterBar);
+
   /* A smart shelf has nothing to remove from: its contents are a consequence
      of its rules, so taking a track out would either be undone on the next
      repaint or quietly rewrite the description. The rules are the edit. */
@@ -358,7 +367,12 @@ export function viewPlaylist(host, id) {
       const i = p.tracks.indexOf(t.id);
       if (i >= 0) { p.tracks.splice(i, 1); lib.updatePlaylist(p.id, { tracks: p.tracks }); }
     },
+    // Only where there is enough to be lost in. A field over eleven tracks is
+    // furniture.
+    filter: tracks0.length > 24 ? `Filter “${p.name}”` : false,
   });
+  if (table.filter) filterBar.appendChild(table.filter.node);
+  else filterBar.remove();
   enter([hero], { y: 14 });
 
   const rerender = () => table.update();

@@ -2461,3 +2461,236 @@ body.lb-open { overflow: hidden; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* A3: what the day log noticed.
+ *
+ * Set as a remark rather than as a card: no panel, no heading, no dismiss
+ * button. It is one sentence with a mark beside it and a link under it, and it
+ * should be possible to read the whole page without ever noticing that it is
+ * there — which is the right weight for something describing you to yourself. */
+.home-noticed { margin: 6px 0 2px; }
+.noticed {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  border-left: 2px solid rgb(var(--accent-rgb) / .5);
+  color: var(--text-2);
+  font-size: calc(13.5px * var(--scale));
+  line-height: 1.5;
+  transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
+}
+.noticed:hover { color: var(--text); border-left-color: var(--accent); }
+.noticed-mark { color: var(--accent); opacity: .7; align-self: center; }
+.noticed-mark svg { width: 14px; height: 14px; display: block; }
+
+/* D3: the filter language, made pressable.
+ *
+ * A wrapping row rather than a scroller: all seventeen should be visible at
+ * once on a desktop, because the whole point is that somebody who did not know
+ * they existed sees them. On a phone it becomes three or four rows, which is
+ * still better than a horizontal scroller that hides half of them. */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -4px 0 18px;
+}
+.filter-chip {
+  cursor: pointer;
+  transition: color var(--dur-1) linear, background var(--dur-2) var(--ease), box-shadow var(--dur-1) linear;
+}
+.filter-chip:hover { color: var(--text); background: rgb(var(--surface-2-rgb) / .9); }
+.filter-chip.is-on {
+  background: rgb(var(--accent-rgb) / .16);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
+}
+
+/* What the box actually understood. Printed rather than implied, because a
+   search that quietly drops a word you typed is a search you stop trusting. */
+.search-reading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -10px 0 18px;
+}
+.search-token {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  padding: 2px 7px;
+  color: var(--accent);
+  background: rgb(var(--accent-rgb) / .1);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
+  border-radius: var(--r-sm);
+}
+
+/* D6: search inside what you are looking at.
+ *
+ * Pushed to the right end of the toolbar it lives in, so it reads as a
+ * qualifier on the page rather than as a second global search — the one in the
+ * topbar is the global one, and two identical fields on one screen would be a
+ * question about which is which. */
+.page-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+}
+.page-filter-ico { display: grid; place-items: center; color: var(--text-3); }
+.page-filter-ico svg { width: 14px; height: 14px; }
+.page-filter-input {
+  width: clamp(140px, 22vw, 240px);
+  height: 30px;
+  padding: 0 10px;
+  font-size: calc(12.5px * var(--scale));
+}
+.page-filter-input::-webkit-search-cancel-button { filter: grayscale(1); opacity: .5; }
+.page-filter-count {
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .1em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+/* A toolbar that holds nothing but the field does not need a toolbar's height. */
+.toolbar-thin { min-height: 0; margin-bottom: 10px; }
+
+@media (max-width: 560px) {
+  .page-filter { margin-left: 0; width: 100%; }
+  .page-filter-input { width: 100%; }
+}
+
+/* F1: a record being dropped into a place on the wall.
+ *
+ * The mark goes on the *left edge* of the card you are hovering, because that
+ * is where the record will land — "before this one" is a position between two
+ * things, and a highlight over the whole card would say "into this one". */
+.is-arranging .card { cursor: grab; }
+.card.is-drop-before { position: relative; }
+.card.is-drop-before::after {
+  content: "";
+  position: absolute;
+  inset: -6px auto -6px -11px;
+  width: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px 0 var(--accent-glow);
+  pointer-events: none;
+}
+
+/* F2: the records left out.
+ *
+ * A pile beside the crate rather than a shelf above it: overlapping, each one
+ * at its own slight angle, the newest on top. It is meant to read as objects
+ * that were put down rather than as a row of results. */
+.crate-pile {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 0 0 14px;
+  min-height: 62px;
+}
+.crate-pile-label { flex: none; color: var(--text-3); }
+.crate-pile-stack {
+  display: flex;
+  align-items: center;
+  /* Negative gap is the pile. Each sleeve covers most of the one under it, the
+     way they actually settle. */
+  padding-left: 4px;
+}
+.crate-pile-card {
+  flex: none;
+  width: 52px; height: 52px;
+  margin-left: -20px;
+  padding: 0;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--surface-2);
+  box-shadow: 0 2px 8px rgb(0 0 0 / .35), inset 0 0 0 var(--hair) var(--line);
+  transform: rotate(var(--tilt, 0deg));
+  /* Later cards sit on top, so the pile reads newest-first from the left. */
+  z-index: calc(20 - var(--i, 0));
+  position: relative;
+  transition: transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) linear;
+  cursor: pointer;
+}
+.crate-pile-card:first-child { margin-left: 0; }
+.crate-pile-card:hover, .crate-pile-card:focus-visible {
+  transform: rotate(var(--tilt, 0deg)) translateY(-6px) scale(1.06);
+  z-index: 30;
+  box-shadow: 0 8px 18px rgb(0 0 0 / .45), inset 0 0 0 var(--hair) var(--accent-line);
+}
+.crate-pile-card .art-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* F4: which axis the room is walked along, on the HUD with the decade rail. */
+.floor-axis {
+  position: absolute;
+  top: 14px; left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  z-index: 4;
+}
+@media (max-width: 780px) {
+  .floor-axis { position: static; transform: none; margin: 0 auto 8px; }
+  .crate-pile { gap: 10px; }
+  .crate-pile-label { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crate-pile-card { transition: none; }
+  .crate-pile-card:hover, .crate-pile-card:focus-visible { transform: rotate(var(--tilt, 0deg)); }
+}
+
+/* F7: the inner sleeve.
+ *
+ * Set the way the back of a record is: small, generously leaded, and given the
+ * space between the tracklist and the catalogue number rather than crowding
+ * either. It only exists when the files carry something, so it never leaves a
+ * heading over an empty panel. */
+.gate-notes {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  margin-top: 4px;
+  border-top: var(--hair) solid var(--line);
+}
+.gate-note {
+  margin: 0;
+  font-size: calc(8.5px * var(--scale));
+  line-height: 1.5;
+  font-style: italic;
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.gate-credits {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 8px;
+  margin: 0;
+  font-size: calc(8px * var(--scale));
+  min-height: 0;
+  overflow: hidden;
+}
+.gate-credits dt {
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  white-space: nowrap;
+}
+.gate-credits dd {
+  margin: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

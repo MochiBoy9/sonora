@@ -6,18 +6,18 @@ import * as lib from '../library.js';
 import * as looks from '../looks.js';
 import { enter, tilt3d } from '../motion.js';
 import * as player from '../player.js';
-import { dialog, lightbox, menu, paintArt, playFab, sectionHead, sleeve, toast, trackMenu, trackRowFactory } from '../ui.js';
+import { dialog, lightbox, menu, paintArt, playFab, rackPicker, sectionHead, sleeve, startStation, toast, trackMenu, trackRowFactory } from '../ui.js';
 import { el, fmtBytes, fmtCount, fmtTime, fmtTotal, formatName, ico } from '../util.js';
 import { albumCard, albumOf, decode, markTransition, notFound, playAll, shelf, shuffleAll } from './shared.js';
 import * as similar from '../similar.js';
 
 /**
- * D1: the genres of a set of tracks, as links, separated as the facts above
- * them are.
+ * D1: the genre of a set of tracks, as a link, separated as the facts above it
+ * are.
  *
- * Two at most. A compilation can carry nine, and a hero that wraps onto a
- * fourth line to list them all is a worse page than one that names the two
- * that describe most of the record.
+ * The most common one only. A compilation can carry nine, and a hero that
+ * wraps to list them all is a worse page than one that names the genre that
+ * describes most of the record and links to where the rest are.
  */
 function genreLinks(tracks) {
   const count = new Map();
@@ -26,7 +26,11 @@ function genreLinks(tracks) {
     if (g) count.set(g, (count.get(g) || 0) + 1);
   }
   if (!count.size) return [];
-  const top = [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2);
+  /* One, not two. A hero that gains a second genre wraps its facts onto a new
+     line the moment the queue pane opens, and the second-most-common genre on
+     a record is rarely worth a line of its own — the genre page it links to
+     lists the rest. */
+  const top = [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 1);
   const out = [];
   for (const [name] of top) {
     out.push(el('span', { class: 'dot' }));
@@ -73,6 +77,15 @@ export function viewAlbum(host, key) {
     playFab(() => playAll(album.tracks, 0, origin)),
     el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(album.tracks, origin) }),
     el('button', { class: 'icon-btn', html: ico('queue'), title: 'Add to queue', onclick: () => { player.enqueue(album.tracks); toast('Added to queue'); } }),
+    /* E2: this record, then the ones that measure out near it. Offered on the
+       album page rather than buried in a menu because the album page is where
+       somebody stands when they have just finished a record and want another
+       one like it. */
+    el('button', {
+      class: 'icon-btn', html: ico('circles'), title: 'Start a station from this record',
+      'aria-label': 'Start a station from this record',
+      onclick: () => startStation(key),
+    }),
     el('button', { class: 'icon-btn', html: ico('more'), title: 'More',
       onclick: (e) => menu(coverMenu(key, album).concat(trackMenu(album.tracks, { origin })), { anchor: e.currentTarget }) }));
   meta.appendChild(actions);
@@ -291,64 +304,6 @@ function coverMenu(key, album) {
 }
 
 /**
- * Picks the rack a record should arrive with.
- *
- * A dialog rather than a submenu because the list is long — eleven presets
- * plus however many racks you have saved — and because the row that matters
- * most is the one at the top saying there is no rack, which a submenu buries.
- */
-async function rackPicker(scope, key, label) {
-  const current = rack.bindingOf(scope, key);
-  const saved = await rack.savedRacks();
-  const list = el('div', { class: 'rack-pick' });
-
-  const row = (id, name, note) => {
-    const on = (id || null) === (current || null);
-    return el('button', {
-      class: 'rack-pick-row' + (on ? ' is-on' : ''),
-      onclick: async () => {
-        await rack.bindTo(scope, key, id);
-        closeDialog();
-        /* Takes effect on the next track that asks for it. Saying so is the
-           honest thing: the change is real but you will not hear it until the
-           record comes round, and silence here reads as a control that did
-           nothing. */
-        const now = player.state.current;
-        const mine = now && (scope === 'album' ? now.albumKey : now.artistKey) === key;
-        if (mine) await rack.followTrack(now);
-        toast(id
-          ? (mine ? `“${label}” is on the ${name} rack` : `“${label}” will arrive on the ${name} rack`)
-          : `“${label}” goes back to your rack`);
-      },
-    },
-      el('span', { class: 'rack-pick-name', text: name }),
-      note ? el('span', { class: 'rack-pick-note', text: note }) : null,
-      el('span', { class: 'rack-pick-mark', html: on ? ico('star-fill') : '' }));
-  };
-
-  list.appendChild(row(null, 'Your rack', 'whatever the Sound page says'));
-  if (saved.length) {
-    list.appendChild(el('p', { class: 'rack-pick-head', text: 'Saved' }));
-    for (const r of saved) list.appendChild(row(r.name, r.name));
-  }
-  list.appendChild(el('p', { class: 'rack-pick-head', text: 'Presets' }));
-  for (const p of rack.PRESETS) list.appendChild(row(p.id, p.label));
-
-  let closeDialog = () => {};
-  const d = dialog({
-    title: 'A rack for this record',
-    body: el('div', {},
-      el('p', { class: 'dialog-note', text:
-        `Sonora puts this chain in circuit whenever ${scope === 'album' ? 'this album' : 'this artist'} plays, ` +
-        'and takes it out again afterwards. Your own rack is never overwritten.' }),
-      list),
-    width: 460,
-    actions: [{ label: 'Done' }],
-  });
-  closeDialog = () => d.close();
-}
-
-/**
  * Lets an album's sleeve take a picture by drag or by paste.
  *
  * The paste listener is on the document rather than the sleeve because a
@@ -564,6 +519,19 @@ function gatefold(album) {
   left.appendChild(listFor(true));
   right.appendChild(listFor(false));
 
+  /* F7: the inner sleeve.
+   *
+   * The right-hand panel of a gatefold that holds a single disc is mostly
+   * empty, and the app already knows three things that belong on it and shows
+   * them in three other places: the note somebody wrote into the files (B1),
+   * the credits the tag reader pulls out of every container, and the dates. On
+   * a real record all of that is printed exactly here.
+   *
+   * Only what the files actually carry, and nothing where they carry nothing —
+   * an inner sleeve with the word "Credits" and no credits under it is worse
+   * than a blank panel, which at least looks like a record. */
+  right.appendChild(innerSleeve(album));
+
   // The catalogue number sits at the foot of the right-hand page, where a
   // pressing plant puts it.
   right.appendChild(el('div', { class: 'back-cat' },
@@ -662,6 +630,55 @@ export function backCover(album) {
     album.year ? el('span', { text: String(album.year) }) : null));
 
   return back;
+}
+
+/* Which credits a record can print, and what a sleeve calls them. */
+const SLEEVE_CREDITS = [
+  ['composer', 'Written by'],
+  ['lyricist', 'Words by'],
+  ['conductor', 'Conducted by'],
+  ['remixer', 'Remixed by'],
+  // No "produced by": nothing in the tag reader reads a producer, and a label
+  // for a field that can never be filled is a promise the sleeve cannot keep.
+  ['publisher', 'Published by'],
+  ['copyright', ''],
+];
+
+/**
+ * F7: what is printed on the inner sleeve.
+ *
+ * A credit is printed once for the record where every track agrees on it, and
+ * per-track where they do not — which is exactly how a compilation's sleeve
+ * differs from an album's, and falls out of the data rather than being a rule
+ * anybody had to write down.
+ */
+function innerSleeve(album) {
+  const wrap = el('div', { class: 'gate-notes' });
+  const tracks = album.tracks;
+
+  // The note somebody wrote into the files, where they all carry the same one.
+  const notes = new Set(tracks.map((t) => (t.comment || '').trim()).filter(Boolean));
+  if (notes.size === 1 && tracks.every((t) => (t.comment || '').trim())) {
+    wrap.appendChild(el('p', { class: 'gate-note', text: [...notes][0] }));
+  }
+
+  const dl = el('dl', { class: 'gate-credits' });
+  for (const [key, label] of SLEEVE_CREDITS) {
+    const values = [...new Set(tracks.map((t) => (t[key] || '').trim()).filter(Boolean))];
+    if (!values.length) continue;
+    // Three different names for the same role is a list; nine is a wall, and
+    // the credits panel on the stage is where somebody goes for all of them.
+    const said = values.length > 3 ? values.slice(0, 3).concat(`and ${values.length - 3} more`) : values;
+    dl.append(el('dt', { text: label || '©' }), el('dd', { text: said.join(' · ') }));
+  }
+  // B4: the two dates, where a reissue makes them differ.
+  if (album.originalYear && album.originalYear !== album.year) {
+    dl.append(el('dt', { text: 'Recorded' }), el('dd', { text: String(album.originalYear) }));
+  }
+  if (dl.children.length) wrap.appendChild(dl);
+
+  wrap.hidden = !wrap.children.length;
+  return wrap;
 }
 
 /** Paints a soft wash of the album's own colour behind its header. */

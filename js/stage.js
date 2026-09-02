@@ -46,6 +46,27 @@ export function toggleStage(backdrop) {
   else openStage(backdrop);
 }
 
+/**
+ * F5: the turntable, as somewhere you go.
+ *
+ * The deck was a mode of a mode — open the stage, then press D — which put the
+ * most legible object this application draws two keystrokes and one piece of
+ * folklore deep. This opens the stage already showing it, so "put the record
+ * on the deck" is one action from anywhere: a key, a palette entry, a button
+ * on the transport.
+ *
+ * It sets the stored preference on the way in, which is what an already-open
+ * stage reads — so this works whether the stage is open or not, and the deck
+ * stays the face you get next time, which is the same bargain pressing D makes.
+ */
+export function showDeck(backdrop) {
+  try { localStorage.setItem(DECK_KEY, '1'); } catch { /* private */ }
+  if (!open) return openStage(backdrop);
+  // Already open on the sleeve: turn it over rather than doing nothing.
+  if (handlers && handlers.deckOn && !handlers.deckOn()) handlers.deck();
+  return undefined;
+}
+
 export function closeStage() {
   if (!open) return;
   const teardown = open;
@@ -711,6 +732,8 @@ export function openStage(backdrop) {
     lyrics: () => (words ? (lyricBtn.click(), true) : false),
     credits: () => (creditBtn.hidden ? false : (creditBtn.click(), true)),
     deck: () => { setDeck(!deckOn); return true; },
+    // For `showDeck`, which has to know whether it is already showing.
+    deckOn: () => deckOn,
   };
 
   paint();

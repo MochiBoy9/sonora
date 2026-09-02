@@ -953,6 +953,15 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .seg:hover { color: var(--text-2); }
 .seg.is-on { background: rgb(var(--accent-rgb) / .16); color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
 
+/* A2: a second row of choices next to the first has to read as subordinate to
+   it — what the chart is grouped by is the question, and over what period is a
+   qualifier on it. Smaller and quieter says that without a label.
+   Its own class rather than `.segmented.sm`: `sm` was already in use on the
+   Sound page's shifter picker, and styling it here silently shortened a panel
+   on a page this change has nothing to do with. */
+.segmented.quiet { padding: 2px; }
+.segmented.quiet .seg { padding: 4px 9px; font-size: calc(9px * var(--scale)); letter-spacing: .1em; }
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -1269,7 +1278,10 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   opacity: .45;
   transition: opacity .12s ease, color .12s ease, transform .12s var(--ease-out);
 }
-.rating-star svg { width: 13px; height: 13px; }
+/* Both glyphs occupy the same cell. Hiding the `<use>` stops it painting but
+   leaves the `<svg>` its box, so without this the star sits in the top half of
+   a button twice as tall as it looks — which is what the layout suite caught. */
+.rating-star > .ico { grid-area: 1 / 1; width: 13px; height: 13px; }
 .rating-star [href$="star-fill"] { display: none; }
 .rating-star.is-on {
   color: var(--accent);
@@ -1766,3 +1778,57 @@ html.is-dragging-tracks .side-playlist.is-smart { opacity: .45; }
   box-shadow: var(--shadow-2);
   pointer-events: none;
 }
+
+/* E3: where the good bit starts.
+ *
+ * A hairline on the scrubber, over the waveform it belongs to. Deliberately
+ * quiet — it is a thing you notice coming rather than a control competing with
+ * the playhead — and it widens on hover of the bar so it can be aimed at. */
+.seek-hook {
+  position: absolute;
+  /* The track clips its children, so this is inset rather than overhanging —
+     an overhang would simply be cut off and the mark would look ragged. */
+  top: 0; bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  opacity: .45;
+  border-radius: 1px;
+  pointer-events: none;
+  transition: opacity var(--dur-1) linear, box-shadow var(--dur-1) linear;
+}
+.seek:hover .seek-hook, .seek.is-active .seek-hook {
+  opacity: .95;
+  box-shadow: 0 0 6px 0 var(--accent-glow);
+}
+
+/* E3: the good-bit button on a row, which appears on hover like its
+   neighbours and only exists on tracks that have one. */
+.trow-hook { opacity: 0; transition: opacity var(--dur-1) linear, color var(--dur-1) linear; }
+.trow:hover .trow-hook, .trow-hook:focus-visible { opacity: 1; }
+.trow-hook:hover { color: var(--accent); }
+@media (hover: none) {
+  .trow-hook { opacity: 1; }
+}
+
+/* A plain determinate progress bar, for work that takes long enough to watch.
+   Scaled rather than sized, so the fill costs no layout on a bar that updates
+   thirty times a second. */
+.progress {
+  position: relative;
+  height: 4px;
+  margin: 10px 0 6px;
+  background: rgb(var(--bg-rgb) / .7);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  background: var(--accent);
+  transition: transform .18s linear;
+}
+@media (prefers-reduced-motion: reduce) { .progress-fill { transition: none; } }

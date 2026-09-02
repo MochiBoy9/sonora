@@ -158,6 +158,26 @@ export function viewHome(host) {
   const shelfBack = shelf('You used to play these', lapsed.slice(0, 10), (a) => albumCard(a));
   if (shelfBack) frag.appendChild(shelfBack);
 
+  /* A3: one thing the day log noticed about you.
+   *
+   * Placed here, near the bottom, on purpose. It is an aside — the kind of
+   * thing a shop owner who knows you says on the way out, not the first thing
+   * the page tells you about yourself. One line, never a list: three
+   * observations at once stops being an observation and becomes a dossier.
+   *
+   * The particular line is chosen by the date rather than at random, so it is
+   * the same all day and changes tomorrow. A note that reshuffles every time
+   * you press Home is a slot machine.
+   */
+  const seen = stats.habits();
+  if (seen.length) {
+    const pick = seen[Math.floor(Date.now() / 86400000) % seen.length];
+    frag.appendChild(el('section', { class: 'block home-noticed' },
+      el('a', { class: 'noticed', href: pick.href },
+        el('span', { class: 'noticed-mark', html: ico('sparkle') }),
+        el('span', { class: 'noticed-text', text: pick.text }))));
+  }
+
   // A compact "surprise me" strip: random albums, reshuffled on every visit.
   const pool = lib.state.albums.slice();
   for (let i = pool.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [pool[i], pool[j]] = [pool[j], pool[i]]; }

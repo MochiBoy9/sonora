@@ -11,6 +11,7 @@ import * as offline from '../offline.js';
 import * as player from '../player.js';
 import * as session from '../session.js';
 import * as stats from '../stats.js';
+import * as shopWindow from '../idle.js';
 import { dialog, sectionHead, toast } from '../ui.js';
 import { el, fmtAgo, fmtBytes, fmtCount, fmtTotal, ico } from '../util.js';
 import { MODES, isMode } from '../visualizer.js';
@@ -426,12 +427,34 @@ export function viewSettings(host) {
     }
 
     if (bindings.length) {
+      /* G3/G6: five more scopes than there were, so this is a table rather
+         than a chain of ternaries — and every one of them needs a way back to
+         the thing it names, or it is an override you cannot find. */
       const named = [];
       for (const b of bindings) {
-        const label = b.scope === 'album' ? (lib.state.albumBy.get(b.key)?.title || 'a record that has gone')
-          : b.scope === 'artist' ? (lib.state.artists.find((a) => a.key === b.key)?.name || 'an artist that has gone')
-          : b.key;
-        named.push({ ...b, label });
+        let label = b.key, href = '';
+        if (b.scope === 'album') {
+          label = lib.state.albumBy.get(b.key)?.title || 'a record that has gone';
+          href = '#/album/' + b.key;
+        } else if (b.scope === 'artist') {
+          label = lib.state.artists.find((a) => a.key === b.key)?.name || 'an artist that has gone';
+          href = '#/artist/' + b.key;
+        } else if (b.scope === 'track') {
+          label = lib.getTrack(b.key)?.title || 'a track that has gone';
+          const t = lib.getTrack(b.key);
+          href = t ? '#/album/' + t.albumKey : '';
+        } else if (b.scope === 'genre') {
+          label = b.key;
+          href = '#/genre/' + encodeURIComponent(b.key);
+        } else if (b.scope === 'folder') {
+          const parts = b.key.split('/').filter(Boolean);
+          label = parts[parts.length - 1] || 'a folder';
+          href = '#/files';
+        } else if (b.scope === 'output') {
+          label = b.key === 'default' || !b.key ? 'the default output' : 'one output device';
+          href = '#/settings';
+        }
+        named.push({ ...b, label, href });
       }
       overRows.appendChild(el('div', { class: 'settings-row' },
         el('div', { class: 'settings-ico', html: ico('sliders') }),
@@ -441,7 +464,8 @@ export function viewSettings(host) {
             el('span', { class: 'over-list' }, named.slice(0, 12).map((b) =>
               el('a', {
                 class: 'over-chip',
-                href: b.scope === 'album' ? '#/album/' + b.key : '#/artist/' + b.key,
+                href: b.href || '#/settings',
+                title: `${b.scope}: ${b.label} → ${b.id}`,
                 text: b.label,
               })))))));
     }
@@ -777,6 +801,58 @@ export function viewSettings(host) {
       el('div', { class: 'settings-name', text: 'Backup' }), backupNote),
     el('div', { class: 'settings-actions' }, withArt, saveBackup, restoreBtn, restorePicker)));
 
+  /* A5: the listening history, in a shape something else can read.
+   *
+   * The backup carries it as an opaque blob keyed by track id, which is
+   * exactly right for putting it back into Sonora and useless for anything
+   * else. A date, a track, an artist and a number of seconds is what a
+   * spreadsheet, a scrobble importer or a graph nobody has thought of yet can
+   * actually take — the same argument the M3U export won.
+   *
+   * Written here rather than in a module of its own because it is nine lines
+   * of quoting and one anchor; a file for that would be filing. */
+  const csvNote = el('div', { class: 'settings-note' });
+  const paintCsv = () => {
+    const n = stats.dayCount();
+    csvNote.textContent = n
+      ? `A row per day per track: date, title, artist, album, seconds. ${fmtCount(n, 'day')} recorded.`
+      : 'A row per day per track. Nothing recorded yet — it starts as soon as you play something.';
+  };
+  paintCsv();
+
+  const csvBtn = el('button', {
+    class: 'btn ghost sm', text: 'Export CSV',
+    onclick: () => {
+      const rows = stats.asRows();
+      if (!rows.length) return toast('No listening recorded yet');
+      // RFC 4180 quoting: everything quoted, and a quote inside doubled. Titles
+      // contain commas, quotation marks and the occasional newline, and a CSV
+      // that only quotes when it thinks it has to is a CSV that gets it wrong
+      // on somebody's library and not on mine.
+      const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const head = ['date', 'title', 'artist', 'album', 'seconds', 'track_id'];
+      const body = rows.map((r) => [r.day, r.title, r.artist, r.album, r.seconds, r.id].map(q).join(','));
+      // A BOM, because the single most likely destination is a spreadsheet on
+      // Windows and without one it reads UTF-8 as Latin-1 and mangles every
+      // accented name in the library.
+      const blob = new Blob(['\ufeff' + [head.map(q).join(','), ...body].join('\r\n') + '\r\n'],
+                            { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = el('a', { href: url, download: `sonora-listening-${stats.dayKey()}.csv` });
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast(`Exported ${fmtCount(rows.length, 'row')}`);
+    },
+  });
+
+  storage.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('clock') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Listening history' }), csvNote),
+    el('div', { class: 'settings-actions' }, csvBtn)));
+
   const keepNote = el('div', { class: 'settings-note', text: 'Checking…' });
   const keepBtn = el('button', { class: 'btn ghost sm', text: 'Ask to keep it', hidden: true });
   storage.appendChild(el('div', { class: 'settings-row' },
@@ -1019,6 +1095,29 @@ function looksPanel() {
 
       const row = el('div', { class: 'rack-row look-row' },
         el('span', { class: 'rack-name', text: name, title: spec.hint || name }), ...control);
+      /* F6: a setting you can see the effect of.
+       *
+       * The shop window is on a three-minute timer, so the only way to find
+       * out what "Drift after" does was to set it and then not touch anything
+       * for three minutes — which is a setting nobody can evaluate. It is also
+       * the one thing here somebody might want to start deliberately, when
+       * they are putting the machine on a shelf for the evening.
+       *
+       * Any input takes it away again, including the input that started it —
+       * so the button releases the pointer first and lets the click finish
+       * before the drift comes up. */
+      if (spec.id === 'idle') {
+        row.appendChild(el('button', {
+          class: 'btn ghost sm look-demo', text: 'Show me',
+          title: 'Start the drift now. Move the mouse to stop it.',
+          onclick: (e) => {
+            e.currentTarget.blur();
+            setTimeout(() => {
+              if (!shopWindow.show()) toast('Nothing to drift through yet — add some music first');
+            }, 260);
+          },
+        }));
+      }
       panel.appendChild(row);
       rows.push(sync);
       sync();

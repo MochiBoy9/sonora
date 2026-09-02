@@ -12,13 +12,24 @@ export function viewSearch(host, query) {
   const head = el('header', { class: 'page-head' },
     el('h1', { class: 'page-title', text: query ? `Results for “${query}”` : 'Search' }));
   host.appendChild(head);
+  host.appendChild(filterChips(query));
 
   if (!query) {
-    host.appendChild(emptyState({ icon: 'search', title: 'Search your library', note: 'Titles, artists, albums and genres.' }));
+    host.appendChild(emptyState({ icon: 'search', title: 'Search your library', note: 'Titles, artists, albums and genres — or one of the filters above, which combine with each other and with words.' }));
     return () => {};
   }
 
   const res = lib.search(query);
+
+  /* Which of the typed words were understood as filters, said back. A query
+     that silently ignores half of what you typed is the worst kind of search
+     box, and `parseQuery` already knows the answer. */
+  if (res.filtered && res.filtered.length) {
+    host.appendChild(el('p', { class: 'search-reading' },
+      el('span', { class: 'label', text: 'Reading' }),
+      ...res.filtered.map((tok) => el('code', { class: 'search-token', text: tok }))));
+  }
+
   if (!res.tracks.length && !res.albums.length && !res.artists.length) {
     host.appendChild(emptyState({ icon: 'search', title: 'Nothing found', note: `No matches for “${query}”.` }));
     return () => {};
@@ -64,6 +75,54 @@ export function viewSearch(host, query) {
 
   enter([head], { y: 10 });
   return () => {};
+}
+
+/**
+ * D3: the filter language, as things you can press.
+ *
+ * There are seventeen filters and the only way to find out was to read
+ * `library.js`. Typing still works exactly as it did — these put the token in
+ * the box for you and run the search, which is both the discovery mechanism
+ * and a way to learn the syntax by watching it appear.
+ *
+ * A chip already in the query reads as on and takes itself back out again,
+ * so the row behaves like a set of toggles even though the underlying thing is
+ * a string somebody could equally have typed.
+ */
+function filterChips(query) {
+  const wrap = el('div', { class: 'filter-chips', role: 'group', 'aria-label': 'Filters' });
+  const words = String(query || '').trim().split(/\s+/).filter(Boolean);
+  const lower = words.map((w) => w.toLowerCase());
+
+  for (const f of lib.FILTER_HINTS) {
+    /* An argument-taking chip counts as on when its *shape* is present:
+       `after:1990` and `after:2004` are the same filter with different
+       arguments, and pressing the chip should replace rather than repeat. */
+    const stem = f.arg ? f.token.replace(/[\d.]+$/, '').replace(/:.*$/, ':') : f.token;
+    const at = f.arg
+      ? lower.findIndex((w) => (stem.endsWith(':') ? w.startsWith(stem) : w.startsWith(stem)))
+      : lower.indexOf(f.token);
+    const on = at >= 0;
+
+    wrap.appendChild(el('button', {
+      class: 'chip filter-chip' + (on ? ' is-on' : ''),
+      type: 'button',
+      'aria-pressed': String(on),
+      title: f.note ? `${f.note} — types “${f.token}”` : `Types “${f.token}”`,
+      text: f.label,
+      onclick: () => {
+        const next = words.slice();
+        if (on) next.splice(at, 1);
+        else next.push(f.token);
+        const q = next.join(' ').trim();
+        location.hash = q ? '#/search/' + encodeURIComponent(q) : '#/home';
+        // The box in the topbar is the same query and has to agree with it.
+        const box = document.getElementById('search');
+        if (box) box.value = q;
+      },
+    }));
+  }
+  return wrap;
 }
 
 /* ------------------------------------------------------------------ ANALYSIS */
