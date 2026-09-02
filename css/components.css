@@ -717,6 +717,10 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   overflow-y: auto;
   padding-right: 4px;
 }
+/* The same action under a second spelling — dimmer, because it is the same
+   row said twice and should not read as two things you have to learn. */
+.keys-alt { opacity: .6; }
+
 .keys-group {
   font-family: var(--mono);
   font-size: calc(10px * var(--scale));
@@ -1218,6 +1222,93 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 
 @media (max-width: 860px) { .trow-dr { display: none; } }
 
+/* What you have done with the file, next to what the file is.
+ *
+ * Both are counted from the first release and neither had anywhere to appear.
+ * A never-played row prints an em dash in the dim ink rather than a nought:
+ * "0" invites you to compare it with the numbers above and there is nothing to
+ * compare — the point of the column is which rows are blank. */
+.trow-plays, .trow-played {
+  flex: none;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  letter-spacing: .04em;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.trow-plays { width: 40px; }
+.trow-played { width: 44px; }
+.trow-plays.is-none, .trow-played.is-none { color: var(--text-3); opacity: .55; }
+.thead .trow-plays, .thead .trow-played { font-size: calc(10px * var(--scale)); }
+
+/* They are the first thing to go: what a track is beats what you did with it
+   when there is only room for one. */
+@media (max-width: 1180px) { .trow-played { display: none; } }
+@media (max-width: 1040px) { .trow-plays { display: none; } }
+
+/* Present to a screen reader, absent to everything else. Used for the live
+   region that announces a queue row moving, which is not a visible event to
+   somebody who cannot see the list. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------- letter rail
+
+   Pinned against the right edge of the list it steers, vertically centred, and
+   out of the way: the whole thing is 20px wide and sits at a third opacity
+   until the pointer is near it. A navigation aid that competes with the
+   library for attention is one people turn off.
+
+   It lives on `.main` rather than inside the scroller, so it stays put while
+   the list moves past it. */
+.az-rail {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 6px 3px;
+  opacity: .34;
+  transition: opacity var(--dur-2) var(--ease);
+}
+.az-rail:hover, .az-rail:focus-within { opacity: 1; }
+
+.az-key {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  width: 16px;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  line-height: 1.25;
+  letter-spacing: 0;
+  color: var(--text-2);
+  transition: color var(--dur-1) linear;
+}
+.az-key:hover { color: var(--accent); }
+.az-key:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 1px; }
+/* Letters the collection has nothing under stay drawn and go quiet: the gaps
+   are information, and a rail that changes shape as the library grows is one
+   nobody's hand can learn. */
+.az-key.is-empty { color: var(--text-3); opacity: .35; cursor: default; }
+
+/* No room beside the list, and a 16px target is not a phone control anyway. */
+@media (max-width: 900px) { .az-rail { display: none; } }
+
 /* ---------------------------------------------------------------- rule builder
 
    One row per rule: a field, a condition, a value. The operators offered
@@ -1530,3 +1621,60 @@ select.input { padding-right: 8px; }
 }
 .rack-bound-text { flex: 1 1 220px; min-width: 0; font-size: calc(12.5px * var(--scale)); color: var(--text-2); }
 .rack-bound-text b { color: var(--text); font-weight: 500; }
+
+
+/* A4: a keycap you can press to change. */
+.keys-edit { cursor: pointer; border-radius: 4px; }
+.keys-edit:hover kbd { border-color: var(--accent-line); color: var(--accent); }
+.keys-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Armed: the next keystroke becomes the binding, so it says so where the
+   keycap was rather than somewhere else on the sheet. */
+.keys-edit.is-capturing {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  letter-spacing: .06em;
+}
+/* Moved from what it shipped with. A dot rather than a word: the sheet is a
+   reference and a second column of "custom" would crowd it. */
+.keys-edit.is-custom kbd { border-color: var(--accent-line); }
+.keys-foot { margin-top: 14px; font-size: calc(12px * var(--scale)); }
+
+
+/* D5: the undo stack, drawn. Newest at the top, which is the order it will be
+   undone in — a list that reads down and undoes up is a list nobody can aim
+   with. */
+.undo-history { max-height: 56vh; overflow-y: auto; }
+.undo-head {
+  margin: 14px 0 6px;
+  color: var(--text-3);
+  font-size: calc(10.5px * var(--scale));
+  text-transform: uppercase;
+  letter-spacing: .16em;
+  font-weight: 600;
+}
+.undo-head:first-child { margin-top: 0; }
+.undo-list { list-style: none; margin: 0; padding: 0; }
+.undo-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: var(--hair) solid var(--line-2);
+}
+.undo-list li:last-child { border-bottom: 0; }
+.undo-label { flex: 1; min-width: 0; color: var(--text); font-size: calc(13px * var(--scale)); }
+.undo-when {
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  font-variant-numeric: tabular-nums;
+}
+/* Already taken back, and still reachable by redo. Greyed rather than removed:
+   an entry you cannot see is an entry you will not think to put back. */
+.undo-list.is-future li { opacity: .5; }
+
+/* The backup preview's list of what a file would bring. */
+.backup-list { margin: 8px 0 12px 18px; padding: 0; }
+.backup-list li { margin: 3px 0; color: var(--text-2); font-size: calc(13px * var(--scale)); }

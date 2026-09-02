@@ -40,10 +40,22 @@
   --glass-bar: rgb(var(--bg-rgb) / .62);
   --blur:      blur(var(--frost)) saturate(calc(100% + 62% * var(--gloss)));
 
-  /* ---- ink ---- */
+  /* ---- ink ----
+   *
+   * A1. Measured against this application's own background, the two muted
+   * tokens were 3.83:1 and 3.54:1, where AA asks 4.5:1 for anything under
+   * 18.66px — and essentially every use of them is 9 to 12.5px: sidebar
+   * labels, the breadcrumb, every page subtitle, the EQ axis, the fader
+   * labels, the rack readouts, the duration in the transport. The dimmer of
+   * the two was the worse one and carried the most text.
+   *
+   * Lifted to 10.2:1 and 7.0:1 against the page, and 9.5:1 and 6.5:1 against
+   * the lightest surface anything muted is ever set on, which keeps the
+   * hierarchy — three distinct steps of ink — while putting the bottom step
+   * clear of the line rather than just under it. */
   --text:   #e8f5ff;
-  --text-2: #8ba6c0;
-  --text-3: #55708b;
+  --text-2: #a3bcd4;
+  --text-3: #829cb4;
   --on-accent: #00131c;
 
   /* ---- accents ---- */
@@ -161,7 +173,9 @@
 
   --text:   #06131f;
   --text-2: #3f5771;
-  --text-3: #6d8399;
+  /* Mirrored from the dark scheme: 3.51:1 against the page was the same
+     failure the other way up. 5.07:1 now. */
+  --text-3: #55697f;
   --on-accent: #001620;
 
   --accent-rgb:   0 137 179;
@@ -194,7 +208,7 @@
 
     --text:   #06131f;
     --text-2: #3f5771;
-    --text-3: #6d8399;
+    --text-3: #55697f;
     --on-accent: #001620;
 
     --accent-rgb:   0 137 179;
@@ -411,3 +425,49 @@ body::before {
 
 body.resizing { cursor: col-resize; user-select: none; }
 body.resizing * { pointer-events: none; }
+
+
+/* ------------------------------------------------------------------ A6
+
+   The skip link, and one rule for focus.
+
+   Off screen rather than hidden: `display: none` and `visibility: hidden` both
+   take an element out of the focus order, which would make a skip link that
+   cannot be reached — the exact failure it exists to fix. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 2000;
+  transform: translateY(-160%);
+  padding: 9px 14px;
+  border-radius: calc(var(--radius) * 0.6);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  font-size: calc(13px * var(--scale));
+  text-decoration: none;
+  box-shadow: var(--sh-2, 0 10px 30px rgb(0 0 0 / .4));
+  transition: transform var(--dur-2) var(--ease);
+}
+.skip-link:focus-visible,
+.skip-link:focus { transform: translateY(0); outline: 2px solid var(--text); outline-offset: 2px; }
+
+/* One visible focus ring, everywhere.
+ *
+ * Focus styling was good in most places and absent in a few, which is worse
+ * than uniformly plain: a ring you cannot rely on is a ring you cannot learn.
+ * This is the floor — anything with its own, better-fitted ring still wins,
+ * because a later or more specific rule beats this one. `:focus-visible` only,
+ * so a pointer never paints one.
+ *
+ * `outline` rather than a box-shadow, because half the controls in this
+ * application are cut with `clip-path` chamfers and a shadow is clipped away
+ * with the corner it was drawn on. An outline is not. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* The one case where an offset ring is wrong: a control flush inside a scroller
+   or a bar has nowhere to put it, and the ring gets clipped by the parent. */
+:where(.trow, .qrow, .seg, .az-key):focus-visible { outline-offset: -2px; }

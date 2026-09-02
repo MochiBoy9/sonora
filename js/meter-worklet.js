@@ -60,11 +60,21 @@ class MeterProcessor extends AudioWorkletProcessor {
     this.samples = 0;
     this.blocks = 0;
     this.settle = SETTLE;
+    /* Phase correlation, over the post window rather than over the listen.
+     *
+     * The crest factor is a property of the master and is right to accumulate
+     * for the whole track. Correlation is not: it is what the two channels are
+     * doing *now*, and a track that is wide in the chorus and mono in the
+     * verse has no meaningful whole-track figure. So these three reset at
+     * every post, which makes the readout a moving eighth-of-a-second window
+     * — about the integration time of a real correlation meter. */
+    this.xy = 0; this.xx = 0; this.yy = 0;
     // Reset without tearing the node down and rebuilding the graph, which is
     // what a track change needs: same node, new tally.
     this.port.onmessage = (e) => {
       if (e.data && e.data.type === 'reset') {
         this.peak = 0; this.sumSq = 0; this.samples = 0; this.blocks = 0;
+        this.xy = 0; this.xx = 0; this.yy = 0;
         this.settle = SETTLE;
       }
     };
@@ -102,13 +112,37 @@ class MeterProcessor extends AudioWorkletProcessor {
       if (peak > this.peak) this.peak = peak;
       this.sumSq += sum;
       this.samples += n;
+
+      /* S4. Three more sums over the same 128 floats we have already walked,
+         which is the whole cost of the meter: no second tap, no second pass
+         over the signal, and nothing allocated. Mono sources have one channel,
+         where correlation is by definition +1 and there is nothing to
+         measure. */
+      if (input.length > 1 && input[0] && input[1]) {
+        const L = input[0], R = input[1];
+        const m = L.length < R.length ? L.length : R.length;
+        for (let i = 0; i < m; i++) {
+          const l = L[i], r = R[i];
+          this.xy += l * r;
+          this.xx += l * l;
+          this.yy += r * r;
+        }
+      }
     }
 
     if (++this.blocks >= POST_EVERY) {
       this.blocks = 0;
-      // Plain numbers rather than a buffer: three of them, eight times a
+      /* Normalised here rather than on the main thread: the three raw sums are
+         about to be thrown away, and a ratio is one number instead of three.
+         A denominator of zero is silence in one channel or both, where there
+         is no phase relationship to report — `null` says so, which is a
+         different statement from "the channels cancel". */
+      const den = Math.sqrt(this.xx * this.yy);
+      const corr = den > 1e-12 ? Math.max(-1, Math.min(1, this.xy / den)) : null;
+      this.xy = 0; this.xx = 0; this.yy = 0;
+      // Plain numbers rather than a buffer: four of them, eight times a
       // second, is not worth a transfer.
-      this.port.postMessage({ peak: this.peak, sumSq: this.sumSq, samples: this.samples });
+      this.port.postMessage({ peak: this.peak, sumSq: this.sumSq, samples: this.samples, corr });
     }
     // Always. Returning false lets the browser collect the node, and a meter
     // that stops measuring the moment the music goes quiet is not a meter.

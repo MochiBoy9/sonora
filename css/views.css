@@ -134,7 +134,7 @@
 
 .home-hero .page-title { font-size: calc(clamp(32px, 4.4vw, 52px) * var(--scale)); letter-spacing: -.038em; }
 .home-hero .page-sub { margin-top: 12px; color: var(--text-2); }
-.home-hero .hero-actions { margin-top: 22px; flex-wrap: wrap; }
+.home-hero .hero-actions { margin-top: 22px; }
 .home-hero-text { min-width: 0; }
 
 /* The generated vector on the right of the home header. */
@@ -246,7 +246,14 @@
 .hero-show { align-items: center; gap: 46px; padding: 52px 40px 48px; }
 
 .hero-show .sleeve-stage {
-  --sleeve-size: 232px;
+  /* R12: 232px was a good size for a cover and too small for the back of one.
+     A back cover has to hold a head, a tracklist, eight rows of spec and a
+     catalogue number, and at 232 the last three spec rows faded out no matter
+     how the flex priorities were arranged — there simply were not enough
+     pixels. 272 is the smallest size at which all four blocks print, and it is
+     also a better size for the front: an album page is a showcase, and this is
+     the object being shown. */
+  --sleeve-size: 272px;
   --floor-h: 52px;
   width: var(--sleeve-size);
   flex: none;
@@ -321,8 +328,8 @@
   transform: rotateY(180deg);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 18px 18px 14px;
+  gap: 8px;
+  padding: 15px 16px 12px;
   overflow: hidden;
   /* Printed card, not glass: the back of a sleeve is the one surface in the
      app that should look like ink on board rather than light behind glass. */
@@ -334,7 +341,9 @@
   border-radius: var(--radius);
 }
 
-.back-head { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; border-bottom: var(--hair) solid var(--line); }
+/* The two blocks that name the record never give up a pixel; the two that
+   list it are the ones that flex. */
+.back-head { flex: none; display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; border-bottom: var(--hair) solid var(--line); }
 .back-artist {
   font-family: var(--mono);
   font-size: calc(9.5px * var(--scale));
@@ -352,8 +361,14 @@
 }
 
 .back-list {
-  flex: 1;
-  min-height: 0;
+  /* `flex: 1` alone made this the only elastic block, so it absorbed every
+     pixel the three fixed blocks around it did not want — and once the spec
+     block grew past four rows that came to 4px, with the tracklist's own rows
+     spilling out of it and printing over the spec. The tracklist is what a
+     back cover is *for*, so it is the one thing here with a floor: three
+     tracks always, and the fine print below gives way instead. */
+  flex: 1 1 auto;
+  min-height: calc(3 * 1.5 * 10.5px * var(--scale));
   overflow-y: auto;
   margin: 0;
   padding: 0;
@@ -373,8 +388,23 @@
   align-items: baseline;
   font-size: calc(10.5px * var(--scale));
   color: var(--text-2);
-  line-height: 1.5;
+  line-height: 1.4;
 }
+/* R8: the rule between sides. Set in the same fine print as the spec block,
+   because it is a marking on the sleeve rather than another track. */
+.back-list li.back-disc {
+  grid-template-columns: 1fr;
+  margin: 4px 0 2px;
+  padding-top: 3px;
+  border-top: var(--hair) solid var(--line);
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(8.5px * var(--scale));
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.back-list li.back-disc:first-child { margin-top: 0; border-top: 0; }
+
 .back-n, .back-d {
   font-family: var(--mono);
   font-size: calc(9px * var(--scale));
@@ -390,16 +420,35 @@
   grid-template-columns: auto minmax(0, 1fr);
   gap: 1px 10px;
   margin: 0;
-  padding-top: 8px;
+  padding-top: 6px;
   border-top: var(--hair) solid var(--line);
   font-family: var(--mono);
   font-size: calc(8.5px * var(--scale));
   letter-spacing: .06em;
+  line-height: 1.28;
+  /* Fine print, and it behaves like it. The shrink factor is what orders the
+     two: a 232px sleeve cannot hold the head, four tracks, eight rows of spec
+     and a catalogue number at once, so something has to give, and it should be
+     the technical block rather than the tracklist. Shrinking forty times as
+     readily makes it absorb the whole shortfall until it reaches its own floor
+     of four rows, and only then does the tracklist start to run out. */
+  flex: 0 40 auto;
+  min-height: calc(4 * 1.28 * 8.5px * var(--scale) + 10px);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 84%, transparent);
+  mask-image: linear-gradient(to bottom, #000 84%, transparent);
+}
+/* Two pairs to a line above the width where they fit, which halves the block's
+   height and is how a real back cover sets its fine print anyway — the spec is
+   a strip along the bottom, not a column. */
+@media (min-width: 900px) {
+  .back-spec { grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); gap: 1px 8px; }
 }
 .back-spec dt { color: var(--text-3); text-transform: uppercase; letter-spacing: .16em; }
 .back-spec dd { margin: 0; color: var(--text-2); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .back-cat {
+  flex: none;
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -407,7 +456,7 @@
   font-size: calc(8.5px * var(--scale));
   letter-spacing: .18em;
   color: var(--text-3);
-  padding-top: 6px;
+  padding-top: 5px;
   border-top: var(--hair) solid var(--line);
 }
 
@@ -415,7 +464,12 @@
 .flip-btn {
   position: absolute;
   left: 50%;
-  bottom: calc(var(--floor-h) * -0.1);
+  /* On the floor, not below it. The stage overhangs the hero by the height of
+     the reflection — which is deliberate, the echo is meant to overflow — but
+     the hero clips, so a button hung under that overhang lost its bottom nine
+     pixels. Inside the floor band it sits over the reflection, which is what
+     "on the floor" meant in the first place. */
+  bottom: calc(var(--floor-h) * 0.2);
   transform: translateX(-50%);
   z-index: 4;
   display: inline-flex;
@@ -441,6 +495,7 @@
 }
 .flip-btn .ico { width: 13px; height: 13px; }
 .hero-show:hover .flip-btn, .flip-btn:focus-visible, .flip-btn[aria-pressed="true"] { opacity: 1; }
+.hero-show:hover .zoom-btn, .zoom-btn:focus-visible { opacity: 1; }
 .flip-btn:hover { color: var(--accent); background: rgb(var(--accent-rgb) / .12); }
 /* No pointer means no hover to reveal it with. */
 @media (hover: none) { .flip-btn { opacity: 1; } }
@@ -470,6 +525,21 @@
   .hero-show { gap: 22px; padding-top: 30px; }
   .hero-show .sleeve-stage { --sleeve-size: 168px; padding-bottom: 0; margin-bottom: 0; }
   .hero-show .art-floor, .hero-show .sleeve-stage::after { display: none; }
+
+  /* A 168px sleeve is three quarters of a 232px one, and the back cover's
+     guarantees were written in absolute pixels for the larger card — four rows
+     of spec and three tracks need 213px of a 168px square. Everything gives a
+     little: the card holds two tracks and three rows of fine print here, and
+     the rest runs out under the fades it already has. */
+  /* On two lines the facts open their own line, so the separator that joined
+     them to the artist would sit alone at the end of the one above. */
+  .hero-facts > .dot:first-child { display: none; }
+
+  .sleeve-back { gap: 6px; padding: 10px 11px 8px; }
+  .back-head { padding-bottom: 5px; }
+  .back-list { min-height: calc(2 * 1.4 * 10.5px * var(--scale)); }
+  .back-spec { padding-top: 5px; min-height: calc(3 * 1.28 * 8.5px * var(--scale) + 8px); }
+  .back-cat { padding-top: 4px; }
 }
 
 .hero-meta { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-bottom: 4px; }
@@ -490,11 +560,25 @@
   letter-spacing: .1em;
   text-transform: uppercase;
 }
+/* Year, track count and runtime move as one unit, so the only place the line
+   can break is after the artist — a wrapping row of dot-separated spans
+   otherwise ends a line on a bare separator, which reads as a truncation. */
+.hero-facts { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
 .hero-link { color: var(--text); font-weight: 500; transition: color var(--dur-1) linear; }
 .hero-link:hover { color: var(--accent); }
 .dot { width: 3px; height: 3px; background: currentColor; opacity: .45; }
 
-.hero-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+/* Wrapping rather than squeezing. Four controls and three gaps come to
+   exactly the width of a 620px hero, and `nowrap` spends the shortfall on
+   whichever button has a label — Shuffle lost fifteen pixels of its own
+   name. The home hero already wrapped; every hero does now. */
+/* The sort button sits to the right of whatever else the toolbar holds — the
+   view modes on Albums, nothing at all on Artists — so it is pushed rather
+   than placed, and the toolbar reads the same on both. */
+.toolbar .sort-btn { margin-left: auto; }
+.sort-btn .sort-dir { font-family: var(--mono); opacity: .7; margin-left: -3px; }
+
+.hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 
 /* ------------------------------------------------------------------ grids */
 
@@ -663,6 +747,10 @@
 .settings-ico .ico { width: 17px; height: 17px; }
 .settings-text { flex: 1; min-width: 0; }
 .settings-name { color: var(--text); font-weight: 550; font-size: calc(13.5px * var(--scale)); }
+/* A number that has crossed into the part of the range where things start to
+   fail, said in the warn colour so it reads before it is read. */
+.settings-warn { color: var(--warn); }
+
 .settings-note { color: var(--text-3); font-size: calc(12.5px * var(--scale)); margin-top: 2px; }
 .settings-actions {
   display: flex;
@@ -673,6 +761,26 @@
   min-width: 0;
   margin-left: auto;
 }
+/* A native <select> in the settings column. Styled to sit beside the switches
+   and segmented pickers without pretending to be one of them — the list of
+   outputs is the system's to draw, and a custom menu would only be a worse
+   copy of it. */
+.settings-select {
+  appearance: none;
+  max-width: 220px;
+  padding: 6px 26px 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) * 0.6);
+  background: var(--surface-2)
+    linear-gradient(45deg, transparent 50%, var(--text-3) 50%) calc(100% - 14px) 52% / 5px 5px no-repeat;
+  color: var(--text);
+  font: inherit;
+  font-size: calc(12.5px * var(--scale));
+  cursor: pointer;
+}
+.settings-select:hover { border-color: var(--line-2); }
+.settings-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* Below this the text and the control stop fitting side by side, so the
    control drops under the text instead of squeezing it. */
 @media (max-width: 520px) {
@@ -817,7 +925,27 @@
 
 .qrow-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .qrow-title { color: var(--text); font-size: calc(12.5px * var(--scale)); font-weight: 530; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qrow-sub { color: var(--text-3); font-size: calc(11.5px * var(--scale)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qrow-sub {
+  display: flex; align-items: baseline; gap: 7px; min-width: 0;
+  color: var(--text-3); font-size: calc(11.5px * var(--scale));
+}
+.qrow-artist { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Where a queued track came from, where that differs from where the queue
+   did. Set apart in the mono face so it reads as a note about the row rather
+   than as part of the artist's name. */
+.qrow-from {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: .75;
+}
+/* The fold. A link rather than a button with a box, because it belongs to the
+   summary line beside it. */
+.queue-past { flex: none; }
+.qrow:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: -2px; }
 .qrow-time { font-family: var(--mono); color: var(--text-3); font-size: calc(11px * var(--scale)); font-variant-numeric: tabular-nums; flex: none; }
 .qrow-remove { opacity: 0; transition: opacity var(--dur-1) linear; }
 .qrow:hover .qrow-remove { opacity: 1; }
@@ -1148,6 +1276,33 @@
   text-transform: uppercase;
   color: var(--text-3);
 }
+/* A sleeve with a back needs a size of its own.
+ *
+ * `.sleeve-flip` is absolutely positioned, so wrapping the artwork in one
+ * takes the art out of flow and the sleeve — which everywhere but the album
+ * page is sized by its own contents — collapses to nothing. The front still
+ * looked right, because the art overflows the empty box; the back cover was
+ * being laid out inside a container 0px tall, which is where its tracklist
+ * went. The album page gives the sleeve an explicit `--sleeve-size`; a card
+ * takes its width from the grid, so the square is stated as a ratio. */
+.card .sleeve.has-back { aspect-ratio: 1 / 1; }
+
+/* R4: how far into the crate you are. The third line of the block that names
+   the record, in the mono face the rest of the app uses for figures — placed
+   by the flex column above rather than at its own `bottom`, so a subtitle that
+   wraps pushes it down instead of printing through it. */
+.crate-count {
+  font-family: var(--mono);
+  letter-spacing: .18em;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+
+/* The half you have already been through. Warmer and a little more solid than
+   the half still to come, because it is nearer the eye — the far stack fades
+   into the box, the near one does not. */
+.crate-item.is-passed { filter: saturate(.86) brightness(.94); }
+
 .crate-hint {
   position: absolute;
   left: 0; right: 0; bottom: 8px;
@@ -1384,7 +1539,12 @@
   position: absolute;
   inset: 34px 0 22px;
   display: flex;
-  flex-direction: column;
+  /* `row` runs along the *inline* axis, and in a vertical writing mode that is
+     down the spine — so the title and the artist follow one another along the
+     length of it, which is how a spine is printed. `column` ran them across
+     the 19px width instead: two text columns and an 8px gap in 15px of room
+     left each of them four pixels wide, and the whole shelf read as noise. */
+  flex-direction: row;
   justify-content: flex-start;
   gap: 8px;
   /* Read bottom-to-top, which is how spines are printed nearly everywhere
@@ -1443,11 +1603,6 @@
 .floor {
   position: relative;
   margin-top: 8px;
-  /* Matched to the backdrop's own camera: it looks very slightly down from a
-     little above the plane, and the interface has to agree or the two spaces
-     disagree by a few degrees and the whole illusion reads as a mistake. */
-  perspective: 1100px;
-  perspective-origin: 50% 34%;
 }
 
 .floor-camera {
@@ -1455,12 +1610,40 @@
   top: 0;
   height: 78vh;
   transform-style: preserve-3d;
+  /* The camera holds the camera.
+   *
+   * These two belonged on `.floor` and could not work there: `.floor` is the
+   * scroll range, so its height is the whole library — 2,691px for thirteen
+   * albums and far more for a real one — and a `perspective-origin` in percent
+   * resolved against *that*. The vanishing point landed 200px below the bottom
+   * of the visible frame, moved further down with every album added, and
+   * drifted against the sticky element as the page scrolled. Rows converged on
+   * a point off the bottom of the screen and each one buried the titles of the
+   * row in front.
+   *
+   * On the sticky frame the horizon is a fixed fraction of what you can
+   * actually see, whatever the library holds. It sits high, and the rows stand
+   * below it, so walking forward walks *into* the room.
+   *
+   * Matched to the backdrop's own camera: it looks very slightly down from a
+   * little above the plane, and the interface has to agree or the two spaces
+   * disagree by a few degrees and the whole illusion reads as a mistake. */
+  perspective: 1100px;
+  perspective-origin: 50% 22%;
 }
 
 .floor-row {
   position: absolute;
-  left: 50%;
-  top: 22%;
+  /* R13: the run used to start at the horizontal centre, so at rest the left
+     forty per cent of the room was empty floor and the year ran off the right
+     edge. It starts at a gutter now. The vanishing point stays at the middle
+     of the frame, which is what gives the far years their drift toward the
+     centre — a room seen down its length, rather than a row of covers sliding
+     sideways. */
+  left: var(--floor-gutter, 72px);
+  /* Below the horizon, so the rows behind rise toward it and each one shows
+     above the one in front instead of sinking behind it. */
+  top: 46%;
   display: flex;
   gap: 26px;
   transform-style: preserve-3d;
@@ -1534,8 +1717,7 @@
 /* Someone who has asked for less motion gets the grid's honesty instead of a
    floor that moves whenever they scroll. */
 @media (prefers-reduced-motion: reduce) {
-  .floor { perspective: none; }
-  .floor-camera { position: static; height: auto; }
+  .floor-camera { perspective: none; position: static; height: auto; }
   .floor-row { position: static; transform: none !important; opacity: 1 !important; flex-wrap: wrap; justify-content: center; margin-bottom: 26px; }
   .floor-row .floor-text { opacity: 1; }
 }
@@ -1553,6 +1735,36 @@
    would position against the page instead. */
 .shelf-pad { flex: none; height: 1px; pointer-events: none; }
 .shelf-run > .spine { position: absolute; bottom: 18px; }
+
+/* R3: the divider cards.
+ *
+ * Standing proud of the records either side, and taller than them, because
+ * that is the whole of how a divider works — you find it by looking along the
+ * tops. Card stock rather than a printed sleeve: it is the one thing on the
+ * shelf that is not a record, and it should not read as one. */
+.shelf-tab {
+  position: absolute;
+  bottom: 18px;
+  width: 22px;
+  height: 292px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 9px;
+  border-radius: 3px 3px 1px 1px;
+  background: linear-gradient(100deg, var(--surface-3), var(--surface-2));
+  box-shadow:
+    inset 0 0 0 var(--hair) var(--line-2),
+    0 10px 22px -14px rgb(0 0 0 / .7);
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .1em;
+  color: var(--text-2);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  pointer-events: none;
+  z-index: 1;
+}
 
 /* The description a smart shelf was built from, shown on its own page. It is
    the thing that decides what is below it, so it belongs above the list rather
@@ -1576,6 +1788,85 @@
 .floor:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 6px; }
 .floor.is-walking { cursor: grabbing; }
 .floor.is-walking .floor-card { pointer-events: none; }
+
+/* The layer the room's controls stand on. Zero height by design — see the
+   comment beside `floor-hud` in views.js — so the camera underneath still
+   starts at the top of the scroll range. */
+.floor-hud {
+  position: sticky;
+  top: 0;
+  height: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.floor-hud > * { pointer-events: auto; }
+
+/* Said once, along the bottom, out of the way of the room. */
+.floor-hint {
+  position: absolute;
+  left: 0; right: 0;
+  top: calc(78vh - 24px);
+  display: block;
+  text-align: center;
+  opacity: .45;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------- the decade rail (R2) */
+
+/* Standing up, at the right edge, outside the room's own perspective — it is
+   a legend for the floor rather than an object on it, and putting it inside
+   `.floor-camera` would give it the same vanishing point as the records and
+   fold it into the wall. */
+.floor-rail {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 78vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 14px 0 8px;
+  pointer-events: auto;
+}
+.floor-rail-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .16em;
+  color: var(--text-3);
+  padding: 5px 6px;
+  border-right: 2px solid transparent;
+  text-align: right;
+  transition: color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+.floor-rail-btn:hover { color: var(--text); }
+.floor-rail-btn.is-on { color: var(--accent); border-right-color: var(--accent); }
+.floor-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ------------------------------------------ the record that is playing (R1) */
+
+/* A lamp, not a highlight. The room is lit from above and slightly behind, so
+   the record being played gets a little more of that light and a rim where the
+   sleeve catches it — the same thing a spotlit record in a shop window does,
+   rather than a coloured border drawn on top of the artwork. */
+.floor-card.is-playing .floor-art {
+  box-shadow:
+    0 0 0 1px rgb(var(--accent-rgb) / .5),
+    0 0 26px 2px rgb(var(--accent-rgb) / .34),
+    0 14px 30px rgb(0 0 0 / .4);
+}
+.floor-card.is-playing .floor-text b { color: var(--accent); }
+.floor-card:focus-visible { outline: none; }
+.floor-card:focus-visible .floor-art { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .floor-rail-btn { transition: none; }
+}
 
 .floor-mark {
   position: absolute;
@@ -1601,3 +1892,535 @@
   opacity: .3;
   font-size: calc(34px * var(--scale));
 }
+
+
+/* ------------------------------------------------------- the circles' table
+
+   A3. The same figures the drawing shows, as figures. Offered to everybody
+   rather than hidden for assistive technology only: "how much more is the
+   first than the fourth" is a question a sorted column answers at a glance and
+   a packed circle does not. */
+.circle-table {
+  margin-top: 18px;
+  border: var(--hair) solid var(--line);
+  border-radius: var(--radius);
+  background: rgb(var(--surface-rgb) / .6);
+  overflow: hidden;
+}
+.circle-table-head { padding: 10px 12px; border-bottom: var(--hair) solid var(--line); }
+.circle-find {
+  width: 100%;
+  max-width: 280px;
+  padding: 6px 10px;
+  border: var(--hair) solid var(--line);
+  border-radius: calc(var(--radius) * 0.6);
+  background: rgb(var(--bg-rgb) / .5);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(13px * var(--scale));
+}
+.circle-table table { width: 100%; border-collapse: collapse; }
+.circle-table th, .circle-table td {
+  text-align: left;
+  padding: 7px 12px;
+  font-size: calc(12.5px * var(--scale));
+  border-bottom: var(--hair) solid var(--line-2);
+}
+.circle-table thead th {
+  color: var(--text-3);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: calc(10px * var(--scale));
+}
+.circle-table .num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+.circle-table tbody th { font-weight: 500; color: var(--text); }
+.circle-table tr.is-pinned { background: rgb(var(--accent-rgb) / .08); }
+.circle-table tbody tr:last-child th,
+.circle-table tbody tr:last-child td { border-bottom: 0; }
+
+/* A button that reads as the text it contains, because what it does is take
+   you to that thing rather than perform an action on it. */
+.linkish {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.linkish:hover { color: var(--accent); text-decoration: underline; }
+
+/* The circle that stands for all the rest. Drawn as an outline rather than a
+   disc, so it does not read as one more artist. */
+.circle-node.is-tail .circle-disc { fill: none; stroke: var(--line-2); stroke-dasharray: 3 4; }
+
+
+/* I4: a folder that is off. Dimmed rather than struck through — it is still
+   here, and everything Sonora knows about its tracks is still here too. */
+.settings-row.is-off .settings-name,
+.settings-row.is-off .settings-ico { opacity: .55; }
+
+/* I2: what an import could not read. */
+.fail-list { list-style: none; margin: 10px 0 0; padding: 0; max-height: 40vh; overflow-y: auto; }
+.fail-list li {
+  display: flex;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: var(--hair) solid var(--line-2);
+  font-size: calc(12.5px * var(--scale));
+}
+.fail-list li:last-child { border-bottom: 0; }
+.fail-name { flex: 1; min-width: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fail-why { flex: none; max-width: 45%; color: var(--text-3); font-family: var(--mono); font-size: calc(10.5px * var(--scale)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* I2: the file the scan is on, under the bar. */
+.scan-file {
+  color: var(--text-3);
+  font-size: calc(10.5px * var(--scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+
+/* ------------------------------------------------------------------ L4
+
+   Genres. Weighted tiles rather than a uniform grid: a genre with four tracks
+   and one with four hundred are not the same kind of thing, and a grid of
+   equal boxes says they are. */
+.genre-wall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 60px;
+}
+.genre-tile {
+  --w: 1;
+  flex: 1 1 calc(120px + 150px * var(--w));
+  min-width: calc(120px + 90px * var(--w));
+  min-height: calc(64px + 46px * var(--w));
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+  padding: 12px 14px;
+  text-decoration: none;
+  border: var(--hair) solid var(--line);
+  border-radius: var(--radius);
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  background:
+    linear-gradient(150deg,
+      rgb(var(--accent-rgb) / calc(.05 + .10 * var(--w))),
+      rgb(var(--surface-rgb) / .7));
+  transition: border-color var(--dur-2) var(--ease), transform var(--dur-2) var(--ease);
+}
+.genre-tile:hover { border-color: var(--accent-line); transform: translateY(-2px); }
+.genre-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.genre-name {
+  color: var(--text);
+  font-size: calc((13px + 5px * var(--w)) * var(--scale));
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+.genre-count {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  letter-spacing: .06em;
+}
+@media (prefers-reduced-motion: reduce) {
+  .genre-tile { transition: none; }
+  .genre-tile:hover { transform: none; }
+}
+
+
+/* ------------------------------------------------------------------ L9
+
+   Needs attention. Six findings the application already had and kept in six
+   places. Each is a count, the list behind it, and one thing to do. */
+.attn { display: flex; flex-direction: column; gap: 12px; padding-bottom: 70px; }
+.attn-card {
+  border: var(--hair) solid var(--line);
+  border-radius: var(--radius);
+  background: rgb(var(--surface-rgb) / .55);
+  overflow: hidden;
+}
+.attn-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+.attn-head:hover { background: var(--surface-hi); }
+.attn-ico { flex: none; color: var(--text-3); display: flex; }
+.attn-ico .ico { width: 18px; height: 18px; }
+.attn-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.attn-text b { color: var(--text); font-size: calc(14px * var(--scale)); font-weight: 600; }
+.attn-note { color: var(--text-3); font-size: calc(12px * var(--scale)); }
+/* The number is the point of the row, so it is set like one: mono, large, and
+   at the end where the eye lands after the label. */
+.attn-count {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(17px * var(--scale));
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.attn-head[aria-expanded="true"] { background: var(--surface-hi); }
+.attn-actions { padding: 0 16px 12px; }
+.attn-body { padding: 0 16px 14px; max-height: 52vh; overflow-y: auto; }
+
+.attn-albums { display: flex; flex-wrap: wrap; gap: 8px; }
+.attn-album {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 12px;
+  border: var(--hair) solid var(--line-2);
+  border-radius: calc(var(--radius) * 0.6);
+  text-decoration: none;
+  font-size: calc(12.5px * var(--scale));
+}
+.attn-album:hover { border-color: var(--accent-line); }
+.attn-album b { color: var(--text); font-weight: 550; }
+.attn-album span { color: var(--text-3); font-size: calc(11px * var(--scale)); }
+
+.attn-group { padding: 8px 0; border-bottom: var(--hair) solid var(--line-2); }
+.attn-group > b { color: var(--text); font-size: calc(13px * var(--scale)); }
+.attn-file { display: flex; gap: 12px; padding: 3px 0 0 14px; }
+.attn-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: calc(11.5px * var(--scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;                 /* the filename matters more than the root */
+  text-align: left;
+}
+.attn-meta {
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+}
+
+
+/* L11: find and replace. The preview is the point of the dialog, so it gets
+   the room — everything above it is three lines of form. */
+.replace-form { display: flex; flex-direction: column; gap: 8px; }
+.replace-row { display: flex; align-items: center; gap: 10px; }
+.replace-label { flex: none; width: 96px; color: var(--text-3); font-size: calc(12.5px * var(--scale)); }
+.replace-row .input, .replace-row .settings-select { flex: 1; max-width: none; }
+.replace-out {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: var(--hair) solid var(--line);
+  max-height: 34vh;
+  overflow-y: auto;
+}
+.replace-count { color: var(--accent); font-size: calc(13px * var(--scale)); margin-bottom: 6px; }
+.replace-list { list-style: none; margin: 0; padding: 0; }
+.replace-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: calc(12.5px * var(--scale));
+}
+.replace-from { color: var(--text-3); text-decoration: line-through; }
+.replace-arrow { color: var(--text-3); flex: none; }
+.replace-to { color: var(--text); }
+.attn-tools { margin-bottom: 14px; }
+
+
+/* L13/L14: importing playlist files. */
+.m3u-missing { margin-top: 10px; }
+.m3u-missing summary { cursor: pointer; color: var(--text-2); font-size: calc(12.5px * var(--scale)); }
+.found-lists { list-style: none; margin: 10px 0 0; padding: 0; max-height: 40vh; overflow-y: auto; }
+.found-lists li { padding: 4px 0; }
+.found-lists label { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.found-lists span {
+  color: var(--text-2);
+  font-size: calc(12.5px * var(--scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* L17: the overrides you have set, as chips you can walk back to. */
+.over-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; align-items: center; }
+.over-chip {
+  padding: 2px 8px;
+  border: var(--hair) solid var(--line-2);
+  border-radius: 999px;
+  color: var(--text-2);
+  text-decoration: none;
+  font-size: calc(11.5px * var(--scale));
+}
+.over-chip:hover { border-color: var(--accent-line); color: var(--accent); }
+
+
+/* R6: the cover, looked at.
+   Black rather than the app's own scrim: this is a picture being shown, and
+   anything tinted behind it is a colour cast over somebody's artwork. */
+.lb {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 28px;
+  background: rgb(0 0 0 / .92);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.lb-frame { display: grid; place-items: center; min-height: 0; }
+.lb-img {
+  max-width: 100%;
+  max-height: 100%;
+  /* Nearest-neighbour would be honest about a small cover and unbearable to
+     look at; a smooth upscale is what every image viewer does and the caption
+     says what the real size is. */
+  object-fit: contain;
+  box-shadow: 0 30px 90px -30px rgb(0 0 0 / .9);
+  border-radius: 2px;
+}
+.lb-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: var(--text-2);
+}
+.lb-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lb-text b { color: #fff; font-size: calc(15px * var(--scale)); }
+.lb-text span { color: rgb(255 255 255 / .6); font-size: calc(12.5px * var(--scale)); }
+.lb-size {
+  flex: none;
+  color: rgb(255 255 255 / .45);
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  letter-spacing: .08em;
+}
+.lb-close { color: rgb(255 255 255 / .8); }
+.lb-close:hover { color: #fff; }
+/* The page behind it does not scroll while it is up. */
+body.lb-open { overflow: hidden; }
+
+/* Two buttons on the floor now, so they sit either side of the centre line
+   rather than both claiming it. The flip keeps the left half and hangs off its
+   own right edge; Look takes the right half and hangs off its left. */
+.hero-show .flip-btn { left: calc(50% - 7px); transform: translateX(-100%); }
+.hero-show .zoom-btn { left: calc(50% + 7px); transform: none; }
+
+
+/* ------------------------------------------------------------------ R9
+
+   Wear.
+
+   Two marks, both bounded so a favourite record stays readable: a ring where
+   the disc has rubbed the inside of the sleeve, and a little more sheen where
+   the card has been handled. `--wear` is the Look's own dial and is zero by
+   default; `--played` is this record's own figure, set by renderAlbumCard.
+
+   Drawn on the stage rather than on the artwork, so it sits *on* the sleeve
+   in the same plane as the edge and the highlight rather than being composited
+   into somebody's picture. */
+.card-art { --worn: calc(var(--wear, 0) * var(--played, 0)); }
+.card-art::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: var(--worn);
+  /* The ring: a disc-shaped scuff at about the radius of a 12" record inside a
+     12" sleeve, which is nearly the full width — and never reaching the
+     middle, where the title usually is. */
+  background:
+    radial-gradient(circle at 50% 50%,
+      transparent 0 40%,
+      rgb(255 255 255 / .05) 43%,
+      rgb(255 255 255 / .11) 46%,
+      rgb(255 255 255 / .05) 49%,
+      transparent 52%),
+    radial-gradient(circle at 50% 50%,
+      transparent 0 45%,
+      rgb(0 0 0 / .10) 47.5%,
+      transparent 50%);
+  mix-blend-mode: soft-light;
+  border-radius: inherit;
+}
+/* And the handled corners: brighter where a card is picked up, which is the
+   top corners and the leading edge. */
+.card-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: calc(var(--worn) * .7);
+  background:
+    radial-gradient(120% 80% at 8% 4%, rgb(255 255 255 / .16), transparent 42%),
+    radial-gradient(120% 80% at 96% 6%, rgb(255 255 255 / .12), transparent 40%);
+  mix-blend-mode: screen;
+  border-radius: inherit;
+}
+
+
+/* ------------------------------------------------------------------ R10
+
+   The shop window. Over everything but under nothing — a click anywhere takes
+   it away, so it must not eat the click that dismisses it. */
+.idle {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  background: rgb(var(--bg-rgb) / .96);
+  animation: idle-in 600ms var(--ease) both;
+}
+.idle.is-out { animation: idle-out 300ms var(--ease) both; }
+@keyframes idle-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes idle-out { from { opacity: 1 } to { opacity: 0 } }
+
+.idle-stack {
+  position: relative;
+  width: min(58vmin, 520px);
+  aspect-ratio: 1;
+}
+.idle-face {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: scale(1.04);
+  transition: opacity 1600ms var(--ease), transform 9000ms linear;
+  box-shadow: 0 40px 120px -40px rgb(0 0 0 / .9);
+  background: rgb(var(--surface-rgb) / .6);
+}
+/* The drift: a very slow push in, so a still picture is not a still picture. */
+.idle-face.is-in { opacity: 1; transform: scale(1.09); }
+.idle-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.idle-caption {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 8vh;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.idle-caption b { color: var(--text); font-size: calc(19px * var(--scale)); font-weight: 600; }
+.idle-caption span { color: var(--text-3); font-size: calc(13px * var(--scale)); }
+
+@media (prefers-reduced-motion: reduce) {
+  /* The covers still change; they simply cut rather than gliding. */
+  .idle, .idle.is-out { animation: none; }
+  .idle-face { transition: none; transform: none; }
+  .idle-face.is-in { transform: none; }
+}
+
+
+/* ------------------------------------------------------------------ R7
+
+   The gatefold.
+
+   The spread is twice the width of the sleeve and hangs off its left edge, so
+   opening pushes the left-hand panel out into the space the hero has and the
+   right-hand panel stays exactly where the cover was — which is what a
+   gatefold does when you open it on a table. */
+.sleeve-back.is-gate {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  padding: 0;
+  width: 200%;
+  left: -100%;
+}
+.gate-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 15px 16px 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+/* The fold. A crease rather than a border: two panels of one sheet, and the
+   light catches the valley between them. */
+.gate-left {
+  border-right: var(--hair) solid var(--line);
+  box-shadow: inset -14px 0 18px -18px rgb(0 0 0 / .8);
+}
+.gate-right { box-shadow: inset 14px 0 18px -18px rgb(0 0 0 / .8); }
+.gate-list { flex: 1 1 auto; min-height: 0; }
+
+/* While it is open the hero gives the spread the room, and the text goes
+   underneath rather than being squeezed into a column. */
+.hero-show.is-open { flex-wrap: wrap; }
+.hero-show.is-open .sleeve-stage { margin-right: var(--sleeve-size); }
+.hero-show.is-open .hero-meta { flex-basis: 100%; }
+
+@media (max-width: 720px) {
+  /* No room to open sideways: the spread stacks instead, which is a gatefold
+     stood on its end and is still legible. */
+  .sleeve-back.is-gate { grid-template-columns: 1fr; width: 100%; left: 0; grid-template-rows: 1fr 1fr; }
+  .gate-left { border-right: 0; border-bottom: var(--hair) solid var(--line); box-shadow: none; }
+  .gate-right { box-shadow: none; }
+  .hero-show.is-open .sleeve-stage { margin-right: 0; }
+}
+
+
+/* ------------------------------------------------------------------ T2/T3
+
+   What a record measures. Four figures at most, each with what it means under
+   it — a panel of bare numbers is a panel nobody reads twice. */
+.analysis { margin-top: 26px; }
+.analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+.analysis-cell {
+  padding: 12px 14px;
+  border: var(--hair) solid var(--line);
+  border-radius: var(--radius);
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  background: rgb(var(--surface-rgb) / .5);
+}
+.analysis-cell.is-warn { border-color: rgb(var(--accent-rgb) / .3); background: rgb(255 200 87 / .06); }
+.analysis-label {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.analysis-value {
+  color: var(--text);
+  font-size: calc(23px * var(--scale));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+  margin: 3px 0 2px;
+}
+.analysis-cell.is-warn .analysis-value { color: var(--warn); }
+.analysis-note { color: var(--text-3); font-size: calc(11.5px * var(--scale)); line-height: 1.35; }
+.analysis-foot { margin-top: 10px; font-size: calc(11.5px * var(--scale)); }

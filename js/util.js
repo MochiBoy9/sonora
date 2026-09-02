@@ -202,6 +202,30 @@ export const canDecode = (name) => !UNDECODABLE.has(ext(name));
 /** "FLAC", "M4A" — the format's name, for saying what went wrong. */
 export const formatName = (name) => (ext(name) || 'audio').toUpperCase();
 
+/**
+ * How long ago, in a column two characters wide.
+ *
+ * A list of dates is unreadable — twenty rows of "14/03/2025" tell you nothing
+ * you can compare at a glance. A list of ages is a shape: everything from this
+ * week reads as days, everything from a while back reads as months, and the
+ * gap between the two is what somebody scanning the column is looking for. The
+ * exact date is in the tooltip for when it is actually wanted.
+ */
+export function fmtAgo(ts) {
+  if (!ts) return '—';
+  const s = Math.max(0, (Date.now() - ts) / 1000);
+  if (s < 90) return 'now';
+  const m = s / 60;
+  if (m < 60) return Math.round(m) + 'm';
+  const h = m / 60;
+  if (h < 24) return Math.round(h) + 'h';
+  const d = h / 24;
+  if (d < 7) return Math.round(d) + 'd';
+  if (d < 60) return Math.round(d / 7) + 'w';
+  if (d < 730) return Math.round(d / 30.44) + 'mo';
+  return Math.round(d / 365.25) + 'y';
+}
+
 export function fmtBytes(n) {
   if (!n) return '0 B';
   const u = ['B', 'KB', 'MB', 'GB'], i = Math.min(3, Math.floor(Math.log(n) / Math.log(1024)));
@@ -215,3 +239,12 @@ export function fmtBytes(n) {
  */
 const LYRIC_EXT = new Set(['lrc', 'txt']);
 export const isLyric = (name) => LYRIC_EXT.has(ext(name));
+
+/* A playlist file. Here rather than in `m3u.js` so that `library.js` can ask
+   the question without importing the module that answers it — the two would
+   otherwise import each other, and a cycle that works only because nobody
+   calls across it during evaluation is a cycle waiting to break. */
+export const isPlaylistFile = (name) => /\.m3u8?$/i.test(String(name || ''));
+
+/* A cue sheet: an index into an audio file rather than a track of its own. */
+export const isCueFile = (name) => /\.cue$/i.test(String(name || ''));

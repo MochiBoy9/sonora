@@ -1,6 +1,6 @@
 /* ui.js — shared widgets: artwork, track rows, menus, dialogs, toasts. */
 
-import { el, ico, fmtTime, clamp, canDecode } from './util.js';
+import { el, ico, fmtTime, fmtAgo, clamp, canDecode } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { animate, ease, enter, spring, settled } from './motion.js';
@@ -261,6 +261,11 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
        almost nobody opens — it is the most useful number about a file that is
        not its title, and a library sorted by it is a different library. */
     if (columns.includes('dr')) html += '<div class="trow-dr"></div>';
+    /* Both counted since the first release and shown nowhere until now. A play
+       count is the only thing in the index that is a record of *you* rather
+       than of the file, which is a reason to be able to see it. */
+    if (columns.includes('plays')) html += '<div class="trow-plays"></div>';
+    if (columns.includes('played')) html += '<div class="trow-played"></div>';
     if (columns.includes('duration')) html += '<div class="trow-time"></div>';
     html += '<div class="trow-actions">' +
       `<button class="icon-btn ghost trow-fav" aria-label="Favourite" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>` +
@@ -333,6 +338,23 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
          verdict somebody wants to read at a glance, not a heat map. */
       dr.classList.toggle('is-squashed', v > 0 && v < 8);
       dr.classList.toggle('is-open', v >= 14);
+    }
+
+    const plays = row.querySelector('.trow-plays');
+    if (plays) {
+      const n = track.playCount || 0;
+      const text = n ? String(n) : '—';
+      if (plays.textContent !== text) plays.textContent = text;
+      plays.title = n ? `Played ${n} ${n === 1 ? 'time' : 'times'}` : 'Never played';
+      plays.classList.toggle('is-none', !n);
+    }
+
+    const played = row.querySelector('.trow-played');
+    if (played) {
+      const text = track.lastPlayed ? fmtAgo(track.lastPlayed) : '—';
+      if (played.textContent !== text) played.textContent = text;
+      played.title = track.lastPlayed ? new Date(track.lastPlayed).toLocaleString() : 'Never played';
+      played.classList.toggle('is-none', !track.lastPlayed);
     }
 
     const time = row.querySelector('.trow-time');
@@ -688,6 +710,75 @@ export function editDialog(tracks) {
       },
     ],
   });
+}
+
+/* ------------------------------------------------------------------ R6
+ *
+ * Let a cover be looked at.
+ *
+ * Artwork is imported at about 448px and drawn at 232, and clicking one
+ * navigates — so there was no way to simply see the picture, which for a lot
+ * of records is half of why you own them.
+ *
+ * The largest thing Sonora holds is what it shows. That is the thumbnail
+ * rather than the file's own embedded image, and saying so is better than
+ * silently showing a small picture at a large size: the caption says what it
+ * is, and where the album still has its file the original is offered.
+ */
+export function lightbox(key, { title = '', artist = '' } = {}) {
+  const img = el('img', { class: 'lb-img', alt: title ? `Cover of ${title}` : 'Album cover', decoding: 'async' });
+  const size = el('span', { class: 'lb-size' });
+  const frame = el('div', { class: 'lb-frame' }, img);
+
+  const box = el('div', {
+    class: 'lb', role: 'dialog', 'aria-modal': 'true',
+    'aria-label': title ? `Cover of ${title}` : 'Album cover',
+  },
+    frame,
+    el('div', { class: 'lb-bar' },
+      el('div', { class: 'lb-text' },
+        el('b', { text: title }),
+        artist ? el('span', { text: artist }) : null),
+      size,
+      el('button', {
+        class: 'icon-btn lb-close', 'aria-label': 'Close', html: ico('close'),
+        onclick: () => close(),
+      })));
+
+  lib.loadArt(key).then((url) => {
+    if (!url) {
+      frame.textContent = '';
+      frame.appendChild(el('p', { class: 'muted', text: 'This record has no cover.' }));
+      return;
+    }
+    img.src = url;
+    // Once it has decoded, say how big it actually is — a 300px cover shown
+    // full-screen should admit to being a 300px cover.
+    img.addEventListener('load', () => {
+      size.textContent = `${img.naturalWidth} × ${img.naturalHeight}`;
+    }, { once: true });
+  });
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+  };
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  function close() {
+    removeEventListener('keydown', onKey, true);
+    settled(animate(box, { opacity: [1, 0] }, { duration: 160, commit: false }), 160)
+      .then(() => box.remove());
+    document.body.classList.remove('lb-open');
+    if (opener && opener.isConnected) opener.focus();
+  }
+
+  box.addEventListener('click', (e) => { if (e.target === box) close(); });
+  addEventListener('keydown', onKey, true);
+  document.body.appendChild(box);
+  document.body.classList.add('lb-open');
+  box.querySelector('.lb-close').focus();
+  animate(box, { opacity: [0, 1] }, { duration: 180 });
+  return close;
 }
 
 /* ------------------------------------------------------------------ dialogs */

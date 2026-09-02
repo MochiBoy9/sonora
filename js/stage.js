@@ -18,6 +18,7 @@ import * as lyrics from './lyrics.js';
 import * as peakmap from './peaks.js';
 import { tick, animate, spring, draggable, settled, ease, reduceMotion } from './motion.js';
 import * as rack from './audio.js';
+import * as keys from './keys.js';
 
 const MODE_KEY = 'sonora:viz';
 const DECK_KEY = 'sonora:deck';
@@ -31,6 +32,12 @@ export const storedMode = () => {
 };
 
 let open = null;                 // teardown for the live stage, or null
+
+/* What an open stage lets the two shared shortcuts do. Null while it is shut,
+   which is how bindings registered once at module load stay inert until there
+   is a stage for them to act on — and stay in the `?` overlay meanwhile, so the
+   list is the whole list rather than the list of what happens to be on screen. */
+let handlers = null;
 
 export const isOpen = () => !!open;
 
@@ -116,6 +123,71 @@ export function openStage(backdrop) {
     onclick: () => setDeck(!deckOn),
   });
 
+  /* R11: the credits.
+   *
+   * The tag reader pulls composer, lyricist, conductor, publisher, copyright
+   * and ISRC out of every container it handles, and until now the worker threw
+   * all of it away before the track was written — so a whole panel of real
+   * information was being parsed and dropped. On the immersive view, where
+   * there is nothing on screen but space, that is the obvious third thing to
+   * put beside the words and the turntable.
+   *
+   * It shows what the file carries and nothing where it carries nothing: an
+   * empty credits panel is worse than no button, so the button hides itself. */
+  const creditBox = el('div', { class: 'stage-credits', hidden: true });
+  const creditBtn = el('button', {
+    class: 'icon-btn stage-credit-btn', title: 'Credits (C)', 'aria-label': 'Show the credits',
+    'aria-pressed': 'false', html: ico('info'), hidden: true,
+  });
+
+  const CREDITS = [
+    ['composer', 'Written by'],
+    ['lyricist', 'Words by'],
+    ['conductor', 'Conducted by'],
+    ['remixer', 'Remixed by'],
+    ['publisher', 'Published by'],
+    ['copyright', 'Copyright'],
+    ['isrc', 'ISRC'],
+    ['encodedBy', 'Encoded by'],
+    ['encoder', 'Encoder'],
+  ];
+
+  let wantCredits = false;
+
+  function renderCredits() {
+    const t = player.state.current;
+    const rows = t ? CREDITS.filter(([k]) => t[k]) : [];
+    /* The album artist is worth a line where it differs from the track's own
+       artist — on a compilation that is the whole point, and the stage
+       otherwise only ever shows one of the two. */
+    const extra = [];
+    if (t && t.albumArtist && t.albumArtist !== t.artist) extra.push(['On a record by', t.albumArtist]);
+    if (t && t.album) extra.push(['From', t.album]);
+
+    creditBtn.hidden = !rows.length && !extra.length;
+    if (creditBtn.hidden) wantCredits = false;
+    creditBox.hidden = !(wantCredits && !creditBtn.hidden);
+    creditBtn.setAttribute('aria-pressed', wantCredits ? 'true' : 'false');
+    creditBtn.setAttribute('aria-label', wantCredits ? 'Hide the credits' : 'Show the credits');
+    if (creditBox.hidden) return;
+
+    creditBox.textContent = '';
+    const dl = el('dl', { class: 'stage-credit-list' });
+    for (const [label, value] of extra) {
+      dl.append(el('dt', { text: label }), el('dd', { text: value }));
+    }
+    for (const [key, label] of rows) {
+      dl.append(el('dt', { text: label }), el('dd', { text: String(t[key]) }));
+    }
+    creditBox.appendChild(dl);
+  }
+
+  creditBtn.addEventListener('click', () => {
+    wantCredits = !wantCredits;
+    if (wantCredits) { wantLyrics = false; syncLyricUI(); }
+    renderCredits();
+  });
+
   const elapsed = el('span', { class: 'stage-time', text: '0:00' });
   const total = el('span', { class: 'stage-time', text: '0:00' });
   const fill = el('div', { class: 'seek-fill' });
@@ -139,9 +211,9 @@ export function openStage(backdrop) {
   host.append(
     canvas,
     el('div', { class: 'stage-veil' }),
-    el('div', { class: 'stage-top' }, modeBar, deckBtn, lyricBtn, closeBtn),
+    el('div', { class: 'stage-top' }, modeBar, deckBtn, lyricBtn, creditBtn, closeBtn),
     el('div', { class: 'stage-body' }, artWrap,
-      el('div', { class: 'stage-meta' }, title, artist, tags, lyricBox)),
+      el('div', { class: 'stage-meta' }, title, artist, tags, lyricBox, creditBox)),
     el('div', { class: 'stage-foot' },
       el('div', { class: 'stage-scrub' }, elapsed, seek, total),
       transport));
@@ -463,6 +535,9 @@ export function openStage(backdrop) {
   }
 
   lyricBtn.addEventListener('click', () => {
+    // One panel at a time: the stage is one column, and two of these stacked
+    // is a page rather than a view.
+    if (!wantLyrics) { wantCredits = false; renderCredits(); }
     wantLyrics = !wantLyrics;
     syncLyricUI();
     if (wantLyrics) { shown = -1; followLyric(player.currentTime()); }
@@ -477,9 +552,16 @@ export function openStage(backdrop) {
    * this uses, so the arm sits where a real one would at the same point in a
    * side rather than sweeping some arbitrary arc chosen to look busy.
    */
-  const ARM_START = -20;            // dropped on the lead-in groove
-  const ARM_END = 2;                // run-out, near the label
-  const ARM_REST = -34;             // parked on its rest, nothing playing
+  /* Measured against where the arm actually is. The pivot sits 0.49 of the
+     deck to the right of the spindle and 0.44 above it, and the arm is 0.62 of
+     the deck long, so the angles that put the stylus on the lead-in groove and
+     on the run-out follow from the cosine rule rather than from taste. The old
+     pair (-20 and 2) were written for an arm that never drew at its real
+     length: at 210px they put the stylus off the edge of the record at the
+     start of a side and barely inside it at the end. */
+  const ARM_START = 6;              // dropped on the lead-in groove
+  const ARM_END = 32;               // run-out, near the label
+  const ARM_REST = -3;              // parked on its rest, nothing playing
 
   let deckOn = false;
   let scrubAt = null;               // fraction being dragged to, or null
@@ -508,8 +590,12 @@ export function openStage(backdrop) {
     const pivot = deck.querySelector('.deck-pivot').getBoundingClientRect();
     const cx = pivot.left + pivot.width / 2;
     const cy = pivot.top + pivot.height / 2;
-    // The arm hangs down-left from the pivot at rest; measure from straight down.
-    const deg = Math.atan2(e.clientX - cx, e.clientY - cy) * 180 / Math.PI;
+    /* Measured from straight down, in the same sense the arm is rotated in.
+       A positive CSS rotation is clockwise, which carries the tip to the
+       *left*, so the horizontal term is negated — without that the drag ran
+       backwards against the paint and grabbing the arm where it stood reported
+       the far end of the side. */
+    const deg = Math.atan2(cx - e.clientX, e.clientY - cy) * 180 / Math.PI;
     return Math.max(0, Math.min(1, (deg - ARM_START) / (ARM_END - ARM_START)));
   }
 
@@ -580,6 +666,11 @@ export function openStage(backdrop) {
   /* ---------------------------------------------------------------- wiring */
 
   const offTrack = player.events.on('track', paint);
+  const offCredits = player.events.on('track', renderCredits);
+  /* Drawn once at open as well as on every track change: the stage is nearly
+     always opened while something is already playing, and a panel that only
+     appears at the *next* track is a panel most people never see. */
+  renderCredits();
   const offLyrics = player.events.on('track', loadLyrics);
   const offSpec = player.events.on('track', loadSpec);
   loadSpec();
@@ -590,24 +681,24 @@ export function openStage(backdrop) {
     if (t) { paintArt(artImg, t.albumKey); paintArt(label, t.albumKey); }
   });
 
+  /* Escape stays a private handler on the capture phase, because closing the
+     thing in front of you has to beat whatever is behind it and that is a
+     question of ordering rather than of binding. */
   const onKey = (e) => {
-    if (e.key === 'Escape') { e.stopPropagation(); closeStage(); return; }
-    // Only while the stage is open, and only when there is something to show:
-    // a key that does nothing on most tracks is a key nobody learns.
-    if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey && !e.altKey && words) {
-      e.stopPropagation();
-      lyricBtn.click();
-      return;
-    }
-    /* Not gated on anything, unlike L: the deck is there for every track,
-       and the arrow keys the arm answers to are handled on the arm itself
-       so they only apply when it has the focus. */
-    if ((e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      e.stopPropagation();
-      setDeck(!deckOn);
-    }
+    if (e.key === 'Escape') { e.stopPropagation(); closeStage(); }
   };
   document.addEventListener('keydown', onKey, true);
+
+  /* The two stage keys live in the shared table and are registered once, at
+     module load — see the bottom of this file. All an open stage does is hand
+     them something to call. */
+  handlers = {
+    // Only while there is something to show: a key that does nothing on most
+    // tracks is a key nobody learns.
+    lyrics: () => (words ? (lyricBtn.click(), true) : false),
+    credits: () => (creditBtn.hidden ? false : (creditBtn.click(), true)),
+    deck: () => { setDeck(!deckOn); return true; },
+  };
 
   paint();
   paintState();
@@ -627,9 +718,10 @@ export function openStage(backdrop) {
     stopTick();
     sx.stop(); sy.stop();
     viz.destroy();
-    offTrack(); offState(); offArt(); offLyrics(); offSpec();
+    offTrack(); offCredits(); offState(); offArt(); offLyrics(); offSpec();
     offPeaks();
     document.removeEventListener('keydown', onKey, true);
+    handlers = null;
     arm.removeEventListener('pointerdown', onArmDown);
     arm.removeEventListener('pointermove', onArmMove);
     arm.removeEventListener('pointerup', onArmUp);
@@ -645,3 +737,31 @@ export function openStage(backdrop) {
     $('#playerbar')?.querySelector('.pb-stage')?.focus?.();
   };
 }
+
+/* ------------------------------------------------------------------ keys
+ *
+ * Registered at module load rather than when a stage opens, so that both appear
+ * in the keyboard overlay whether or not the immersive view is up. `active`
+ * decides whether either one does anything; `run` returning false declines the
+ * keystroke and lets the next binding have it. */
+keys.bind({
+  id: 'stage-lyrics', group: 'In the visualiser', combo: 'L',
+  label: 'Lyrics, when there are any',
+  active: () => !!handlers,
+  run: () => handlers.lyrics(),
+});
+keys.bind({
+  id: 'stage-credits', group: 'In the visualiser', combo: 'C',
+  label: 'Credits, where the file has them',
+  active: () => !!handlers,
+  run: () => handlers.credits(),
+});
+keys.bind({
+  id: 'stage-deck', group: 'In the visualiser', combo: 'D',
+  label: 'The turntable',
+  /* Not gated on anything, unlike L: the deck is there for every track, and the
+     arrow keys the arm answers to are handled on the arm itself so they only
+     apply when it has the focus. */
+  active: () => !!handlers,
+  run: () => handlers.deck(),
+});

@@ -103,6 +103,36 @@ export class VirtualList {
     }
     this.start = first;
     this.end = last;
+    this.orderRows();
+  }
+
+  /**
+   * Puts the live rows back into index order in the DOM.
+   *
+   * A row is placed by its transform, so the browser draws it in the right
+   * spot whatever order it sits in — but Tab, a screen reader and anything
+   * else that walks the document read the DOM order, and the pool hands nodes
+   * back last-in-first-out. Recycling a whole screen at once therefore leaves
+   * the rows in exactly reverse order, and the queue's keyboard reordering
+   * would have tabbed backwards through the list.
+   *
+   * The check is a walk and costs nothing; the repair only runs when the order
+   * is actually wrong, which is on a data change rather than on every frame of
+   * a scroll.
+   */
+  orderRows() {
+    let last = -1;
+    for (const node of this.layer.children) {
+      if (node.hidden) continue;
+      const i = +node.dataset.index;
+      if (i < last) {
+        for (const j of [...this.live.keys()].sort((a, b) => a - b)) {
+          this.layer.appendChild(this.live.get(j));
+        }
+        return;
+      }
+      last = i;
+    }
   }
 
   release(i, node) {
@@ -117,10 +147,52 @@ export class VirtualList {
 
   scrollToIndex(i, align = 'center') {
     if (i < 0 || i >= this.items.length) return;
+    /* Plus where the list starts inside the scroller.
+     *
+     * `update()` has always subtracted `sizer.offsetTop` when working out which
+     * rows are visible, and this did not add it back — so a jump landed short
+     * by however much page sits above the list, which on Songs is a heading, a
+     * toolbar and a column header, or about four rows. Nothing noticed while
+     * the only caller was a list that starts at the top of its own page. */
+    const from = this.sizer.offsetTop - this.stickyInset();
     const target = align === 'center'
-      ? i * this.rowHeight - (this.viewport.clientHeight - this.rowHeight) / 2
-      : i * this.rowHeight;
+      ? from + i * this.rowHeight - (this.viewport.clientHeight - this.rowHeight) / 2
+      : from + i * this.rowHeight;
     this.viewport.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  }
+
+  /**
+   * How much of the top of the scroller something else is already occupying.
+   *
+   * The songs list has a sticky column header pinned above it, so a row put at
+   * the very top of the viewport arrives forty pixels underneath the thing
+   * naming its columns — scrolled to, and invisible. Anything sticky sitting
+   * between the top of the scroller and the list is measured rather than
+   * assumed, because the album page has no header and the queue has a different
+   * one, and a hard-coded inset would be wrong on two pages out of three.
+   */
+  stickyInset() {
+    /* Where it will be once pinned, not where it is now.
+     *
+     * Reading the header's rectangle only works if it is already stuck, and at
+     * the top of a page it is still in flow two hundred pixels down — so a jump
+     * from the top would overshoot by the height of the page heading. A sticky
+     * element pins at the scrollport's *padding* edge plus whatever `top` it
+     * declares, so that is the sum: the scroller's own top padding, the
+     * element's offset, and its height.
+     *
+     * Measured rather than assumed because the album page has no header at all
+     * and the queue has a different one; a hard-coded inset would be wrong on
+     * two pages out of three. */
+    const pad = parseFloat(getComputedStyle(this.viewport).paddingTop) || 0;
+    let inset = 0;
+    for (let el = this.sizer.previousElementSibling; el; el = el.previousElementSibling) {
+      const cs = getComputedStyle(el);
+      if (cs.position !== 'sticky') continue;
+      const offset = parseFloat(cs.top) || 0;
+      inset = Math.max(inset, pad + offset + el.getBoundingClientRect().height);
+    }
+    return inset;
   }
 
   destroy() {
@@ -178,6 +250,20 @@ export class VirtualGrid {
 
   setItems(items) {
     this.items = items || [];
+    /* Every visible cell, again.
+     *
+     * `measure()` alone is not enough, and the reason is easy to miss: it only
+     * rebuilds when the *geometry* changes, and reordering a list of the same
+     * length at the same width changes neither the column count nor the row
+     * height. So the rows stayed exactly as they were and a re-sorted grid
+     * showed the old order — which is what happened the first time the Artists
+     * page was given something to sort by. The list next door has always done
+     * this; the grid only ever had new data handed to it when the count
+     * changed, so nothing had noticed.
+     *
+     * It costs one re-render of what is on screen, which is a couple of dozen
+     * cells however large the library is. */
+    this.recycleAll();
     this.measure();
   }
 
@@ -235,11 +321,13 @@ export class VirtualGrid {
       node.style.transform = `translate3d(0, ${r * this.rowHeight}px, 0)`;
       node.style.gridTemplateColumns = `repeat(${this.cols}, minmax(0, 1fr))`;
       node.style.gap = this.gap + 'px';
+      node.dataset.row = r;
       this.fillRow(node, r);
       if (!node.parentNode) this.layer.appendChild(node);
       node.hidden = false;
       this.live.set(r, node);
     }
+    this.orderRows();
 
     if (this.depth) { this.paintDepth(scrollTop, height); this.hazed = true; }
     else if (this.hazed) {
@@ -296,6 +384,22 @@ export class VirtualGrid {
   }
 
   refresh() { for (const [r, node] of this.live) this.fillRow(node, r); }
+
+  /** Index order in the DOM. See `VirtualList.orderRows` for why it matters. */
+  orderRows() {
+    let last = -1;
+    for (const node of this.layer.children) {
+      if (node.hidden) continue;
+      const r = +node.dataset.row;
+      if (r < last) {
+        for (const j of [...this.live.keys()].sort((a, b) => a - b)) {
+          this.layer.appendChild(this.live.get(j));
+        }
+        return;
+      }
+      last = r;
+    }
+  }
 
   recycleAll() {
     for (const [r, node] of this.live) { node.hidden = true; this.pool.push(node); }

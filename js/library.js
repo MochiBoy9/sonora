@@ -14,7 +14,8 @@
 
 import * as db from './db.js';
 import * as undo from './undo.js';
-import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle, ext } from './util.js';
+import * as cue from './cue.js';
+import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle, ext, canDecode, isPlaylistFile, isCueFile } from './util.js';
 
 export const events = new Emitter();
 
@@ -78,8 +79,12 @@ function ensureWorker() {
       if (done) { coverWaits.delete(msg.id); done(msg.blob ? msg : null); }
       return;
     }
+    if (msg.type === 'failed') {
+      noteScanFailure(msg.name, msg.reason);
+      return;
+    }
     if (msg.type === 'progress') {
-      state.progress = { done: msg.done, total: msg.total };
+      state.progress = { done: msg.done, total: msg.total, file: msg.file || '' };
       events.emit('progress', state.progress);
     } else if (msg.type === 'done') {
       flushArt();
@@ -94,6 +99,24 @@ function ensureWorker() {
 function absorb(batch) {
   const rows = [];
   for (const { track, art } of batch) {
+    /* Nothing from the file itself.
+     *
+     * Not "no artist and no album": the reader falls back to the folder tree,
+     * so `Broken/Album/03 Bogus.mp3` arrives with an artist and an album that
+     * were never in the file. `guessed` is the list of fields it had to take
+     * from the path, and a track where that covers both is a track the reader
+     * learned nothing from — which is exactly the file somebody is looking for
+     * when their library has come out wrong.
+     *
+     * Counted while the batch is in hand rather than by walking the library
+     * afterwards, and only during a scan, so a rescan that touches nothing
+     * reports nothing. */
+    if (state.scanning) {
+      const g = String(track.guessed || '').split(' ');
+      if (g.includes('artist') && g.includes('album')) {
+        noteScanFailure(track.name || track.path || track.id, 'nothing in the file — read from the folder name');
+      }
+    }
     /* Corrections the listener made survive a rescan.
      *
      * The parser hands back what the file says, and what the file says has not
@@ -118,8 +141,21 @@ function absorb(batch) {
     state.tracks.set(track.id, track);
     rows.push(track);
     if (art) pendingArt.push(art);
+
+    /* L15: a file with a cue sheet beside it is a side, not a song.
+     *
+     * Expanded here rather than in the worker, because the last index runs to
+     * the file's own duration and the parser has only just worked that out.
+     * The file itself stays in the index as the thing that actually gets
+     * decoded; it is hidden from the library, because a side listed beside its
+     * own eleven tracks is the same record twice. */
+    const sheetKey = track.id.replace(/\.[^./]+$/, '');
+    if (cueSheets.has(sheetKey) && !track.fromCue) {
+      pendingCues.push({ track, handle: cueSheets.get(sheetKey) });
+    }
   }
   db.putTracks(rows).catch(() => {});
+  if (pendingCues.length) flushCues();
   if (pendingArt.length >= 24) flushArt();
   scheduleReindex();
 }
@@ -210,6 +246,40 @@ function snapshotTracks(rows) {
 }
 
 /** Puts snapshots back. Returns how many tracks were still there to put back. */
+/**
+ * Writes whole tracks back to the index, for the backup importer.
+ *
+ * `restoreTracks` below is the undo path and only touches the editable fields,
+ * because that is all an undo of a correction may touch. A backup carries play
+ * counts and ratings as well, and the rows it hands over have already been
+ * merged field by field — so this writes what it is given and reindexes.
+ */
+export async function restoreFromBackup(rows) {
+  const out = [];
+  for (const row of rows) {
+    const t = state.tracks.get(row.id);
+    if (!t) continue;
+    Object.assign(t, row);
+    /* Assigned *and* cleared. `Object.assign` writes what the row has and
+       leaves everything it does not, so restoring a snapshot taken before a
+       correction left the correction's `edits` in place — and `applyEdits`
+       below then put the corrected title straight back. A restore that cannot
+       remove a field is not a restore. */
+    if (!row.edits) delete t.edits;
+    if (!row.orig) delete t.orig;
+    applyEdits(t);
+    t.albumKey = albumKeyOf(t.albumArtist || t.artist || '', t.album);
+    decorate(t);
+    out.push(t);
+  }
+  if (out.length) {
+    await db.putTracks(out).catch(() => {});
+    reindex();
+    events.emit('change');
+  }
+  return out.length;
+}
+
 async function restoreTracks(snaps) {
   const rows = [];
   for (const s of snaps) {
@@ -424,10 +494,21 @@ function scheduleReindex() {
   requestAnimationFrame(() => { reindexQueued = false; reindex(); });
 }
 
+/* Bumped by every reindex. Anything derived from the index — the genre map
+   below is the first — can cache against it rather than rebuilding on every
+   read or listening for an event it would then have to unsubscribe from. */
+let indexSerial = 0;
+
 export function reindex() {
+  indexSerial++;
   const albumBy = new Map();
 
-  for (const t of state.tracks.values()) {
+  /* I4: a folder switched off is not in the library today. Filtered rather
+     than deleted, which is the whole point — the tracks stay in the index with
+     every correction, favourite and play count attached, and turning the
+     folder back on is this function running again rather than twenty minutes
+     of rescanning. */
+  for (const t of live()) {
     let al = albumBy.get(t.albumKey);
     if (!al) {
       albumBy.set(t.albumKey, al = {
@@ -435,6 +516,9 @@ export function reindex() {
         artistKey: t.artistKey, year: t.year || 0, tracks: [],
         duration: 0, addedAt: 0, sort: norm(t.album), accent: null,
         named: false,
+        // Rolled up from the tracks below, so a wall of records can be ordered
+        // by listening without walking every track again per sort.
+        plays: 0, lastPlayed: 0,
       });
     }
     // `named` records whether any file in the album actually claimed this
@@ -446,25 +530,47 @@ export function reindex() {
     if (!al.accent && t.accent) al.accent = t.accent;
     if (t.year && (!al.year || t.year < al.year)) al.year = t.year;
     if (t.addedAt > al.addedAt) al.addedAt = t.addedAt;
+    al.plays += t.playCount || 0;
+    if ((t.lastPlayed || 0) > al.lastPlayed) al.lastPlayed = t.lastPlayed;
   }
 
   // Albums fold together before artists are counted, because folding one in
   // can hand its tracks a different artist — and an artist index built first
   // would keep a page for a folder name that no longer names anything.
   mergeAlbums(albumBy);
+  markCompilations(albumBy);
 
   const artistBy = new Map();
-  for (const t of state.tracks.values()) {
-    let ar = artistBy.get(t.artistKey);
+  for (const t of live()) {
+    /* L8: a compilation is filed under itself.
+     *
+     * `artistKey` comes from the album artist, which falls back to the track
+     * artist — so a compilation with no ALBUMARTIST frame gives every one of
+     * its twenty tracks a different album artist, and the Artists page grows
+     * twenty entries with one track each. The album knows better than the
+     * track does here, so the album decides. The track's own artist is
+     * untouched: it still prints on every row, sorts, and is searchable. */
+    const own = albumBy.get(t.albumKey);
+    const key = own && own.compilation ? own.artistKey : t.artistKey;
+    const name = own && own.compilation ? own.artist : t.albumArtist;
+
+    let ar = artistBy.get(key);
     if (!ar) {
-      artistBy.set(t.artistKey, ar = {
-        key: t.artistKey, name: t.albumArtist, tracks: [],
-        albums: new Set(), duration: 0, sort: norm(sortName(t.albumArtist)),
+      artistBy.set(key, ar = {
+        key, name, tracks: [],
+        albums: new Set(), duration: 0, sort: norm(sortName(name)),
+        compilation: !!(own && own.compilation),
+        // Rolled up here rather than recomputed per sort: every list that wants
+        // to order by listening asks the same question of the same objects, and
+        // the reindex is already walking every track.
+        plays: 0, lastPlayed: 0,
       });
     }
     ar.tracks.push(t);
     ar.albums.add(t.albumKey);
     ar.duration += t.duration || 0;
+    ar.plays += t.playCount || 0;
+    if ((t.lastPlayed || 0) > ar.lastPlayed) ar.lastPlayed = t.lastPlayed;
   }
 
   for (const al of albumBy.values()) {
@@ -486,6 +592,85 @@ export function reindex() {
 
 /** Albums folded together since the current import began: key -> title. */
 const mergedThisScan = new Map();
+
+/* Files waiting for their cue sheet to be read. Reading one is asynchronous
+   and `absorb` is not, so they queue and are drained after the batch. */
+const pendingCues = [];
+let drainingCues = false;
+
+async function flushCues() {
+  if (drainingCues) return;
+  drainingCues = true;
+  try {
+    const rows = [];
+    while (pendingCues.length) {
+      const { track, handle } = pendingCues.shift();
+      let text = null;
+      try {
+        const file = handle.getFile ? await handle.getFile() : handle;
+        text = await file.text();
+      } catch { /* the sheet went away */ }
+      if (!text) continue;
+      const sheet = cue.parse(text);
+      /* A sheet that names several files is a folder of tracks described in
+         one place, which this library already reads as a folder of tracks.
+         Expanding it would double every one of them. */
+      if (!sheet || sheet.multiFile) continue;
+
+      for (const piece of cue.expand(sheet, track)) {
+        const prior = state.tracks.get(piece.id);
+        // Corrections survive, exactly as they do for a parsed file.
+        if (prior && prior.edits) {
+          piece.edits = prior.edits;
+          const orig = {};
+          for (const k of Object.keys(piece.edits)) orig[k] = piece[k];
+          piece.orig = orig;
+          applyEdits(piece);
+        }
+        if (prior) {
+          piece.playCount = prior.playCount || 0;
+          piece.lastPlayed = prior.lastPlayed || 0;
+        }
+        decorate(piece);
+        state.tracks.set(piece.id, piece);
+        rows.push(piece);
+      }
+
+      /* The side itself is kept — it is the file that gets decoded, and
+         `fileFor` resolves a cue track through it — and marked so the library
+         does not list it beside its own pieces. */
+      track.cueSource = true;
+      rows.push(track);
+    }
+    if (rows.length) {
+      await db.putTracks(rows).catch(() => {});
+      reindex();
+      events.emit('change');
+    }
+  } finally {
+    drainingCues = false;
+    if (pendingCues.length) flushCues();
+  }
+}
+
+/* L15: the cue sheets seen during a scan, by the path they share with their
+   audio file. Kept, not cleared per scan: a sheet found on Monday still
+   indexes the same file on Tuesday, and a rescan that only re-reads changed
+   files would otherwise lose it. */
+const cueSheets = new Map();
+
+/* L14: the .m3u files this scan walked past. Cleared at the start of a scan
+   like `mergedThisScan` is, for the same reason: they are this import's news. */
+let foundPlaylists = [];
+export const playlistFilesFound = () => foundPlaylists.slice();
+
+/** Reads one of them. Returns its text, or null if the file has gone. */
+export async function readPlaylistFile(entry) {
+  try {
+    const file = entry.handle.getFile ? await entry.handle.getFile() : entry.handle;
+    return await file.text();
+  } catch { return null; }
+}
 
 /**
  * Folds albums that are the same album back together.
@@ -509,6 +694,105 @@ const mergedThisScan = new Map();
  * The surviving album keeps the key most of its tracks already carry, so
  * artwork stored under that key stays attached.
  */
+/* L8: which records are compilations.
+ *
+ * The merge logic next door is careful and right: a guessed artist counts as
+ * no artist, and two records that both name themselves never merge. But a
+ * Various Artists compilation is the one case where the album artist and the
+ * track artists are *supposed* to disagree, and nothing in the model said so —
+ * so a twenty-track compilation with no ALBUMARTIST frame read as twenty
+ * artists with one track each, which is the Artists page shattered by one
+ * record.
+ *
+ * Two ways in, because tagging practice is not consistent:
+ *
+ *   — the album says so. "Various Artists", "VA", "Various" in the album
+ *     artist is a claim, and it is believed.
+ *   — the tracks say so. Several different artists, no consistent album artist
+ *     to hold them together, and enough of them that this is the shape of the
+ *     record rather than one guest verse on it.
+ *
+ * The second test is deliberately not "more than one artist". A record with a
+ * feature on two of twelve tracks has three artists and is not a compilation,
+ * and calling it one would file Kanye West under Various. Requiring the
+ * distinct artists to cover at least two fifths of the tracks is what separates
+ * "a record by somebody, with guests" from "a record by nobody in particular".
+ */
+const VARIOUS = new Set(['various artists', 'various', 'va', 'v.a.', 'diverse interpreten', 'compilation']);
+
+/** The directory a track sits in, which is the strongest signal on disk. */
+const folderOf = (t) => (t.rootId || '') + '/' + String(t.path || '').replace(/[^/]*$/, '');
+
+function markCompilations(albumBy) {
+  /* First, put the record back together.
+   *
+   * The album key is a hash of (album artist + album title), and on a
+   * compilation with no ALBUMARTIST frame every track's album artist is its
+   * own — so the record does not merely read as twenty artists, it reads as
+   * twenty *albums*, each holding one track. `mergeAlbums` above deliberately
+   * refuses to fold those: both sides named themselves and the names differ,
+   * which is exactly the rule that keeps two different "Greatest Hits" apart.
+   *
+   * The evidence it does not use is the folder. Files sitting in one directory
+   * under one album title are one album, whatever their artist tags say — that
+   * is what a compilation looks like on disk, and it is not what two different
+   * records that share a title look like. So the fold is by title *and*
+   * directory, which is narrow enough to be safe. */
+  const byPlace = new Map();
+  for (const al of albumBy.values()) {
+    if (!al.sort || al.sort === norm('Unknown Album')) continue;
+    // One directory, or this is not the case being caught.
+    const dirs = new Set(al.tracks.map(folderOf));
+    if (dirs.size !== 1) continue;
+    const place = [...dirs][0] + '\u0000' + al.sort;
+    let list = byPlace.get(place);
+    if (!list) byPlace.set(place, list = []);
+    list.push(al);
+  }
+
+  for (const list of byPlace.values()) {
+    if (list.length < 3) continue;               // not a shape, just a stray
+    const keep = list[0];
+    for (const other of list.slice(1)) {
+      for (const t of other.tracks) { t.albumKey = keep.key; keep.tracks.push(t); }
+      keep.duration += other.duration;
+      keep.addedAt = Math.max(keep.addedAt, other.addedAt);
+      keep.year = keep.year || other.year;
+      keep.accent = keep.accent || other.accent;
+      albumBy.delete(other.key);
+    }
+    mergedThisScan.set(keep.key, keep.title);
+  }
+
+  for (const al of albumBy.values()) {
+    if (al.tracks.length < 3) continue;          // too small to be a shape
+
+    const artists = new Set();
+    let claimed = 0;                             // tracks with a real ALBUMARTIST
+    for (const t of al.tracks) {
+      artists.add(norm(t.artist));
+      // `albumArtist` is filled from `artist` when the file carried none, so a
+      // real claim is one that differs from the track's own artist.
+      if (t.albumArtist && norm(t.albumArtist) !== norm(t.artist)) claimed++;
+    }
+
+    const said = VARIOUS.has(norm(al.artist));
+    const shape = artists.size >= 3 &&
+                  artists.size >= al.tracks.length * 0.4 &&
+                  claimed === 0;
+
+    if (!said && !shape) continue;
+
+    al.compilation = true;
+    /* Named, so the Artists page has something to call it. A record that
+       already says "Various Artists" keeps its own spelling; one detected by
+       shape is given the name the rest of the world uses for it. */
+    if (!said) al.artist = 'Various Artists';
+    al.artistKey = hash32(norm(al.artist));
+    al.named = true;
+  }
+}
+
 function mergeAlbums(albumBy) {
   const byTitle = new Map();
   for (const al of albumBy.values()) {
@@ -583,12 +867,470 @@ function mergeAlbums(albumBy) {
   }
 }
 
+/* ------------------------------------------------------------------ L18
+ *
+ * Backfilling the guessed marks.
+ *
+ * `guessed` — which fields the tag reader had to take from the folder tree
+ * rather than from the file — has only been recorded since 2.6. A library
+ * imported before that has none, so `namedArtist` defaults to true for every
+ * track in it, and the album merge treats a folder name pressed into service
+ * as a real claim. The result is silently worse merging on exactly the
+ * libraries that have been around longest.
+ *
+ * The fix is to re-read the tags of the files that have no mark, which is a
+ * scan — so it borrows the scan's own discipline: it does only what has not
+ * been done, it can be stopped, and it survives being interrupted, because
+ * each batch is written before the next is asked for.
+ */
+export function needsBackfill() {
+  let n = 0;
+  for (const t of state.tracks.values()) {
+    // `guessed` is a string that is empty when nothing was guessed and absent
+    // when nobody ever asked — and those are different facts. `backfilled`
+    // marks the ones this pass has already answered for.
+    if (t.guessed === undefined && !t.backfilled) n++;
+  }
+  return n;
+}
+
+let backfilling = false;
+
+export async function backfillGuessed(onProgress) {
+  if (backfilling) return { ok: false, reason: 'already running' };
+  backfilling = true;
+  let done = 0;
+  let total = 0;
+  try {
+    const todo = [];
+    for (const t of state.tracks.values()) {
+      if (t.guessed === undefined && !t.backfilled) todo.push(t);
+    }
+    total = todo.length;
+    if (!total) return { ok: true, done: 0, total: 0 };
+
+    const w = ensureWorker();
+    for (let i = 0; i < todo.length; i += 60) {
+      const batch = todo.slice(i, i + 60);
+      const jobs = [];
+      for (const t of batch) {
+        const file = await fileFor(t.id);
+        // A file that cannot be reached is not a failure to record — the
+        // folder is simply not connected, and the next run will find it.
+        if (!file) continue;
+        jobs.push({ id: t.id, path: t.path, name: t.name, size: t.size,
+                    mtime: t.mtime, rootId: t.rootId, file });
+      }
+      if (jobs.length && w) {
+        /* Through the same parser the import uses, so the answer is the same
+           answer — a second implementation of "which of these came from the
+           folder" would drift from the first within a release. */
+        w.postMessage({ type: 'scan', jobs });
+      } else if (jobs.length) {
+        await parseOnMainThread(jobs);
+      }
+      for (const t of batch) t.backfilled = true;
+      await db.putTracks(batch).catch(() => {});
+      done += batch.length;
+      if (onProgress) onProgress(done, total);
+      // A breath between batches, so a library of twenty thousand does not
+      // hold the main thread for a minute.
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    reindex();
+    events.emit('change');
+    return { ok: true, done, total };
+  } finally {
+    backfilling = false;
+  }
+}
+
+/* ------------------------------------------------------------------ L12
+ *
+ * Playlist folders, and an order you chose.
+ *
+ * Playlists were a flat list in creation order. Past about fifteen that is a
+ * pile rather than a structure, and there was no way to move one — a list you
+ * cannot arrange is a list that gets worse every time you add to it.
+ *
+ * Folders one level deep, deliberately: two levels is a file manager, and
+ * nobody has ever wanted a file manager for forty playlists. A folder is a
+ * name and an order, stored beside the playlists themselves.
+ */
+let folders = [];
+export const playlistFolders = () => folders.slice();
+
+const saveFolders = () => db.setKV('playlistFolders', folders).catch(() => {});
+
+export async function createFolder(name) {
+  const folder = { id: 'pf:' + hash32(name + ':' + Date.now()), name: String(name).slice(0, 60) };
+  folders.push(folder);
+  await saveFolders();
+  events.emit('playlists');
+  undo.push({
+    label: `the folder “${folder.name}”`,
+    undo: async () => { folders = folders.filter((f) => f.id !== folder.id); await saveFolders(); events.emit('playlists'); return 1; },
+    redo: async () => { folders.push(folder); await saveFolders(); events.emit('playlists'); return 1; },
+  });
+  return folder;
+}
+
+export async function renameFolder(id, name) {
+  const f = folders.find((x) => x.id === id);
+  if (!f) return false;
+  const was = f.name;
+  f.name = String(name).slice(0, 60);
+  await saveFolders();
+  events.emit('playlists');
+  undo.push({
+    label: `renaming “${was}”`,
+    undo: async () => { f.name = was; await saveFolders(); events.emit('playlists'); return 1; },
+    redo: async () => { f.name = name; await saveFolders(); events.emit('playlists'); return 1; },
+  });
+  return true;
+}
+
+/**
+ * Removes a folder. Its playlists come out of it rather than going with it —
+ * deleting a container should never delete the contents, and a folder here is
+ * a label rather than a place.
+ */
+export async function removeFolder(id) {
+  const f = folders.find((x) => x.id === id);
+  if (!f) return false;
+  const inside = state.playlists.filter((p) => p.folder === id);
+  folders = folders.filter((x) => x.id !== id);
+  for (const p of inside) { delete p.folder; await db.putPlaylist(p).catch(() => {}); }
+  await saveFolders();
+  events.emit('playlists');
+  undo.push({
+    label: `the folder “${f.name}”`,
+    undo: async () => {
+      folders.push(f);
+      for (const p of inside) { p.folder = id; await db.putPlaylist(p).catch(() => {}); }
+      await saveFolders();
+      events.emit('playlists');
+      return 1;
+    },
+    redo: () => removeFolder(id),
+  });
+  return true;
+}
+
+/** Puts a playlist in a folder, or takes it out with `null`. */
+export async function movePlaylist(id, folderId) {
+  const p = state.playlists.find((x) => x.id === id);
+  if (!p) return false;
+  const was = p.folder || null;
+  if (folderId) p.folder = folderId; else delete p.folder;
+  await db.putPlaylist(p).catch(() => {});
+  events.emit('playlists');
+  undo.push({
+    label: `moving “${p.name}”`,
+    undo: () => movePlaylistQuiet(id, was),
+    redo: () => movePlaylistQuiet(id, folderId),
+  });
+  return true;
+}
+
+async function movePlaylistQuiet(id, folderId) {
+  const p = state.playlists.find((x) => x.id === id);
+  if (!p) return 0;
+  if (folderId) p.folder = folderId; else delete p.folder;
+  await db.putPlaylist(p).catch(() => {});
+  events.emit('playlists');
+  return 1;
+}
+
+/**
+ * Reorders the sidebar.
+ *
+ * `order` is a number on each playlist rather than a separate list of ids: a
+ * list would have to be kept in step with every create and delete, and a
+ * playlist that is not in it would have nowhere to sort. Sparse, so moving one
+ * writes one row rather than renumbering forty.
+ */
+export async function reorderPlaylists(ids) {
+  let n = 0;
+  const changed = [];
+  for (const id of ids) {
+    const p = state.playlists.find((x) => x.id === id);
+    if (!p) continue;
+    const next = (n += 10);
+    if (p.order === next) continue;
+    p.order = next;
+    changed.push(p);
+  }
+  for (const p of changed) await db.putPlaylist(p).catch(() => {});
+  sortPlaylists();
+  events.emit('playlists');
+  return changed.length;
+}
+
+/** Creation order until somebody says otherwise, then whatever they said. */
+function sortPlaylists() {
+  state.playlists.sort((a, b) => {
+    const ao = typeof a.order === 'number' ? a.order : Infinity;
+    const bo = typeof b.order === 'number' ? b.order : Infinity;
+    return ao - bo || a.createdAt - b.createdAt;
+  });
+}
+
+/* ------------------------------------------------------------------ L11
+ *
+ * Find and replace, across a field.
+ *
+ * Every real library has one systematic mistake in it — "feat." against "ft.",
+ * an artist misspelled the same way across three albums, a label that put the
+ * year in the title — and correcting one track at a time cannot reach that.
+ *
+ * Preview then commit, always: this returns what *would* change and changes
+ * nothing, and `editTracks` does the writing, so the whole run is one undo
+ * entry and the files are never touched. Text, not a regular expression: a
+ * find-and-replace that can be given `.*` is a find-and-replace that can empty
+ * a library by accident, and nobody typing "feat." wants a character class.
+ */
+export function findReplace(field, find, replace, { caseSensitive = false, whole = false } = {}) {
+  const out = [];
+  if (!EDITABLE.includes(field) || !find) return out;
+
+  const needle = caseSensitive ? find : find.toLowerCase();
+  for (const t of live()) {
+    const value = String(t[field] ?? '');
+    if (!value) continue;
+    const hay = caseSensitive ? value : value.toLowerCase();
+
+    let next;
+    if (whole) {
+      // The whole field, or nothing: "Various" should not rewrite "Various
+      // Artists" when what was meant was the field that says exactly Various.
+      if (hay !== needle) continue;
+      next = replace;
+    } else {
+      if (!hay.includes(needle)) continue;
+      /* Split and join rather than a regular expression, so every character in
+         the search text means itself. `String.replaceAll` would need the same
+         escaping and reads no better. */
+      if (caseSensitive) {
+        next = value.split(find).join(replace);
+      } else {
+        // Case-insensitive, but the surrounding text keeps its own case: only
+        // the matched runs are replaced, found by walking the lowered copy.
+        let at = 0, built = '';
+        for (;;) {
+          const i = hay.indexOf(needle, at);
+          if (i < 0) { built += value.slice(at); break; }
+          built += value.slice(at, i) + replace;
+          at = i + needle.length;
+        }
+        next = built;
+      }
+    }
+    if (next === value) continue;
+    out.push({ track: t, from: value, to: next });
+  }
+  return out;
+}
+
+/** Applies what `findReplace` previewed. One undo entry for the whole run. */
+export async function applyReplace(field, changes) {
+  if (!changes.length) return 0;
+  let n = 0;
+  await undo.silence(async () => {
+    /* Grouped by the value being written, so a hundred tracks going to the
+       same artist are one call rather than a hundred — `editTracks` writes,
+       reindexes and emits once per call. */
+    const byValue = new Map();
+    for (const c of changes) {
+      let list = byValue.get(c.to);
+      if (!list) byValue.set(c.to, list = []);
+      list.push(c.track);
+    }
+    for (const [value, tracks] of byValue) n += await editTracks(tracks, { [field]: value });
+  });
+  if (n) {
+    const before = changes.map((c) => ({ id: c.track.id, value: c.from }));
+    undo.push({
+      label: `replacing “${changes[0].from}” in ${fieldLabel(field)}`,
+      undo: async () => {
+        await undo.silence(async () => {
+          const byValue = new Map();
+          for (const b of before) {
+            let list = byValue.get(b.value);
+            if (!list) byValue.set(b.value, list = []);
+            const t = state.tracks.get(b.id);
+            if (t) list.push(t);
+          }
+          for (const [value, tracks] of byValue) await editTracks(tracks, { [field]: value });
+        });
+        return before.length;
+      },
+      redo: async () => {
+        await undo.silence(async () => {
+          const byValue = new Map();
+          for (const c of changes) {
+            let list = byValue.get(c.to);
+            if (!list) byValue.set(c.to, list = []);
+            list.push(c.track);
+          }
+          for (const [value, tracks] of byValue) await editTracks(tracks, { [field]: value });
+        });
+        return changes.length;
+      },
+    });
+  }
+  return n;
+}
+
+const FIELD_LABELS = { title: 'the title', artist: 'the artist', albumArtist: 'the album artist',
+                       album: 'the album', genre: 'the genre' };
+const fieldLabel = (f) => FIELD_LABELS[f] || f;
+
+/** Which fields find-and-replace can work on. */
+export const replaceableFields = () =>
+  EDITABLE.filter((f) => FIELD_LABELS[f]).map((f) => [f, FIELD_LABELS[f]]);
+
+/* ------------------------------------------------------------------ L9
+ *
+ * Everything that needs a human, in one place.
+ *
+ * The application already knows which files are untagged, which fields it had
+ * to guess, which have no cover, which this browser cannot decode, which look
+ * like transcodes and which are duplicates — and every one of those findings
+ * lived somewhere different: a badge on a row, a tab on Files, a marker you
+ * only see if you happen to open that album. Nobody has ever found all of them
+ * on purpose.
+ *
+ * Each finding is a count, a list and one thing to do about it. The counts are
+ * computed together in one walk, because six separate passes over a
+ * twenty-thousand-track library to draw one page is six passes too many.
+ */
+export function attention() {
+  const guessed = [];
+  const untagged = [];
+  const undecodable = [];
+  const suspect = [];
+  const byName = new Map();          // artist + title -> tracks, for duplicates
+
+  for (const t of live()) {
+    const g = String(t.guessed || '').split(' ').filter(Boolean);
+    if (g.includes('artist') && g.includes('album')) untagged.push(t);
+    else if (g.length) guessed.push(t);
+    if (!canDecode(t.name || t.path || '')) undecodable.push(t);
+    if (t.truncated === true) suspect.push(t);
+
+    /* Duplicates by what they claim to be, not by content: two files of the
+       same song at different bitrates are the case people actually have, and
+       they are not byte-identical. Duration is in the key at whole seconds so
+       that a live version and a studio one do not read as the same track. */
+    const key = norm(t.artist) + '\u0000' + norm(t.title) + '\u0000' + Math.round(t.duration || 0);
+    let list = byName.get(key);
+    if (!list) byName.set(key, list = []);
+    list.push(t);
+  }
+
+  const duplicates = [];
+  for (const list of byName.values()) if (list.length > 1) duplicates.push(list);
+
+  /* Albums with no cover. Asked of the album rather than the track, because a
+     record with no artwork is one thing to fix and not eleven. */
+  const noArt = state.albums.filter((al) => !ownArt.has(al.key) && !accents.has(al.key));
+
+  return { guessed, untagged, undecodable, suspect, duplicates, noArt };
+}
+
+/* ------------------------------------------------------------------ L4
+ *
+ * Genre, as somewhere you can go.
+ *
+ * Every container the tag reader handles gives up a genre, and the Circle
+ * Analysis Center will draw your listening by it — but there was no genre
+ * route, no genre on an album page, and no way to say "everything ambient"
+ * except by typing it into search and hoping.
+ *
+ * Genre in the wild is free text and frequently a list: "Rock; Alternative",
+ * "Electronic/Ambient", "Jazz, Vocal". Split on the three separators everybody
+ * uses, fold case for grouping, and keep the best-looking spelling for
+ * display — the first one seen with a capital letter, because "Post-Rock" is
+ * what somebody typed and "post-rock" is what the sort key is.
+ */
+const genreCache = { serial: -1, list: null, by: null };
+
+const splitGenres = (v) =>
+  String(v || '')
+    .split(/[;/,]|\s+\+\s+/)
+    .map((g) => g.trim())
+    .filter((g) => g && g.length < 40);
+
+function buildGenres() {
+  if (genreCache.serial === indexSerial) return genreCache;
+  const by = new Map();
+  for (const t of live()) {
+    for (const raw of splitGenres(t.genre)) {
+      const key = norm(raw);
+      if (!key) continue;
+      let g = by.get(key);
+      if (!g) by.set(key, g = { key, label: raw, tracks: [], albums: new Set(), duration: 0 });
+      // The nicest spelling wins: one with a capital beats one without.
+      if (/[A-Z]/.test(raw) && !/[A-Z]/.test(g.label)) g.label = raw;
+      g.tracks.push(t);
+      g.albums.add(t.albumKey);
+      g.duration += t.duration || 0;
+    }
+  }
+  const list = [...by.values()].sort((a, b) => b.tracks.length - a.tracks.length || cmpText(a.label, b.label));
+  genreCache.serial = indexSerial;
+  genreCache.by = by;
+  genreCache.list = list;
+  return genreCache;
+}
+
+/** Every genre in the library, heaviest first. */
+export const genres = () => buildGenres().list;
+
+/** One genre by its normalised key, or null. */
+export const genreOf = (key) => buildGenres().by.get(norm(key)) || null;
+
 /* ------------------------------------------------------------------ queries */
 
-export const allTracks = () => [...state.tracks.values()];
+/* I4: what is in the library *today*.
+ *
+ * `state.tracks` is the index, which holds everything ever scanned including
+ * the tracks of a folder that has been switched off — that is the whole point
+ * of switching one off rather than removing it, since the corrections and
+ * favourites hang on those rows. Everything that answers "what is in the
+ * library" goes through here; `getTrack` deliberately does not, because a
+ * queued or favourited track from a folder that is off is still a track that
+ * exists and asking for it by id should find it. */
+function* live() {
+  const off = offRoots();
+  for (const t of state.tracks.values()) {
+    if (off.size && off.has(t.rootId)) continue;
+    // L15: a file that a cue sheet has split into pieces is not itself a
+    // track. It stays in the index because it is what gets decoded.
+    if (t.cueSource) continue;
+    yield t;
+  }
+}
+const offRoots = () => {
+  const out = new Set();
+  for (const r of state.roots) if (r.off) out.add(r.id);
+  return out;
+};
+
+export const allTracks = () => [...live()];
 export const getTrack = (id) => state.tracks.get(id);
-export const isAvailable = (id) => handles.has(id);
-export const trackCount = () => state.tracks.size;
+export const isAvailable = (id) => {
+  const t = state.tracks.get(id);
+  return handles.has(t && t.sourceId ? t.sourceId : id);
+};
+export const trackCount = () => {
+  const off = offRoots();
+  if (!off.size) return state.tracks.size;
+  let n = 0;
+  for (const _ of live()) n++;
+  return n;
+};
 
 export function sortTracks(list, key, dir = 1) {
   const by = {
@@ -602,8 +1344,52 @@ export function sortTracks(list, key, dir = 1) {
     // ascending and out of the way descending — either is better than
     // pretending they are the most squashed masters in the library.
     dr:     (a, b) => (a.dr || 0) - (b.dr || 0),
+    /* Both of these were counted from the first release and shown nowhere. A
+       never-played track and a never-played *anything* sort as zero, which puts
+       the untouched part of a collection together at one end — which is the
+       question people are usually asking when they sort by either. */
+    plays:  (a, b) => (a.playCount || 0) - (b.playCount || 0),
+    played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
   }[key] || ((a, b) => cmpText(a.title, b.title));
   return list.slice().sort((a, b) => by(a, b) * dir);
+}
+
+/*
+ * Ordering a wall of records, and a page of artists.
+ *
+ * Songs has had sortable columns since the first release; Albums had four
+ * *view modes* and not one sort, and Artists had neither — so the wall was
+ * always in whatever order the index happened to hold it and there was no way
+ * to ask for 1978, or for the longest record, or for the one nobody has played.
+ *
+ * The comparators are written so that a missing value sorts as zero rather than
+ * dropping the row: an album with no year is a real album, and hiding it because
+ * a tag is absent would be the library lying about what is in it.
+ */
+export function sortAlbums(list, key, dir = 1) {
+  const by = {
+    artist: (a, b) => cmpText(a.artist, b.artist) || (a.year - b.year) || cmpText(a.title, b.title),
+    title:  (a, b) => cmpText(a.title, b.title),
+    year:   (a, b) => (a.year || 0) - (b.year || 0) || cmpText(a.artist, b.artist),
+    added:  (a, b) => (a.addedAt || 0) - (b.addedAt || 0),
+    length: (a, b) => (a.duration || 0) - (b.duration || 0),
+    tracks: (a, b) => a.tracks.length - b.tracks.length,
+    plays:  (a, b) => (a.plays || 0) - (b.plays || 0),
+    played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
+  }[key] || ((a, b) => cmpText(a.artist, b.artist));
+  return list.slice().sort((a, b) => by(a, b) * dir || cmpText(a.title, b.title));
+}
+
+export function sortArtists(list, key, dir = 1) {
+  const by = {
+    name:   (a, b) => cmpText(a.sort, b.sort),
+    albums: (a, b) => a.albums.size - b.albums.size,
+    tracks: (a, b) => a.tracks.length - b.tracks.length,
+    length: (a, b) => (a.duration || 0) - (b.duration || 0),
+    plays:  (a, b) => (a.plays || 0) - (b.plays || 0),
+    played: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0),
+  }[key] || ((a, b) => cmpText(a.sort, b.sort));
+  return list.slice().sort((a, b) => by(a, b) * dir || cmpText(a.sort, b.sort));
 }
 
 /**
@@ -674,7 +1460,7 @@ export function search(query, limit = 60) {
      names no words at all and should return every track that satisfies both,
      rather than the empty result an all-text search would give. */
   if (parsed.filters.length && !parsed.words.length) {
-    const hits = [...state.tracks.values()].filter((t) => parsed.filters.every((f) => f.test(t)));
+    const hits = [...live()].filter((t) => parsed.filters.every((f) => f.test(t)));
     return {
       query,
       tracks: sortTracks(hits, 'title', 1).slice(0, limit),
@@ -700,7 +1486,7 @@ export function search(query, limit = 60) {
   };
 
   const tracks = [];
-  for (const t of state.tracks.values()) {
+  for (const t of live()) {
     // Words and filters are an AND: "beatles unplayed" means both.
     if (parsed.filters.length && !parsed.filters.every((f) => f.test(t))) continue;
     const s = scoreOf(t.search, t.title);
@@ -797,6 +1583,14 @@ const ownArt = new Map();       // albumKey -> [r,g,b] | null
 const ownKey = (key) => key + '#own';
 
 export const hasOwnArt = (key) => ownArt.has(key);
+
+/* L17: the covers you chose, listed.
+ *
+ * An override is invisible until you walk into the record that has one — which
+ * makes it an override you cannot find, and therefore one you cannot undo six
+ * months later when you have forgotten you set it. */
+export const chosenCovers = () =>
+  [...ownArt.keys()].map((key) => ({ key, album: state.albumBy.get(key) || null }));
 
 /** The record `loadArt` should read for this album. */
 const artKeyFor = (key) => (ownArt.has(key) ? ownKey(key) : key);
@@ -923,6 +1717,12 @@ export async function clearArtwork(key) {
 
 /** Resolves a playable File for a track, re-checking permission if needed. */
 export async function fileFor(id) {
+  /* L15: a cue track has no file of its own — it is a range inside the side
+     it came from, and `sourceId` names that. Resolved here rather than at
+     every call site, so playback, the waveform and the analysis all reach the
+     same file without any of them knowing about cue sheets. */
+  const t = state.tracks.get(id);
+  if (t && t.sourceId) id = t.sourceId;
   const h = handles.get(id);
   if (!h) return null;
   if (h instanceof File) return h;
@@ -948,6 +1748,12 @@ async function* walkDirectory(dir, prefix = '', depth = 0) {
       yield { handle: entry, path: prefix + entry.name, name: entry.name };
     } else if (isLyric(entry.name)) {
       yield { handle: entry, path: prefix + entry.name, name: entry.name, lyric: true };
+    } else if (isPlaylistFile(entry.name)) {
+      // L14: noticed, not imported. See `foundPlaylists` below.
+      yield { handle: entry, path: prefix + entry.name, name: entry.name, playlist: true };
+    } else if (isCueFile(entry.name)) {
+      // L15: an index into the audio file beside it, not a track.
+      yield { handle: entry, path: prefix + entry.name, name: entry.name, cue: true };
     }
   }
 }
@@ -1027,6 +1833,12 @@ export async function addFileList(fileList, label) {
   // one chance to notice `04 Ferry Road.lrc` sitting beside `04 Ferry Road.mp3`
   // is right now, while the browser still has both.
   const lyrics = all.filter((f) => isLyric(f.name));
+  // L14, and for the same reason: a playlist file sitting beside the music is
+  // only reachable while the upload dialog's own list is still in hand.
+  const lists = all.filter((f) => isPlaylistFile(f.name));
+  // L15, and for the same reason again: a cue sheet is only reachable while
+  // the dialog's own list is in hand.
+  const cues = all.filter((f) => isCueFile(f.name));
 
   const first = files[0].webkitRelativePath || '';
   const name = label || first.split('/')[0] || 'Files';
@@ -1046,6 +1858,8 @@ export async function addFileList(fileList, label) {
   };
   const entries = files.map((f) => ({ file: f, path: relative(f), name: f.name }));
   for (const f of lyrics) entries.push({ file: f, path: relative(f), name: f.name, lyric: true });
+  for (const f of lists) entries.push({ file: f, path: relative(f), name: f.name, playlist: true });
+  for (const f of cues) entries.push({ file: f, path: relative(f), name: f.name, cue: true });
   await ingest(root, entries);
   return root;
 }
@@ -1092,7 +1906,77 @@ export async function addDataTransfer(dt) {
 }
 
 /** Walks a handle root, diffs against what we already know, imports the rest. */
+/* ------------------------------------------------------------------ I1
+ *
+ * Checking for new files.
+ *
+ * The library rescans at launch and never again: add an album to the folder
+ * while the application is open and nothing happens, with no way to ask short
+ * of reloading the page. The scan already re-parses only what changed — size
+ * and modification time decide — so asking again is cheap and the answer is
+ * usually "nothing".
+ */
+export async function rescanAll() {
+  const roots = state.roots.filter((r) => r.handle && !r.off);
+  if (!roots.length) return { ok: false, reason: 'nothing to scan' };
+  for (const root of roots) await scanRoot(root);
+  lastCheck = Date.now();
+  return { ok: true, roots: roots.length };
+}
+
+let lastCheck = 0;
+export const lastChecked = () => lastCheck;
+
+/* And automatically, when the window comes back after a while.
+ *
+ * "A while" rather than every focus: alt-tabbing to a browser and back is not
+ * a reason to walk twenty thousand files, and a scan that runs every time you
+ * glance at another window is a scan that is always running. Two minutes is
+ * long enough that this is a return rather than a glance. */
+const AUTO_CHECK_AFTER = 2 * 60 * 1000;
+
+export function watchForChanges() {
+  const onFocus = () => {
+    if (state.scanning) return;
+    if (Date.now() - lastCheck < AUTO_CHECK_AFTER) return;
+    if (!state.roots.some((r) => r.handle && !r.off)) return;
+    lastCheck = Date.now();
+    idle(() => { rescanAll().catch(() => {}); });
+  };
+  addEventListener('focus', onFocus);
+  return () => removeEventListener('focus', onFocus);
+}
+
+/* ------------------------------------------------------------------ I4
+ *
+ * Turning a folder off without removing it.
+ *
+ * Multiple folders are supported and the only two options were keep and
+ * remove — and removing empties everything that came from it, corrections and
+ * favourites included. A drive that is not plugged in today is not a folder
+ * you want to forget.
+ *
+ * Off means hidden from the library and left in the index: the tracks stay in
+ * IndexedDB with everything attached to them, and turning it back on is a
+ * reindex rather than a rescan.
+ */
+export async function setRootOff(id, off) {
+  const root = state.roots.find((r) => r.id === id);
+  if (!root) return false;
+  root.off = !!off;
+  await db.putRoot(serialiseRoot(root)).catch(() => {});
+  reindex();
+  events.emit('roots');
+  events.emit('change');
+  return true;
+}
+
+export const isRootOff = (id) => !!state.roots.find((r) => r.id === id)?.off;
+
 export async function scanRoot(root) {
+  // A folder that has been switched off is not scanned. It still has its
+  // tracks in the index; they are simply not in the library today.
+  if (root.off) return;
   // The loose-files bucket has no directory to walk: its handles are held
   // individually, and re-scanning it would diff against an empty listing and
   // delete every track in it.
@@ -1131,6 +2015,26 @@ async function ingest(root, entries) {
     // a song nobody can play.
     if (e.lyric) {
       sidecars.set(root.id + '/' + e.path.replace(/\.[^./]+$/, ''), e.handle || e.file);
+      continue;
+    }
+
+    /* L14: a playlist file is not a track either. Collected for the import to
+       offer at the end — every collection that has been through another player
+       has these, and the scan used to walk straight past them. Offered rather
+       than imported, because a music folder can also contain a player's own
+       auto-generated "Recently Added.m3u" and creating four playlists nobody
+       asked for is worse than not looking. */
+    if (e.playlist) {
+      foundPlaylists.push({ rootId: root.id, path: e.path, name: e.name, handle: e.handle || e.file });
+      continue;
+    }
+
+    /* L15: a cue sheet indexes the audio file beside it. Filed by the path
+       they share up to the extension, exactly as a lyric sidecar is, and read
+       after the audio has been parsed — the last track's length depends on
+       the file's own duration, which the parser is about to work out. */
+    if (e.cue) {
+      cueSheets.set(root.id + '/' + e.path.replace(/\.[^./]+$/, ''), e.handle || e.file);
       continue;
     }
 
@@ -1181,7 +2085,46 @@ async function ingest(root, entries) {
   scheduleReindex();
 }
 
-const serialiseRoot = (r) => ({ id: r.id, name: r.name, kind: r.kind, handle: r.handle, count: r.count });
+const serialiseRoot = (r) =>
+  ({ id: r.id, name: r.name, kind: r.kind, handle: r.handle, count: r.count, off: !!r.off });
+
+/* I2: what this run could not do.
+ *
+ * The scan bar shows progress, which on a twenty-thousand-file import is
+ * twenty minutes of a bar — and anything unreadable was folded into a count
+ * nobody could open. A file that failed has a name and a reason, and both are
+ * worth more than the number.
+ *
+ * Capped, because a folder of the wrong kind of file produces one failure per
+ * file and a list of nine thousand is not a list. The count is exact; the
+ * names stop at fifty. */
+const FAILURE_CAP = 50;
+let scanFailures = [];
+let scanFailCount = 0;
+
+/** Files this run could not read, and why. */
+export const lastFailures = () => ({ list: scanFailures.slice(), total: scanFailCount });
+
+/**
+ * Called for a file the import could not read properly.
+ *
+ * Two different things end up here and both belong in the same list, because
+ * the question being answered is "which files came in badly":
+ *
+ *   — the tag reader threw. Rare: it is deliberately forgiving and returns
+ *     something for a truncated FLAC, an empty MP3 and a file of pure noise,
+ *     all of which were tried. This is the safety net for a real read error —
+ *     a file that vanishes mid-scan, a permission withdrawn, a device that
+ *     stops answering.
+ *   — the file was read and said nothing. This is the common one, and it is
+ *     the one that leaves a library looking mysteriously wrong: a track with
+ *     a filename for a title, no artist and no album is indistinguishable
+ *     from a badly tagged rip until somebody says which files they were.
+ */
+export function noteScanFailure(name, reason) {
+  scanFailCount++;
+  if (scanFailures.length < FAILURE_CAP) scanFailures.push({ name, reason });
+}
 
 function startScan() {
   if (state.scanning) return;
@@ -1189,9 +2132,14 @@ function startScan() {
   // Folds from before this import — the ones the launch reindex did — are the
   // library's history, not this import's news.
   mergedThisScan.clear();
-  state.progress = { done: 0, total: 0 };
+  foundPlaylists = [];
+  scanFailures = [];
+  scanFailCount = 0;
+  scanStartedAt = Date.now();
+  state.progress = { done: 0, total: 0, file: '' };
   events.emit('scan', true);
 }
+let scanStartedAt = 0;
 
 function finishScan() {
   if (!state.scanning) return;
@@ -1203,8 +2151,49 @@ function finishScan() {
   const added = state.progress.total || 0;
   const merged = [...mergedThisScan].map(([key, title]) => ({ key, title }));
   mergedThisScan.clear();
-  events.emit('scan', false, { added, merged });
-  state.progress = { done: 0, total: 0 };
+  const report = {
+    at: Date.now(),
+    ms: scanStartedAt ? Date.now() - scanStartedAt : 0,
+    added,
+    merged,
+    failed: scanFailCount,
+    failures: scanFailures.slice(),
+    playlistFiles: foundPlaylists.slice(),
+  };
+  /* I3: kept, not just toasted. "Added 50 tracks · merged Graduation" named
+     the merge, which is exactly right, and then it was gone in four seconds
+     and the merge was unreviewable. The last few runs are written down. */
+  rememberRun(report);
+  events.emit('scan', false, report);
+  state.progress = { done: 0, total: 0, file: '' };
+}
+
+/* ------------------------------------------------------------------ I3
+ *
+ * The last few import runs, kept. Five, because the question this answers is
+ * "what did that last import do" and the answer stops being interesting well
+ * before it stops being storable. */
+const RUN_LIMIT = 5;
+let runs = [];
+
+export const importRuns = () => runs.slice();
+
+function rememberRun(report) {
+  // A run that did nothing is not news. Startup rescans of an unchanged folder
+  // are most of the runs there are, and a history of "added 0" is a history of
+  // nothing.
+  if (!report.added && !report.failed && !report.merged.length) return;
+  runs.unshift({
+    at: report.at,
+    ms: report.ms,
+    added: report.added,
+    failed: report.failed,
+    merged: report.merged.map((m) => m.title),
+    failures: report.failures.slice(0, 12),
+  });
+  runs = runs.slice(0, RUN_LIMIT);
+  db.setKV('importRuns', runs).catch(() => {});
+  events.emit('runs');
 }
 
 /** Fallback for browsers without module workers. Chunked so the UI survives. */
@@ -1256,12 +2245,6 @@ export async function removeRoot(rootId) {
   if (orphans.length) {
     for (const k of orphans) { artMisses.delete(k); artURLs.delete(k); }
     db.deleteArt(orphans).catch(() => {});
-  }
-}
-
-export async function rescanAll() {
-  for (const root of state.roots) {
-    if (root.handle) await scanRoot(root);
   }
 }
 
@@ -1507,7 +2490,7 @@ export const favouriteTracks = () =>
 
 /** Paints the stored library first, then reconnects to disk in the background. */
 export async function init() {
-  const [tracks, roots, playlists, recent, faves, sn, own] = await Promise.all([
+  const [tracks, roots, playlists, recent, faves, sn, own, savedRuns, savedFolders] = await Promise.all([
     db.getAllTracks().catch(() => []),
     db.getRoots().catch(() => []),
     db.getPlaylists().catch(() => []),
@@ -1515,6 +2498,8 @@ export async function init() {
     db.getKV('favourites').catch(() => null),
     db.getKV('serial').catch(() => null),
     db.getKV('ownArt').catch(() => null),
+    db.getKV('importRuns').catch(() => null),
+    db.getKV('playlistFolders').catch(() => null),
   ]);
 
   serial = typeof sn === 'string' && sn ? sn : makeSerial();
@@ -1522,7 +2507,8 @@ export async function init() {
 
   for (const t of tracks) { decorate(t); state.tracks.set(t.id, t); }
   state.roots = roots;
-  state.playlists = playlists.sort((a, b) => a.createdAt - b.createdAt);
+  state.playlists = playlists;
+  sortPlaylists();
   history.recent = Array.isArray(recent) ? recent : [];
   favourites.ids = Array.isArray(faves) ? faves.filter((id) => typeof id === 'string') : [];
   favourites.set = new Set(favourites.ids);
@@ -1536,6 +2522,15 @@ export async function init() {
       if (accent) accents.set(k, accent);
     }
   }
+  // I3: what the last few imports did, across sessions — the question "what
+  // did that import do" is usually asked after a reload.
+  if (Array.isArray(savedFolders)) {
+    folders = savedFolders.filter((f) => f && typeof f.id === 'string' && typeof f.name === 'string');
+  }
+  if (Array.isArray(savedRuns)) {
+    runs = savedRuns.filter((r) => r && typeof r.at === 'number').slice(0, RUN_LIMIT);
+  }
+
   reindex();
   events.emit('ready');
 

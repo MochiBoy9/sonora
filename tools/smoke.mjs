@@ -81,6 +81,28 @@ const shot = async (name) => {
   log(`  shot  ${name}.png`);
 };
 
+/* How many pixels a canvas is actually showing.
+ *
+ * The visualisers hand their canvas to a worker with
+ * `transferControlToOffscreen` wherever the platform has it, and after that
+ * `getContext('2d')` on the element throws — reading it directly used to end
+ * this run with an uncaught InvalidStateError and take every later check with
+ * it. A transferred canvas is still a valid image source, so copying it into a
+ * scratch canvas reads the frame the worker last pushed and works on both
+ * paths. */
+const litPixels = (sel, alpha = 8) => page.evaluate(([sel, alpha]) => {
+  const c = document.querySelector(sel);
+  if (!c || !c.width || !c.height) return 0;
+  const t = document.createElement('canvas');
+  t.width = c.width; t.height = c.height;
+  const tx = t.getContext('2d', { willReadFrequently: true });
+  tx.drawImage(c, 0, 0);
+  const d = tx.getImageData(0, 0, t.width, t.height).data;
+  let lit = 0;
+  for (let i = 3; i < d.length; i += 4) if (d[i] > alpha) lit++;
+  return lit;
+}, [sel, alpha]);
+
 /* ---------------------------------------------------------------- boot */
 
 log('\n> boot');
@@ -278,16 +300,8 @@ ok('now playing art', await page.locator('.np-art .art-img.is-loaded').isVisible
 await shot('07-nowplaying');
 
 // The visualiser is a canvas: the only honest check is that it has pixels on it.
-const vizPainted = await page.evaluate(async () => {
-  const c = document.querySelector('.np-viz');
-  if (!c || !c.width) return 0;
-  await new Promise((r) => setTimeout(r, 700));
-  const ctx = c.getContext('2d');
-  const d = ctx.getImageData(0, 0, c.width, c.height).data;
-  let lit = 0;
-  for (let i = 3; i < d.length; i += 4) if (d[i] > 8) lit++;
-  return lit;
-});
+await page.waitForTimeout(700);
+const vizPainted = await litPixels('.np-viz');
 ok('spectrum is drawing', vizPainted > 200, `${vizPainted} lit pixels`);
 
 await page.locator('.pane-tab[data-tab="queue"]').click();
@@ -305,14 +319,7 @@ await page.waitForTimeout(900);
 ok('stage opens on V', await page.locator('.stage-title').isVisible());
 ok('backdrop moved onto the stage', await page.evaluate(() =>
   !!document.querySelector('.stage > canvas.backdrop')));
-const stagePainted = await page.evaluate(() => {
-  const c = document.querySelector('.stage-viz');
-  if (!c || !c.width) return 0;
-  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-  let lit = 0;
-  for (let i = 3; i < d.length; i += 4) if (d[i] > 8) lit++;
-  return lit;
-});
+const stagePainted = await litPixels('.stage-viz');
 ok('stage visualiser is drawing', stagePainted > 500, `${stagePainted} lit pixels`);
 await shot('17-stage-bars');
 
@@ -450,7 +457,9 @@ await page.locator('.nav-item[data-route="home"]').click();
 await shot('13-light');
 
 await page.locator('.side-foot .nav-item[data-route="settings"]').click();
-await page.waitForSelector('.seg', { timeout: 3000 });
+/* The one this wants, not merely the first on the page: settings now carries
+   segmented controls that are hidden until the setting above them is on. */
+await page.locator('.seg', { hasText: 'Dark' }).waitFor({ timeout: 3000 });
 await page.locator('.seg', { hasText: 'Dark' }).click();
 await page.waitForTimeout(400);
 

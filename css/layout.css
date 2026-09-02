@@ -526,7 +526,10 @@ body.is-ready .app { opacity: 1; }
   .nav { width: 100%; }
   .nav-item { justify-content: center; padding: 0; }
   .side-foot { width: 100%; align-items: center; padding: 12px 8px 0; }
-  .add-btn { justify-content: center; padding: 0; width: 40px; height: 40px; }
+  /* Two classes deep, because `.btn` in components.css sets the same padding
+     at the same specificity and loads later — at one class this reads
+     `padding: 0 18px` around a 15px icon in a 40px box. */
+  .side-foot .add-btn { justify-content: center; padding: 0; width: 40px; height: 40px; }
   .side-foot .nav-item { justify-content: center; }
   .route-tag { display: none; }
 }
@@ -619,6 +622,65 @@ body.is-ready .app { opacity: 1; }
  * behind it. Both are rotated by the transport's ticker, so the whole meter is
  * two transforms a frame and no layout.
  */
+/* The meter and the bar under it are one instrument, so they share a width and
+   a column rather than being two things that happen to sit near each other. */
+.vu-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: none;
+}
+
+/* S4: phase correlation, −1 to +1, growing from the middle.
+ *
+ * A bar rather than a second needle: it is signed with a meaningful zero, and
+ * the question asked of it — which side of the middle, and how far — is one a
+ * bar answers at a glance. Two colours, because the two ends mean opposite
+ * things: to the right is mono-safe and eventually just mono, to the left is
+ * cancellation, which is the one that has to be noticed. */
+.corr {
+  position: relative;
+  width: 46px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgb(var(--surface-3-rgb) / .5);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  transition: opacity var(--dur-3) var(--ease);
+}
+/* Nothing to report — silence, or a mono file. Dimmed rather than emptied, so
+   the instrument is still visibly there. */
+.corr.is-idle { opacity: .35; }
+.corr.is-idle .corr-fill { transform: scaleX(0); }
+
+.corr-fill {
+  position: absolute;
+  left: 50%;
+  top: 0; bottom: 0;
+  width: 50%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: rgb(var(--accent-rgb) / .8);
+  transition: background var(--dur-3) var(--ease);
+}
+/* Which way it leans — true of any negative reading, and only a direction. */
+.corr.is-left .corr-fill { left: 0; }
+/* Far enough out to matter. The one state worth a colour of its own, because
+   it is the one that costs you the record on a phone speaker. */
+.corr.is-out .corr-fill { background: var(--warn); }
+/* Correlated to the point of being mono. Not a fault, so not a warning — but
+   worth saying, because a stereo record reading +0.98 usually is not one. */
+.corr.is-narrow .corr-fill { background: var(--text-3); }
+
+.corr-mid {
+  position: absolute;
+  left: 50%;
+  top: 1px; bottom: 1px;
+  width: var(--hair);
+  background: var(--line-2);
+  transform: translateX(-50%);
+}
+
 .vu {
   position: relative;
   width: 46px;
@@ -630,24 +692,52 @@ body.is-ready .app { opacity: 1; }
   background: rgb(var(--surface-3-rgb) / .5);
   box-shadow: inset 0 0 0 var(--hair) var(--line);
 }
-/* The scale: ticks struck through the arc, dimmer past the top of the range. */
-.vu::before {
-  content: "";
-  position: absolute;
-  inset: 3px 3px auto;
-  height: 13px;
-  background:
-    repeating-conic-gradient(from -46deg at 50% 130%,
-      var(--line-2) 0 .6deg, transparent .6deg 8deg);
-  opacity: .9;
-}
+/* The scale: ticks struck through the arc, dimmer past the top of the range.
+ *
+ * The cone has to be struck from the needle's own pivot or the two are
+ * drawings of different instruments. The needle turns about `50% 130%` of the
+ * meter — its own bottom, 30% below the box — and this layer was inset three
+ * pixels and cut to 13px tall, so the same `130%` landed fourteen pixels
+ * higher and the ticks fanned out of a point the hand never touched. At .6deg
+ * they were also thinner than a pixel at that radius, so what actually reached
+ * the screen was a scatter of dust with a stray blue stroke through it.
+ *
+ * Full box, so the percentage means what the needle means by it; wide enough
+ * to survive rasterising; and masked to the band the needle sweeps, because a
+ * cone with no inner radius fills the pivot with ink. */
+.vu::before,
 .vu::after {
   content: "";
   position: absolute;
-  right: 3px; top: 3px;
-  width: 34%; height: 13px;
-  background: linear-gradient(90deg, transparent, rgb(255 120 120 / .16));
+  inset: 0;
   pointer-events: none;
+  -webkit-mask-image: radial-gradient(circle 21px at 50% 130%,
+    transparent 0 14px, #000 15.5px 20px, transparent 21px);
+  mask-image: radial-gradient(circle 21px at 50% 130%,
+    transparent 0 14px, #000 15.5px 20px, transparent 21px);
+}
+.vu::before {
+  background:
+    /* The ticks, struck through the arc. A 46px meter puts the scale at a
+       radius of about eighteen pixels, where one degree is a fifth of a pixel:
+       the original .6deg wedges could not land on the grid at all and came out
+       as dust. Four degrees every fourteen is a mark wide enough to draw and
+       six of them across the sweep, which is as much scale as a meter this
+       size can carry. */
+    repeating-conic-gradient(from -46deg at 50% 130%,
+      var(--line-2) 0 4deg, transparent 4deg 14deg),
+    /* The arc they are struck through. */
+    radial-gradient(circle 21px at 50% 130%,
+      transparent 0 18.6px, var(--line-2) 19px 19.9px, transparent 20.3px);
+  opacity: .9;
+}
+/* The red end, on the arc rather than as a rectangle in the corner: it marks
+   the last stretch of the sweep, which is what "over" means on a meter. The
+   band starts where `vu-hot` does, so the needle reddens as it enters it. */
+.vu::after {
+  background:
+    conic-gradient(from 0deg at 50% 130%,
+      transparent 0 26deg, rgb(255 120 120 / .30) 30deg 44deg, transparent 47deg);
 }
 .vu-needle, .vu-peak {
   position: absolute;
@@ -671,3 +761,47 @@ body.is-ready .app { opacity: 1; }
 
 @media (max-width: 1080px) { .vu { display: none; } }
 @media (prefers-reduced-motion: reduce) { .vu { display: none; } }
+
+
+/* ------------------------------------------------------------------ L12
+
+   Playlist folders, one level deep, and an order you chose. */
+.side-folder {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-2);
+  font: inherit;
+  font-size: calc(12.5px * var(--scale));
+  text-align: left;
+  border-radius: calc(var(--radius) * 0.5);
+}
+.side-folder:hover { color: var(--text); background: var(--surface-hi); }
+.side-folder-tw {
+  flex: none;
+  display: flex;
+  color: var(--text-3);
+  transition: transform var(--dur-2) var(--ease);
+}
+.side-folder-tw .ico { width: 13px; height: 13px; }
+.side-folder.is-open .side-folder-tw { transform: rotate(90deg); }
+/* Indented rather than boxed: the sidebar is narrow and a border around four
+   rows costs more width than the nesting is worth saying. */
+.side-folder-body { padding-left: 13px; border-left: var(--hair) solid var(--line-2); margin-left: 15px; }
+.side-folder-body .side-empty { padding: 4px 10px; }
+
+/* Being dragged, and where it would land. */
+.side-playlist.is-dragging { opacity: .4; }
+.side-playlist.is-drop, .side-folder.is-drop {
+  box-shadow: inset 0 2px 0 -1px var(--accent);
+}
+.side-folder.is-drop { background: rgb(var(--accent-rgb) / .12); }
+
+@media (prefers-reduced-motion: reduce) {
+  .side-folder-tw { transition: none; }
+}

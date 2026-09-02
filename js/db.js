@@ -140,3 +140,31 @@ export async function usage() {
     return est ? { used: est.usage || 0, quota: est.quota || 0 } : null;
   } catch { return null; }
 }
+
+/*
+ * Whether the browser has promised to keep any of this.
+ *
+ * Everything Sonora lets you change is an overlay in here — playlists,
+ * favourites, tag corrections, the covers you chose, racks bound to records,
+ * every hour of listening it has ever counted. None of it is written to your
+ * files, which is the whole point and is also the risk: without a persistence
+ * grant an origin's storage is *best-effort*, and a browser short of room may
+ * evict the lot without asking and without a way back. There is no server copy,
+ * because there is no server.
+ *
+ * Asking is cheap and the answer is worth showing rather than assuming. On
+ * Firefox this prompts; on Chromium it is decided from how the site is used, so
+ * the honest thing is to ask once there is something to lose and then report
+ * whatever came back.
+ */
+export async function persisted() {
+  try { return !!(await navigator.storage?.persisted?.()); } catch { return false; }
+}
+
+export async function requestPersist() {
+  try {
+    if (!navigator.storage?.persist) return { supported: false, granted: false };
+    if (await navigator.storage.persisted()) return { supported: true, granted: true };
+    return { supported: true, granted: !!(await navigator.storage.persist()) };
+  } catch { return { supported: false, granted: false }; }
+}

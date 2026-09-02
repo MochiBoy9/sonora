@@ -57,7 +57,27 @@ export const state = {
   preservePitch: true,       // speed without changing the key
   limiter: true,
   preset: 'flat',
+  /* S1: whether a bypass is level-matched. Off is the honest hard bypass, on
+     is the fair comparison, and both are worth having because they answer
+     different questions: "what is this doing to the level" and "what is this
+     doing to the sound". */
+  levelMatch: false,
+  /* S7: which pitch shifter. 'fast' is the delay line — no latency worth the
+     name and clean to about seven semitones. 'fine' is the phase vocoder,
+     which holds a sustained note together at any shift and costs 50 ms of
+     latency and a pair of FFTs per hop. Neither is right for every use, so it
+     is a choice, and the control that offers it says what each one costs. */
+  pitchQuality: 'fast',
 };
+
+/* dB the rack is louder than the dry signal, measured. Zero until something
+   has been measured, which is also what it falls back to when the measurement
+   cannot be trusted — see `measureMatch`. */
+let matchDb = 0;
+/* True only while `measureMatch` is reading the two legs. The correction is
+   what is being measured, so it has to be out of circuit while the reading is
+   taken or the second pass would measure the first pass's answer. */
+let measuring = false;
 
 /* ------------------------------------------------------------------ presets */
 
@@ -94,14 +114,17 @@ let comp = null, limiter = null;
 let pitchIn = null, pitchDirect = null, pitchWet = null, pitchNode = null;
 let convolver = null, dry = null, wet = null, spaceSum = null;
 let widthIn = null, widthGain = null, balL = null, balR = null;
+let match = null;
 let element = null;
-let workletReady = null;
+let meterModule = null;          // the level-match meters' module, added once
 let loaded = false;
 
 /** What the graph is actually doing, for the tests and for a bad afternoon. */
 export const __debug = () => ({
   ctx: !!ctx,
   worklet: !!pitchNode,
+  shifter: pitchKind || null,
+  matchDb,
   wet: pitchWet ? +pitchWet.gain.value.toFixed(3) : null,
   direct: pitchDirect ? +pitchDirect.gain.value.toFixed(3) : null,
   ratio: pitchNode ? +pitchNode.parameters.get('ratio').value.toFixed(4) : null,
@@ -224,7 +247,22 @@ export function attach(context, media) {
 
   merge.connect(dry).connect(spaceSum);
   merge.connect(convolver).connect(wet).connect(spaceSum);
-  spaceSum.connect(limiter).connect(output);
+
+  /* S1: the gain that makes an A/B honest.
+   *
+   * A true bypass is the right thing to have and exactly the thing that makes
+   * a comparison misleading: louder wins every blind test ever run, so a rack
+   * with 4 dB of make-up gain always sounds better and you never hear what it
+   * is actually doing. This node sits at the very end and carries the measured
+   * difference, applied to whichever leg is quieter, so the two sides of the
+   * comparison arrive at the same loudness and the only thing left to hear is
+   * the shape.
+   *
+   * After the limiter rather than before it, because it is not part of the
+   * sound the rack makes — it is a correction to the comparison, and putting
+   * it inside the chain would have the limiter respond to it. */
+  match = ctx.createGain();
+  spaceSum.connect(limiter).connect(match).connect(output);
 
   if (loaded) apply(); else load();
   return { input, output };
@@ -251,27 +289,50 @@ let pitchFailed = false;
  * crossfade to the wet path starts before there is anything on the wet path,
  * so the sound drops out for as long as the module takes to fetch.
  */
+/* Which shifter is in the graph, so a change of quality is noticed. */
+let pitchKind = '';
+const SHIFTERS = {
+  fast: { module: './pitch-worklet.js', name: 'pitch-shift' },
+  fine: { module: './vocoder-worklet.js', name: 'pitch-vocoder' },
+};
+const shifterModules = {};
+
 async function setPitchActive(on) {
   if (!ctx) return;
+
+  const want = SHIFTERS[state.pitchQuality] ? state.pitchQuality : 'fast';
+
+  /* Changing the shifter means changing the node. Taken out while the dry path
+     is carrying the signal — `apply()` calls this after writing the wet/dry
+     gains, and a swap under a live wet leg is an audible cut. */
+  if (pitchNode && pitchKind !== want) {
+    const old = pitchNode;
+    pitchNode = null;
+    pitchKind = '';
+    try { pitchIn.disconnect(old); old.disconnect(); } catch { /* already gone */ }
+  }
 
   if (on && !pitchNode && !pitchFailed) {
     if (!ctx.audioWorklet) { pitchFailed = true; }
     else {
-      if (!workletReady) {
-        workletReady = ctx.audioWorklet
-          .addModule(new URL('./pitch-worklet.js', import.meta.url));
+      const spec = SHIFTERS[want];
+      if (!shifterModules[want]) {
+        shifterModules[want] = ctx.audioWorklet
+          .addModule(new URL(spec.module, import.meta.url));
       }
       try {
-        await workletReady;
+        await shifterModules[want];
       } catch (err) {
+        shifterModules[want] = null;
         pitchFailed = true;
         console.warn('[sonora] pitch shifting is unavailable here', err);
         events.emit('pitch-unavailable');
       }
       if (!pitchFailed && !pitchNode) {                // two callers can race
-        pitchNode = new AudioWorkletNode(ctx, 'pitch-shift', {
+        pitchNode = new AudioWorkletNode(ctx, spec.name, {
           numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
         });
+        pitchKind = want;
         pitchIn.connect(pitchNode);
         pitchNode.connect(pitchWet);
       }
@@ -340,7 +401,10 @@ export function apply() {
     limiter.attack.value = 0.001;
     limiter.release.value = 0.06;
 
-    set(widthGain.gain, live ? state.width : 1);
+    /* The hold outranks both the setting and the bypass: "what does this sound
+       like in mono" is a question about the record, and a bypassed rack that
+       ignored it would answer a different one. */
+    set(widthGain.gain, monoHold ? 0 : (live ? state.width : 1));
 
     // Balance holds total power steady rather than turning one side down.
     const b = live ? clamp(state.balance, -1, 1) : 0;
@@ -355,6 +419,12 @@ export function apply() {
     // Equal-power wet/dry, so turning the room up does not turn the record down.
     set(wet.gain, Math.sin(mix * Math.PI / 2));
     set(dry.gain, Math.cos(mix * Math.PI / 2));
+
+    /* S1. The correction is applied to whichever leg needs it and to neither
+       when matching is off. In: the rack is already at its own level, so this
+       is unity. Out: raise the dry signal by however much louder the rack was,
+       so the two sides land together. */
+    set(match.gain, !measuring && state.levelMatch && !live ? dbToGain(matchDb) : 1);
 
     setPitchActive((live ? state.pitch : 0) !== 0);
   }
@@ -480,6 +550,230 @@ export function set(patch) {
   Object.assign(state, patch);
   state.preset = matchPreset();
   apply();
+}
+
+/* S3: fold to mono for as long as it is held.
+ *
+ * Not a change to `state.width`. The whole point of a momentary check is that
+ * the setting you were auditioning is still there when you let go, and writing
+ * the width to zero would save mono to the preset, publish it to the readout
+ * and lose whatever you had set. So the fold lives beside the setting and
+ * `apply()` reads whichever is in force — which also means the Look, the
+ * summary line and anything that persists the rack all still describe the
+ * record rather than the check. */
+let monoHold = false;
+
+export function holdMono(on) {
+  const next = !!on;
+  if (next === monoHold) return;
+  monoHold = next;
+  apply();
+  events.emit('mono', monoHold);
+}
+
+export const isMonoHeld = () => monoHold;
+
+/**
+ * S1: measures the difference in level between the rack and the bypass.
+ *
+ * WHAT IS MEASURED, AND WHY IT IS NOT THE OBVIOUS THING. The first version
+ * compared the signal entering the rack with the signal leaving it, and it was
+ * wrong by more than the correction it was applying. A bypass is not the dry
+ * input: `on: false` neutralises the settings, but the signal still travels the
+ * same chain — the width matrix, the wet/dry sum, the limiter — and those have
+ * a gain of their own. Measured: the rack made the record 1.1 dB *quieter*
+ * than the bypass, and a correction derived from input-versus-output moved it
+ * 2.8 dB the other way.
+ *
+ * So this measures the thing it is actually correcting: the rack's gain from
+ * input to output with the rack in, then the same ratio with it bypassed. The
+ * difference between two ratios is what the switch is worth.
+ *
+ * A ratio rather than a level, because it is taken over whatever music happens
+ * to be playing in that second. Levels from two different seconds cannot be
+ * compared — the record got quieter, not the rack. Two ratios can: each is
+ * measured against its own input at its own moment, so the music divides out
+ * and what is left is the transfer function. The one thing that does not divide
+ * out is the compressor's and limiter's programme dependence, and that is not a
+ * flaw: how hard the rack squashes *this* music is part of what the switch is
+ * worth.
+ *
+ * WORKLETS, NOT ANALYSERS. The obvious build is AnalyserNodes and a rAF loop.
+ * An analyser hung off a node reports digital silence — nothing downstream of
+ * it reaches the destination, so the graph has no reason to render it. The
+ * meter worklet next door has never had the problem, because a worklet with no
+ * outputs is a sink and is always processed. Two pairs of them, made when the
+ * button is pressed and thrown away afterwards, so the steady-state graph is
+ * unchanged.
+ *
+ * @returns {Promise<{ok: boolean, db: number, reason?: string}>}
+ */
+export async function measureMatch({ seconds = 1.4 } = {}) {
+  if (!ctx || !input || !output) return { ok: false, db: matchDb, reason: 'no-graph' };
+  if (!ctx.audioWorklet) return { ok: false, db: matchDb, reason: 'no-worklet' };
+
+  try {
+    meterModule = meterModule ||
+      ctx.audioWorklet.addModule(new URL('./meter-worklet.js', import.meta.url));
+    await meterModule;
+  } catch {
+    meterModule = null;
+    return { ok: false, db: matchDb, reason: 'no-worklet' };
+  }
+
+  const tap = (from) => {
+    const node = new AudioWorkletNode(ctx, 'sonora-meter', { numberOfInputs: 1, numberOfOutputs: 0 });
+    const seen = { sumSq: 0, samples: 0 };
+    node.port.onmessage = (e) => {
+      if (!e.data) return;
+      seen.sumSq = e.data.sumSq;
+      seen.samples = e.data.samples;
+    };
+    from.connect(node);
+    return { seen, stop: () => { try { from.disconnect(node); } catch { /* gone */ } node.port.onmessage = null; } };
+  };
+
+  /* One pass: how much louder the output is than the input, right now.
+     The worklet ignores its first 75 blocks after construction — a settling
+     window for the switch transient — so the wait is the measurement plus that
+     and a post interval, or the last summary read would be of nothing. */
+  const pass = async () => {
+    const a = tap(input);
+    const b = tap(output);
+    await new Promise((r) => setTimeout(r, seconds * 1000 + 450));
+    a.stop(); b.stop();
+    const rate = ctx.sampleRate || 48000;
+    if (!a.seen.samples || !b.seen.samples || a.seen.samples < rate / 3) return null;
+    if (!a.seen.sumSq || !b.seen.sumSq) return null;
+    return 10 * Math.log10((b.seen.sumSq / b.seen.samples) / (a.seen.sumSq / a.seen.samples));
+  };
+
+  const was = state.on;
+  measuring = true;                 // holds `match` at unity while it is read
+  try {
+    state.on = true; apply();
+    const onDb = await pass();
+    state.on = false; apply();
+    const offDb = await pass();
+    if (onDb === null || offDb === null) return { ok: false, db: matchDb, reason: 'too-quiet' };
+    /* Positive when the rack is the louder of the two, which is the amount the
+       bypassed leg has to be lifted by to meet it. */
+    const diff = onDb - offDb;
+    /* Bounded. Past about 12 dB either way the rack is doing something a level
+       match cannot fairly undo — a gate, a near-total cut — and matching it
+       would produce a bypass at a level nobody asked for. */
+    matchDb = Math.max(-12, Math.min(12, diff));
+    events.emit('match', matchDb);
+    return { ok: true, db: matchDb };
+  } finally {
+    measuring = false;
+    state.on = was;
+    apply();
+  }
+}
+
+/**
+ * Where the signal is, stage by stage, in dBFS over a short window.
+ *
+ * For the afternoon when the rack is silent and every gain reads unity. Uses
+ * the same meter worklet the level match does, for the same reason: an
+ * analyser hung off a node reports nothing, because nothing downstream of it
+ * reaches the destination.
+ */
+export async function __levels({ seconds = 1 } = {}) {
+  if (!ctx || !ctx.audioWorklet || !input) return null;
+  try {
+    meterModule = meterModule ||
+      ctx.audioWorklet.addModule(new URL('./meter-worklet.js', import.meta.url));
+    await meterModule;
+  } catch { return null; }
+
+  const stages = { input, preamp, comp, limiter, match, output };
+  const taps = [];
+  for (const [name, node] of Object.entries(stages)) {
+    if (!node) continue;
+    const w = new AudioWorkletNode(ctx, 'sonora-meter', { numberOfInputs: 1, numberOfOutputs: 0 });
+    const seen = { sumSq: 0, samples: 0 };
+    w.port.onmessage = (e) => { if (e.data) { seen.sumSq = e.data.sumSq; seen.samples = e.data.samples; } };
+    node.connect(w);
+    taps.push({ name, node, w, seen });
+  }
+  await new Promise((r) => setTimeout(r, seconds * 1000 + 450));
+  const out = {};
+  for (const t of taps) {
+    try { t.node.disconnect(t.w); } catch { /* already gone */ }
+    t.w.port.onmessage = null;
+    out[t.name] = t.seen.samples
+      ? +(10 * Math.log10(t.seen.sumSq / t.seen.samples)).toFixed(1)
+      : null;
+  }
+  return out;
+}
+
+/** How much the bypassed leg is being corrected by, in dB. */
+export const matchOffset = () => matchDb;
+
+/* ------------------------------------------------------------------ two racks
+ *
+ * S2: bypass answers "is the rack doing anything?" and cannot answer "is this
+ * curve better than that one?", which is the question you actually have once
+ * you are past flat. Two slots and one key to swap them.
+ *
+ * A slot is a snapshot of everything the rack is, taken by the same shape
+ * `loadRack` already reads — so a slot and a saved rack are the same object,
+ * and the swap is `loadRack` in both directions. Only the settings: bindings,
+ * presets and the graph itself are untouched.
+ */
+const SLOT_KEYS = ['preamp', 'eq', 'bass', 'treble', 'comp', 'space', 'width',
+                   'balance', 'pitch', 'speed', 'preservePitch', 'limiter', 'preset'];
+
+function snapshot() {
+  const out = {};
+  for (const k of SLOT_KEYS) {
+    const v = state[k];
+    out[k] = Array.isArray(v) ? v.slice() : (v && typeof v === 'object' ? { ...v } : v);
+  }
+  return out;
+}
+
+/* The other rack. Null until somebody puts something in it, because an empty
+   B is not "flat" — flat is a setting somebody might have chosen for A, and
+   swapping into a B nobody has filled should say so rather than quietly
+   flattening the rack. */
+let slotB = null;
+let inB = false;
+
+export const hasSlotB = () => !!slotB;
+export const whichSlot = () => (inB ? 'B' : 'A');
+
+/** Copies whatever is in the rack now into the other slot. */
+export function copyToOther() {
+  slotB = snapshot();
+  events.emit('slots');
+  return whichSlot() === 'A' ? 'B' : 'A';
+}
+
+/**
+ * Swaps the rack with the other slot.
+ *
+ * Symmetric by construction: what is in the rack goes into the slot and what
+ * was in the slot comes out, so pressing it twice is a no-op and there is no
+ * "which one is the real one" to get wrong.
+ */
+export function swapSlots() {
+  if (!slotB) return null;
+  const here = snapshot();
+  const there = slotB;
+  slotB = here;
+  for (const k of SLOT_KEYS) {
+    if (!(k in there)) continue;
+    const v = there[k];
+    state[k] = Array.isArray(v) ? v.slice() : (v && typeof v === 'object' ? { ...v } : v);
+  }
+  inB = !inB;
+  apply();
+  events.emit('slots');
+  return whichSlot();
 }
 
 export function setComp(patch) { Object.assign(state.comp, patch); apply(); }
@@ -721,6 +1015,96 @@ export async function deleteRack(name) {
   await db.setKV('audio:racks', next).catch(() => {});
   events.emit('racks', next);
   return next;
+}
+
+/* ---------------------------------------------------------------- as a file
+ *
+ * S6: a rack can belong to a record, which makes it a thing worth passing on —
+ * "here is the curve I use for that pressing". Inside IndexedDB it is reachable
+ * by nothing and lost with a Clear library, which is precisely the objection
+ * this application makes to every other player's playlists.
+ *
+ * A small JSON file, then. Versioned, because a rack written today should
+ * still load in two years or say plainly that it cannot.
+ */
+export const RACK_FILE = 'sonora.rack';
+const RACK_FILE_VERSION = 1;
+
+export function exportRack(name = 'Rack') {
+  return {
+    kind: RACK_FILE,
+    version: RACK_FILE_VERSION,
+    app: 'Sonora',
+    saved: new Date().toISOString(),
+    name: String(name).slice(0, 60),
+    state: snapshot(),
+  };
+}
+
+/**
+ * Reads a rack file without applying it.
+ *
+ * Nothing is trusted: a file names its own fields and any of them may be
+ * missing, of the wrong type, or hostile. What comes back is a description of
+ * what *would* change, which is what the import dialog shows before anything
+ * is touched — the same discipline the library's own imports use.
+ *
+ * @returns {{ok: boolean, reason?: string, name?: string, state?: object, changes?: string[]}}
+ */
+export function readRackFile(text) {
+  let doc;
+  try { doc = JSON.parse(text); } catch { return { ok: false, reason: 'That is not a Sonora rack file.' }; }
+  if (!doc || doc.kind !== RACK_FILE) return { ok: false, reason: 'That is not a Sonora rack file.' };
+  if (!(doc.version <= RACK_FILE_VERSION)) {
+    return { ok: false, reason: 'That rack was written by a newer version of Sonora.' };
+  }
+  const src = doc.state;
+  if (!src || typeof src !== 'object') return { ok: false, reason: 'That rack file has nothing in it.' };
+
+  const num = (v, lo, hi, fallback) =>
+    (typeof v === 'number' && isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback);
+  const clean = {
+    preamp: num(src.preamp, -12, 12, 0),
+    eq: Array.isArray(src.eq)
+      ? BANDS.map((_, i) => num(src.eq[i], -12, 12, 0))
+      : BANDS.map(() => 0),
+    bass: num(src.bass, -12, 12, 0),
+    treble: num(src.treble, -12, 12, 0),
+    width: num(src.width, 0, 2, 1),
+    balance: num(src.balance, -1, 1, 0),
+    pitch: num(src.pitch, -12, 12, 0),
+    speed: num(src.speed, 0.25, 4, 1),
+    preservePitch: src.preservePitch !== false,
+    limiter: src.limiter !== false,
+    preset: typeof src.preset === 'string' ? src.preset.slice(0, 40) : 'custom',
+    comp: {
+      on: !!src.comp?.on,
+      threshold: num(src.comp?.threshold, -60, 0, -24),
+      ratio: num(src.comp?.ratio, 1, 20, 3),
+      attack: num(src.comp?.attack, 0, 1, 0.004),
+      release: num(src.comp?.release, 0, 2, 0.25),
+      knee: num(src.comp?.knee, 0, 40, 8),
+    },
+    space: {
+      on: !!src.space?.on,
+      kind: SPACES[src.space?.kind] ? src.space.kind : 'hall',
+      mix: num(src.space?.mix, 0, 1, 0.22),
+    },
+  };
+
+  /* What is about to change, in the words the dialog will use. A preview that
+     lists every field is a preview nobody reads. */
+  const changes = [];
+  if (clean.eq.some((v, i) => Math.abs(v - state.eq[i]) > 0.05)) changes.push('the ten bands');
+  if (Math.abs(clean.preamp - state.preamp) > 0.05) changes.push('preamp');
+  if (Math.abs(clean.bass - state.bass) > 0.05 || Math.abs(clean.treble - state.treble) > 0.05) changes.push('bass and treble');
+  if (Math.abs(clean.width - state.width) > 0.005) changes.push('width');
+  if (Math.abs(clean.balance - state.balance) > 0.005) changes.push('balance');
+  if (clean.pitch !== state.pitch || Math.abs(clean.speed - state.speed) > 0.005) changes.push('pitch and speed');
+  if (clean.comp.on !== state.comp.on) changes.push(clean.comp.on ? 'the compressor, on' : 'the compressor, off');
+  if (clean.space.on !== state.space.on) changes.push(clean.space.on ? 'the room, on' : 'the room, off');
+
+  return { ok: true, name: String(doc.name || 'Rack').slice(0, 60), state: clean, changes };
 }
 
 export function loadRack(rack) {

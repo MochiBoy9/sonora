@@ -190,7 +190,19 @@ async function handle(job) {
   let tags = {};
   try {
     tags = await readTags(file, path, name);
-  } catch {
+  } catch (err) {
+    /* Still catalogued — a file this reader cannot parse is very often a file
+       this browser can play perfectly well, and dropping it would be worse
+       than importing it under its filename. But it is no longer silent: a
+       track that arrives with a filename for a title and nothing else looks,
+       from the outside, exactly like a badly tagged rip, and the difference
+       matters when you are trying to work out why your library is wrong.
+       I2 gives it somewhere to be read. */
+    self.postMessage({
+      type: 'failed',
+      name: name || path || '',
+      reason: String((err && err.message) || err || 'tags unreadable').slice(0, 160),
+    });
     tags = { title: name };
   }
 
@@ -209,6 +221,18 @@ async function handle(job) {
     // Which of the above came from the folder tree rather than the file.
     guessed: tags.guessed || '',
   };
+
+  /* R11: the credits, where the file carries them.
+   *
+   * Only what is there — every one of these is absent from most files, and a
+   * track object carrying eight empty strings is eight empty strings times
+   * twenty thousand tracks in IndexedDB. A missing key is also what lets the
+   * panel print nothing rather than a row of blanks. */
+  for (const k of ['composer', 'lyricist', 'conductor', 'remixer', 'publisher',
+                   'copyright', 'isrc', 'encodedBy', 'encoder']) {
+    const v = tags[k];
+    if (typeof v === 'string' && v.trim()) track[k] = v.trim().slice(0, 200);
+  }
 
   /* What the file is, as opposed to what it says it is.
    *
@@ -272,12 +296,29 @@ let draining = false;
 function pump() {
   while (active < PARALLEL && pending.length) {
     active++;
-    handle(pending.shift())
-      .catch(() => {})
+    const job = pending.shift();
+    handle(job)
+      /* I2: a file that could not be read is news, not noise. It used to be
+         swallowed here and folded into the difference between the count of
+         files walked and the count of tracks that arrived — a number with no
+         name attached to it, which is exactly the shape of an import problem
+         nobody can act on. */
+      .catch((err) => {
+        self.postMessage({
+          type: 'failed',
+          name: job.name || job.path || '',
+          reason: String((err && err.message) || err || 'unreadable').slice(0, 160),
+        });
+      })
       .finally(() => {
         active--;
         done++;
-        if ((done & 15) === 0) self.postMessage({ type: 'progress', done, total });
+        /* The name as well as the number. On a twenty-thousand-file import the
+           bar alone is twenty minutes of a bar, and a file that takes a long
+           time is invisible unless the thing being worked on is said. */
+        if ((done & 15) === 0) {
+          self.postMessage({ type: 'progress', done, total, file: job.name || '' });
+        }
         pump();
       });
   }

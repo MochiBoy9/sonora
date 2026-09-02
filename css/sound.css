@@ -55,6 +55,59 @@
 }
 .eq-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
+/* S5: the live spectrum. Under the grid and the curve, because it is the
+   material the curve is being drawn *about* — a rack in front of a signal, not
+   a signal drawn over a rack. */
+.eq-scope {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+  opacity: .55;
+  pointer-events: none;
+}
+.eq-svg, .eq-overlay, .eq-handles { position: absolute; z-index: 1; }
+
+/* The dBFS scale, down the right edge. The left already carries the rack's own
+   dB scale and one axis cannot mean two things. */
+.eq-mark-spec {
+  right: 6px;
+  left: auto;
+  transform: translateY(-50%);
+  opacity: .5;
+}
+
+/* Where the pointer is, and what is there. */
+.eq-cross {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: var(--hair);
+  background: rgb(var(--accent-rgb) / .5);
+  pointer-events: none;
+  z-index: 2;
+}
+.eq-readout {
+  position: absolute;
+  top: 8px;
+  transform: translateX(6px);
+  z-index: 3;
+  padding: 3px 7px;
+  border-radius: calc(var(--radius) * 0.5);
+  background: rgb(var(--bg-rgb) / .88);
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .04em;
+  color: var(--text-2);
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* Past three quarters of the way across there is no room to the right, so the
+   card sets back the other way rather than being clipped by the stage. */
+.eq-readout.is-right { transform: translateX(calc(-100% - 6px)); }
+
 .eq-grid line { stroke: rgb(var(--accent-rgb) / .13); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .eq-grid line.zero { stroke: rgb(var(--accent-rgb) / .34); }
 /* The labels and the handles live above the stretched path layer, in HTML, so
@@ -74,6 +127,10 @@
   white-space: nowrap;
 }
 .eq-mark-x { bottom: 5px; transform: translateX(4px); }
+/* The top of the range sits at 98.6% of the width, so a label nudged right
+   from there hangs over the edge and the box clips it: "20k" was reading as
+   "2". The last one is set back from its own gridline instead. */
+.eq-mark-x.is-end { transform: translateX(calc(-100% - 5px)); }
 .eq-mark-y { left: 7px; transform: translateY(-100%); margin-top: -3px; }
 
 .eq-handles { pointer-events: none; }
@@ -216,6 +273,29 @@
   transition: color var(--dur-1) linear, background var(--dur-1) linear, border-color var(--dur-1) linear;
 }
 .preset:hover { color: var(--text); border-color: var(--line-2); }
+
+/* Held rather than latched, so it looks pressed rather than switched on: no
+   transition on the way in, because a control whose feedback lags behind the
+   finger does not read as momentary. */
+/* The two comparison controls in the rack head. Lit while they are in force,
+   like the bypass beside them — the head is a row of switches and they should
+   read as one instrument. */
+.rack-match.is-on, .rack-slot.is-on {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: rgb(var(--accent-rgb) / .12);
+}
+.rack-match span, .rack-slot span { font-variant-numeric: tabular-nums; }
+/* Two seconds of measuring. Not a spinner: the button is doing the thing it
+   says, and dimming it says "working" without adding a second vocabulary. */
+.rack-match.is-busy { opacity: .55; pointer-events: none; }
+
+.mono-check { cursor: pointer; transition: none; }
+.mono-check.is-on {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
 .preset.is-on {
   color: var(--on-accent);
   background: var(--accent-grad);
@@ -242,8 +322,18 @@
 }
 .look-swatch:hover { border-color: var(--line-3); transform: translateY(-2px); }
 .look-swatch.is-on { border-color: rgb(var(--sw-a)); }
-.look-name { font-size: calc(12px * var(--scale)); font-weight: 580; color: var(--text); }
+/* Both are spans inside the button, so both have to be told to be blocks:
+   left inline they set on one line as "AquaWet glass and a deep horizon", and
+   the `margin-top` below — which does nothing to an inline box — is the note
+   that a stacked pair was always what this wanted. */
+.look-name {
+  display: block;
+  font-size: calc(12px * var(--scale));
+  font-weight: 580;
+  color: var(--text);
+}
 .look-note {
+  display: block;
   font-size: calc(10.5px * var(--scale));
   color: var(--text-3);
   margin-top: 2px;
@@ -403,4 +493,25 @@
      panel — so it becomes one rather than losing its margins to decoration. */
   .rack-panel { margin-inline: 0; }
   .rack-panel::before, .rack-panel::after { display: none; }
+}
+
+
+/* A rack file dragged over the page. The whole page rather than a target you
+   have to find: somebody who has just been sent a rack drops it where they are
+   looking. */
+.view.is-dropping::after {
+  content: "Drop a rack file to see what it changes";
+  position: fixed;
+  inset: 0;
+  z-index: 700;
+  display: grid;
+  place-items: center;
+  background: rgb(var(--bg-rgb) / .7);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  color: var(--accent);
+  font-family: var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  font-size: calc(11px * var(--scale));
+  pointer-events: none;
 }

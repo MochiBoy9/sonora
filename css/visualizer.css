@@ -24,20 +24,36 @@
 /* ------------------------------------------------------------------ ribbon */
 
 /* The thin spectrum that rides the top edge of the transport bar. It is
-   decoration, so it never takes a pointer event and never affects layout. */
+   decoration, so it never takes a pointer event and never affects layout.
+ *
+ * R15: it used to stand 26px clear above the bar, which at a laptop width
+ * reads as a hairline and at 2400px reads as a row of loose bars floating over
+ * the album grid with nothing under them. The README calls it a hairline, and
+ * this is now what it says: 10px, tucked against the bar's own top edge and
+ * faded upward, so it belongs to the transport at every width instead of
+ * detaching from it as the window grows.
+ *
+ * Inside the bar rather than above it, so the fade has the bar's own surface
+ * behind it and the whole thing reads as one object.  */
 .pb-viz {
   position: absolute;
   left: 0; right: 0;
-  top: -26px;
+  top: 0;
   width: 100%;
-  height: 26px;
+  height: 10px;
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--dur-3) var(--ease);
-  mask-image: linear-gradient(to right, transparent, #000 14%, #000 86%, transparent);
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 14%, #000 86%, transparent);
+  mask-image:
+    linear-gradient(to right, transparent, #000 14%, #000 86%, transparent),
+    linear-gradient(to bottom, #000 42%, transparent);
+  -webkit-mask-image:
+    linear-gradient(to right, transparent, #000 14%, #000 86%, transparent),
+    linear-gradient(to bottom, #000 42%, transparent);
+  mask-composite: intersect;
+  -webkit-mask-composite: source-in;
 }
-.playerbar.is-playing .pb-viz { opacity: .6; }
+.playerbar.is-playing .pb-viz { opacity: .55; }
 
 /* ------------------------------------------------------------------ stage */
 
@@ -438,17 +454,26 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
   right: -2%;
   top: 4%;
   width: 22px;
-  height: 22px;
 }
 .deck-pivot {
+  height: 22px;
   border-radius: 50%;
   background: radial-gradient(circle at 38% 32%, #4a5460, #1a1f26 70%);
   box-shadow: 0 4px 12px -4px rgb(0 0 0 / .8), inset 0 0 0 var(--hair) rgb(160 220 255 / .2);
 }
 
 .deck-arm {
-  --arm: -34deg;
-  transform-origin: 50% 50%;
+  /* The arm is as long as the deck says, which is what the percentage was
+     always for. It used to be sized on the 22px pivot box, where the tube's
+     `min(62%, 210px)` resolved to 13.6px — so the whole arm, tube and
+     headshell together, drew as a grey stub beside the spindle and the 210px
+     ceiling never once applied. Given its length here, `height` resolves
+     against the deck, the tube fills it, and the geometry below (see the arm
+     angles in stage.js) holds at every size the deck is drawn at. */
+  height: 62%;
+  --arm: -3deg;
+  /* The pivot's own centre, which is the point the arm actually turns about. */
+  transform-origin: 11px 11px;
   rotate: var(--arm);
   transition: rotate 260ms var(--ease);
   cursor: grab;
@@ -464,9 +489,9 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
 .deck-arm-tube {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: 11px;
   width: 5px;
-  height: min(62%, 210px);
+  height: calc(100% - 11px);
   margin-left: -2.5px;
   background: linear-gradient(90deg, #2b323b, #6b7683 42%, #333b45);
   border-radius: 3px;
@@ -476,7 +501,7 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
 .deck-head {
   position: absolute;
   left: 50%;
-  top: calc(50% + min(62%, 210px) - 6px);
+  top: calc(100% - 14px);
   width: 15px;
   height: 20px;
   margin-left: -7.5px;
@@ -492,13 +517,47 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
   content: "";
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: 11px;
   width: 42px;
-  height: calc(min(62%, 210px) + 24px);
+  height: calc(100% - 11px + 20px);
   margin-left: -21px;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .deck.is-spinning .deck-platter { animation: none; }
   .deck-arm { transition: none; }
+}
+
+
+/* R11: the credits, beside the words and the turntable.
+   Set as a definition list, because that is what it is — a label and a name,
+   and a table would be three columns of nothing on most files. */
+.stage-credits {
+  margin-top: 18px;
+  max-width: 44ch;
+  max-height: 34vh;
+  overflow-y: auto;
+  -webkit-mask-image: linear-gradient(to bottom, #000 88%, transparent);
+  mask-image: linear-gradient(to bottom, #000 88%, transparent);
+}
+.stage-credit-list {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 18px;
+  margin: 0;
+}
+.stage-credit-list dt {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding-top: 2px;
+}
+.stage-credit-list dd {
+  margin: 0;
+  color: var(--text-2);
+  font-size: calc(13px * var(--scale));
+  overflow-wrap: anywhere;
 }
