@@ -103,6 +103,36 @@ export class VirtualList {
     }
     this.start = first;
     this.end = last;
+    this.orderRows();
+  }
+
+  /**
+   * Puts the live rows back into index order in the DOM.
+   *
+   * A row is placed by its transform, so the browser draws it in the right
+   * spot whatever order it sits in — but Tab, a screen reader and anything
+   * else that walks the document read the DOM order, and the pool hands nodes
+   * back last-in-first-out. Recycling a whole screen at once therefore leaves
+   * the rows in exactly reverse order, and the queue's keyboard reordering
+   * would have tabbed backwards through the list.
+   *
+   * The check is a walk and costs nothing; the repair only runs when the order
+   * is actually wrong, which is on a data change rather than on every frame of
+   * a scroll.
+   */
+  orderRows() {
+    let last = -1;
+    for (const node of this.layer.children) {
+      if (node.hidden) continue;
+      const i = +node.dataset.index;
+      if (i < last) {
+        for (const j of [...this.live.keys()].sort((a, b) => a - b)) {
+          this.layer.appendChild(this.live.get(j));
+        }
+        return;
+      }
+      last = i;
+    }
   }
 
   release(i, node) {
@@ -291,11 +321,13 @@ export class VirtualGrid {
       node.style.transform = `translate3d(0, ${r * this.rowHeight}px, 0)`;
       node.style.gridTemplateColumns = `repeat(${this.cols}, minmax(0, 1fr))`;
       node.style.gap = this.gap + 'px';
+      node.dataset.row = r;
       this.fillRow(node, r);
       if (!node.parentNode) this.layer.appendChild(node);
       node.hidden = false;
       this.live.set(r, node);
     }
+    this.orderRows();
 
     if (this.depth) { this.paintDepth(scrollTop, height); this.hazed = true; }
     else if (this.hazed) {
@@ -352,6 +384,22 @@ export class VirtualGrid {
   }
 
   refresh() { for (const [r, node] of this.live) this.fillRow(node, r); }
+
+  /** Index order in the DOM. See `VirtualList.orderRows` for why it matters. */
+  orderRows() {
+    let last = -1;
+    for (const node of this.layer.children) {
+      if (node.hidden) continue;
+      const r = +node.dataset.row;
+      if (r < last) {
+        for (const j of [...this.live.keys()].sort((a, b) => a - b)) {
+          this.layer.appendChild(this.live.get(j));
+        }
+        return;
+      }
+      last = r;
+    }
+  }
 
   recycleAll() {
     for (const [r, node] of this.live) { node.hidden = true; this.pool.push(node); }

@@ -457,7 +457,9 @@ await page.locator('.nav-item[data-route="home"]').click();
 await shot('13-light');
 
 await page.locator('.side-foot .nav-item[data-route="settings"]').click();
-await page.waitForSelector('.seg', { timeout: 3000 });
+/* The one this wants, not merely the first on the page: settings now carries
+   segmented controls that are hidden until the setting above them is on. */
+await page.locator('.seg', { hasText: 'Dark' }).waitFor({ timeout: 3000 });
 await page.locator('.seg', { hasText: 'Dark' }).click();
 await page.waitForTimeout(400);
 

@@ -51,6 +51,20 @@ export const state = {
   levelling: 'track',
   /* 'even' is the plain shuffle; 'weighted' leans on what you actually play. */
   shuffleMode: 'even',
+  /* How the two decks trade places. 'equal' holds constant *power* across the
+     overlap, which is right for two unrelated recordings; 'linear' holds
+     constant *amplitude*, which is right when the two are correlated — the
+     same take, a segue, a live record where the applause carries across. The
+     difference is audible on every single handover: linear dips about three
+     decibels in the middle of uncorrelated material, and equal-power swells by
+     the same amount on correlated material. Neither is the right answer for
+     both, which is why it is a control and not a constant. */
+  fadeCurve: 'equal',
+  /* Which output the audio leaves by, as a device id. Empty means the system
+     default, which is what everything did before this existed — and on a desk
+     with an interface, a DAC and a pair of speakers, that meant changing the
+     operating system's default to move the music. */
+  sink: '',
   /* A timestamp, the string 'track', or null. */
   sleepUntil: null,
   /* Start at the first note rather than at the first sample. Most rips carry
@@ -694,6 +708,7 @@ async function load(track, autoplay, { count = true } = {}) {
   // tally. Committed before `state.current` moves, or the figure lands on the
   // wrong record.
   commitMeter();
+  noteLongPosition();
   state.loading = true;
   state.current = track;
   state.time = 0;
@@ -730,10 +745,15 @@ async function load(track, autoplay, { count = true } = {}) {
   /* Start at the first note, where there is dead air and the listener asked
      for it to go. Done before play() rather than after, so nothing of the
      silence is ever heard — a seek a moment later is audible as a stumble. */
-  const from = startOf(track);
+  /* A remembered position in a long recording wins over the lead-in trim: one
+     is "skip the silence at the start", the other is "you were an hour in",
+     and they are not both true at once. */
+  const mark = longMarkFor(track.id);
+  const from = mark > 0 ? mark : startOf(track);
   if (from > 0) {
     try { audio.currentTime = from; state.time = from; } catch { /* not seekable */ }
   }
+  if (mark > 0) events.emit('resumed', { track, at: mark });
 
   try {
     if (autoplay) await play();
@@ -961,10 +981,13 @@ function beginHandover(nextTrack, nextIndex, fade, from, to) {
            mid-fade produces exactly that. */
         const steps = 8;
         const upCurve = [], downCurve = [];
+        const equal = state.fadeCurve !== 'linear';
         for (let i = 0; i <= steps; i++) {
           const x = i / steps;
-          upCurve.push(Math.sin(x * Math.PI / 2));
-          downCurve.push(Math.cos(x * Math.PI / 2));
+          // Sine/cosine sum to constant power; x and 1-x sum to constant
+          // amplitude. See `fadeCurve` in the state above for which is which.
+          upCurve.push(equal ? Math.sin(x * Math.PI / 2) : x);
+          downCurve.push(equal ? Math.cos(x * Math.PI / 2) : 1 - x);
         }
         to.gain.gain.setValueAtTime(0, t);
         from.gain.gain.setValueAtTime(from.gain.gain.value, t);
@@ -1063,6 +1086,11 @@ export function pause() {
   deckA.el.pause();
   deckB.el.pause();
   state.playing = false;
+  /* Pausing an hour into a long recording is the moment somebody is most
+     likely to walk away and close the tab. `pagehide` also writes the mark,
+     but a write started as the page is being torn down is not guaranteed to
+     land; this one has all the time it needs. */
+  noteLongPosition();
   events.emit('state');
 }
 
@@ -1080,6 +1108,93 @@ export function seek(seconds) {
 }
 
 export const seekRatio = (r) => seek(r * (state.duration || 0));
+
+/*
+ * Where the sound comes out.
+ *
+ * Both decks, because either of them can be the one you are hearing — routing
+ * only the live one moves the music back to the default at the next handover.
+ * `setSinkId` is a promise that rejects if the device has gone, which happens
+ * constantly with anything on USB, so a failure puts the setting back to the
+ * default rather than leaving it pointing at something that is not there.
+ */
+export async function setSink(id) {
+  const wanted = id || '';
+  if (!deckA.el.setSinkId) return { supported: false, ok: false };
+  try {
+    await Promise.all([deckA.el.setSinkId(wanted), deckB.el.setSinkId(wanted)]);
+    state.sink = wanted;
+    db.setKV('sink', wanted).catch(() => {});
+    events.emit('state');
+    return { supported: true, ok: true };
+  } catch {
+    state.sink = '';
+    db.setKV('sink', '').catch(() => {});
+    events.emit('state');
+    return { supported: true, ok: false };
+  }
+}
+
+/** Whether this browser can route audio anywhere but the system default. */
+export function canRouteOutput() {
+  return typeof deckA.el.setSinkId === 'function' && !!navigator.mediaDevices?.enumerateDevices;
+}
+
+/**
+ * Whether the outputs already carry names.
+ *
+ * `enumerateDevices` always answers, but before permission is granted every
+ * label is the empty string — a list of four blanks is worse than no list, so
+ * this is what decides between showing the picker and showing the button.
+ */
+export async function outputsNamed() {
+  if (!canRouteOutput()) return false;
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    const outs = all.filter((d) => d.kind === 'audiooutput');
+    return outs.length > 1 && outs.some((d) => d.label);
+  } catch { return false; }
+}
+
+/** The named outputs, minus the default the empty option already stands for. */
+export async function outputs() {
+  if (!canRouteOutput()) return [];
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    return all.filter((d) => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'default')
+      .map((d) => ({ deviceId: d.deviceId, label: d.label || 'Output ' + d.deviceId.slice(0, 6) }));
+  } catch { return []; }
+}
+
+/**
+ * Asks for the permission that puts names on the outputs.
+ *
+ * `selectAudioOutput` asks for exactly that and nothing else, but only Firefox
+ * has it. Everywhere else the only key to the labels is a microphone grant,
+ * which is opened and closed immediately: the track is stopped on the next
+ * line, so nothing is recorded and no indicator stays lit.
+ */
+export async function askForOutputs() {
+  if (!canRouteOutput()) return false;
+  if (navigator.mediaDevices.selectAudioOutput) {
+    try {
+      const d = await navigator.mediaDevices.selectAudioOutput();
+      if (d?.deviceId) await setSink(d.deviceId);
+      return true;
+    } catch { return false; }
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    for (const t of stream.getTracks()) t.stop();
+    return true;
+  } catch { return false; }
+}
+
+export function setFadeCurve(curve) {
+  state.fadeCurve = curve === 'linear' ? 'linear' : 'equal';
+  db.setKV('fadeCurve', state.fadeCurve).catch(() => {});
+  events.emit('state');
+}
 
 export function setVolume(v) {
   state.volume = clamp(v, 0, 1);
@@ -1197,6 +1312,10 @@ export function setQueue(tracks, startIndex = 0, origin = null) {
   baseOrder = ids.slice();
   state.queue = ids.slice();
   state.origin = origin;
+  /* A fresh queue replaces the old provenance wholesale: the tracks somebody
+     added by hand to the *last* queue are not in this one. */
+  provenance.clear();
+  noteOrigin(ids, origin && origin.label);
 
   if (state.shuffle && ids.length > 1) {
     const first = state.queue[startIndex];
@@ -1370,10 +1489,36 @@ function finishSleep() {
   events.emit('state');
 }
 
+/*
+ * Where each queued track came from.
+ *
+ * `state.origin` says where the *queue* came from, which stops being the whole
+ * truth the moment anything is added by hand — and after an evening of
+ * right-clicking, a queue that mixes an album, a shuffle and eight things you
+ * picked has nothing on screen saying which is which. So "why is this playing?"
+ * has no answer, and pulling the shuffle back out without losing the eight is
+ * impossible.
+ *
+ * Keyed by id and not by position, because positions move under drag,
+ * shuffle and removal, and a label that follows the wrong row is worse than
+ * none. An id that appears twice gets one label, which is the honest limit of
+ * a map and not worth a second data structure to fix.
+ */
+const provenance = new Map();
+
+/** What to print beside a queued track, or ''. */
+export const originOf = (id) => provenance.get(id) || '';
+
+function noteOrigin(ids, label) {
+  if (!label) return;
+  for (const id of ids) provenance.set(id, label);
+}
+
 export function playNext(tracks) {
   const ids = tracks.map((t) => (typeof t === 'string' ? t : t.id));
   state.queue.splice(state.index + 1, 0, ...ids);
   baseOrder.push(...ids);                    // so unshuffling keeps them
+  noteOrigin(ids, 'Added');
   events.emit('queue');
   warmNext();
 }
@@ -1382,6 +1527,7 @@ export function enqueue(tracks) {
   const ids = tracks.map((t) => (typeof t === 'string' ? t : t.id));
   state.queue.push(...ids);
   baseOrder.push(...ids);
+  noteOrigin(ids, 'Added');
   if (state.index < 0 && state.queue.length) jumpTo(0);
   else { events.emit('queue'); warmNext(); }
 }
@@ -1673,13 +1819,89 @@ if ('mediaSession' in navigator) {
   set('seekto', (d) => { if (d?.seekTime != null) seek(d.seekTime); });
   events.on('state', () => {
     navigator.mediaSession.playbackState = state.playing ? 'playing' : 'paused';
+    pushPosition();
   });
+  events.on('time', pushPosition);
+}
+
+/*
+ * Where in the track we are, told to the operating system.
+ *
+ * Everything else about Media Session was here — metadata, artwork, play,
+ * pause, next, previous, seek — and this one call was not, so every OS-level
+ * scrubber showed a track with no progress at all: the lock screen, macOS Now
+ * Playing, the Android notification, a car head unit. Three lines for the
+ * single most visible thing in this file outside the app's own window.
+ *
+ * Throttled to about twice a second. The `time` event fires on every frame the
+ * playhead moves and the platform does its own interpolation between updates,
+ * so pushing it sixty times a second is sixty times the work for a readout
+ * nobody can see move that fast.
+ */
+/*
+ * Where you had got to in something long.
+ *
+ * Session restore puts back the track and the playhead you left — but only for
+ * the one that was playing. Come back to a two-hour DJ mix, a live set or a
+ * radio show a week later and it starts at zero, which for that kind of
+ * recording is the whole of the problem: nobody wants to scrub for four
+ * minutes to find where they were.
+ *
+ * Only for things long enough that the position is worth keeping, and only
+ * past the first couple of minutes — a mark at 0:30 in a two-hour file is not
+ * a place anybody was, it is a track that got started and abandoned. Cleared
+ * when the end is reached, because a finished thing should start again.
+ */
+const LONG_TRACK = 20 * 60;        // seconds; below this the mark is noise
+const LONG_MIN_IN = 120;           // and this far in before it counts
+const LONG_MIN_LEFT = 60;          // near enough to the end is finished
+const longMarks = new Map();       // track id -> seconds
+
+function noteLongPosition() {
+  const t = state.current;
+  if (!t) return;
+  const d = state.duration || 0;
+  if (d < LONG_TRACK) return;
+  const at = state.time || 0;
+  if (at < LONG_MIN_IN || d - at < LONG_MIN_LEFT) longMarks.delete(t.id);
+  else longMarks.set(t.id, Math.round(at));
+  db.setKV('marks', Object.fromEntries(longMarks)).catch(() => {});
+}
+
+/** Where a long track should start, or 0. Read by the player and by the UI. */
+export const longMarkFor = (id) => longMarks.get(id) || 0;
+export function clearLongMark(id) {
+  if (!longMarks.delete(id)) return;
+  db.setKV('marks', Object.fromEntries(longMarks)).catch(() => {});
+}
+
+let positionAt = 0;
+function pushPosition() {
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  const now = performance.now();
+  if (now - positionAt < 450) return;
+  positionAt = now;
+  const duration = state.duration || 0;
+  if (!duration || !isFinite(duration)) {
+    // A live stream or a file whose length is not known yet: clearing is the
+    // honest answer, and passing a bad duration throws.
+    try { navigator.mediaSession.setPositionState(); } catch { /* not supported */ }
+    return;
+  }
+  try {
+    navigator.mediaSession.setPositionState({
+      duration,
+      playbackRate: audio.playbackRate || 1,
+      position: clamp(state.time || 0, 0, duration),
+    });
+  } catch { /* a rate of zero, or a position past the end mid-handover */ }
 }
 
 /* ------------------------------------------------------------------ restore */
 
 export async function init() {
-  const [vol, shuffle, repeat, crossfade, seamless, levelling, shuffleMode, trimSilence, beatMatch] = await Promise.all([
+  const [vol, shuffle, repeat, crossfade, seamless, levelling, shuffleMode, trimSilence, beatMatch,
+         fadeCurve, sink, marks] = await Promise.all([
     db.getKV('volume').catch(() => null),
     db.getKV('shuffle').catch(() => null),
     db.getKV('repeat').catch(() => null),
@@ -1689,6 +1911,9 @@ export async function init() {
     db.getKV('shuffleMode').catch(() => null),
     db.getKV('trimSilence').catch(() => null),
     db.getKV('beatMatch').catch(() => null),
+    db.getKV('fadeCurve').catch(() => null),
+    db.getKV('sink').catch(() => null),
+    db.getKV('marks').catch(() => null),
   ]);
   if (typeof vol === 'number') state.volume = clamp(vol, 0, 1);
   if (typeof shuffle === 'boolean') state.shuffle = shuffle;
@@ -1699,6 +1924,12 @@ export async function init() {
   if (shuffleMode === 'weighted' || shuffleMode === 'even') state.shuffleMode = shuffleMode;
   if (typeof trimSilence === 'boolean') state.trimSilence = trimSilence;
   if (typeof beatMatch === 'boolean') state.beatMatch = beatMatch;
+  if (fadeCurve === 'linear' || fadeCurve === 'equal') state.fadeCurve = fadeCurve;
+  if (marks && typeof marks === 'object') for (const [k, v] of Object.entries(marks)) longMarks.set(k, v);
+  /* The device may not be there any more — a headset unplugged, an interface
+     powered off — so this is attempted rather than assumed, and `setSink`
+     falls back to the default when it is gone. */
+  if (typeof sink === 'string' && sink) setSink(sink).catch(() => {});
   applyVolume();
   // The rack owns playback speed, which is a property of the element and works
   // with or without a Web Audio graph — and the graph does not exist until the
@@ -1712,5 +1943,6 @@ export async function init() {
 window.addEventListener('pagehide', () => {
   // A listen that ends because the tab did is still a listen.
   commitMeter();
+  noteLongPosition();
   releaseDeck(deckA); releaseDeck(deckB);
 });

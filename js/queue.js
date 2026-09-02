@@ -227,8 +227,23 @@ function mountVisualizer(canvas, visible) {
 /* ------------------------------------------------------------------ queue list */
 
 function buildQueue(host) {
+  /* The played half.
+   *
+   * The rows before the playhead have always been in the list and dimmed, and
+   * that is right — but on a long evening they are most of it, and scrolling
+   * past forty things you have already heard to reach what is next is the
+   * common case rather than the rare one. Folded away by default with the
+   * count on the button, because "what was that?" is a question worth being
+   * able to answer and "what is next" is the one you ask more often. */
+  let showPast = false;
+  const pastBtn = el('button', {
+    class: 'link-btn queue-past', hidden: true,
+    onclick: () => { showPast = !showPast; update(false); },
+  });
+
   const head = el('div', { class: 'queue-head' },
     el('div', { class: 'queue-summary' }),
+    pastBtn,
     // The queue is where a sequence actually gets built — by hand, by
     // right-clicking things in over an evening — and until now that work
     // evaporated the moment you played something else.
@@ -271,22 +286,58 @@ function buildQueue(host) {
       row.innerHTML =
         `<div class="qrow-grip">${ico('grip')}</div>` +
         '<div class="art art-xs"><img class="art-img" alt="" decoding="async"></div>' +
-        '<div class="qrow-text"><div class="qrow-title"></div><div class="qrow-sub"></div></div>' +
+        '<div class="qrow-text"><div class="qrow-title"></div>' +
+        '<div class="qrow-sub"><span class="qrow-artist"></span><span class="qrow-from"></span></div></div>' +
         `<div class="qrow-time"></div>` +
         `<button class="icon-btn ghost qrow-remove" aria-label="Remove">${ico('close')}</button>`;
 
+      /* Every handler reads `data-at`, the index in the *queue*, rather than
+         the row's index in the list — with the played half folded away those
+         two stop being the same number, and acting on the list index would
+         remove the wrong track. */
       row.addEventListener('click', (e) => {
-        const i = +row.dataset.index;
+        const i = +row.dataset.at;
         if (e.target.closest('.qrow-remove')) player.removeAt(i);
         else player.jumpTo(i);
       });
+
+      /* Q3: reordering without a mouse. Dragging was the only way to move a
+         queued track, which makes a whole capability pointer-only. */
+      row.tabIndex = 0;
+      row.addEventListener('keydown', (e) => {
+        const i = +row.dataset.at;
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); player.jumpTo(i); return; }
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault();
+          const title = row.querySelector('.qrow-title').textContent;
+          player.removeAt(i);
+          announce(`Removed ${title}`);
+          /* The row under the finger is gone; leaving focus on the body would
+             end the keyboard session at the first delete. It moves to whatever
+             took the place, or to the last row when the tail was removed. */
+          refocus(Math.min(i, player.state.queue.length - 1));
+          return;
+        }
+        if (!e.altKey) return;
+        if (e.key === 'ArrowUp' && i > 0) {
+          e.preventDefault();
+          player.moveInQueue(i, i - 1);
+          announce(`Moved to position ${i}`);
+          refocus(i - 1);
+        } else if (e.key === 'ArrowDown' && i < player.state.queue.length - 1) {
+          e.preventDefault();
+          player.moveInQueue(i, i + 1);
+          announce(`Moved to position ${i + 2}`);
+          refocus(i + 1);
+        }
+      });
       row.addEventListener('contextmenu', (e) => {
         e.preventDefault();
-        const t = items[+row.dataset.index];
-        if (t) menu(trackMenu([t], { onRemove: () => player.removeAt(+row.dataset.index), removeLabel: 'Remove from queue' }), { event: e });
+        const t = lib.getTrack(player.state.queue[+row.dataset.at]);
+        if (t) menu(trackMenu([t], { onRemove: () => player.removeAt(+row.dataset.at), removeLabel: 'Remove from queue' }), { event: e });
       });
       row.addEventListener('dragstart', (e) => {
-        dragFrom = +row.dataset.index;
+        dragFrom = +row.dataset.at;
         row.classList.add('is-dragging');
         e.dataTransfer.effectAllowed = 'move';
         try { e.dataTransfer.setData('text/plain', String(dragFrom)); } catch {}
@@ -297,32 +348,69 @@ function buildQueue(host) {
       row.addEventListener('drop', (e) => {
         e.preventDefault();
         row.classList.remove('is-drop');
-        const to = +row.dataset.index;
+        const to = +row.dataset.at;
         if (dragFrom < 0 || dragFrom === to) return;
         player.moveInQueue(dragFrom, to);
       });
       return row;
     },
-    render: (row, track, i) => {
-      if (!track) return;
-      row.classList.toggle('is-current', i === player.state.index);
-      row.classList.toggle('is-past', i < player.state.index);
+    render: (row, entry, i) => {
+      if (!entry) return;
+      const { track, at } = entry;
+      row.dataset.at = String(at);
+      row.classList.toggle('is-current', at === player.state.index);
+      row.classList.toggle('is-past', at < player.state.index);
       paintArt(row.querySelector('.art-img'), track.albumKey);
       row.querySelector('.qrow-title').textContent = track.title;
-      row.querySelector('.qrow-sub').textContent = track.artist;
+      row.querySelector('.qrow-artist').textContent = track.artist;
+      /* Where it came from, and only where it is worth saying: repeating the
+         album name against forty rows of the same album is noise, so the label
+         is printed where it differs from what the queue as a whole says. */
+      const from = player.originOf(track.id);
+      const qFrom = player.state.origin && player.state.origin.label;
+      const show = from && from !== qFrom ? from : '';
+      const tag = row.querySelector('.qrow-from');
+      if (tag.textContent !== show) tag.textContent = show;
+      tag.hidden = !show;
+      row.setAttribute('aria-label',
+        `${track.title} by ${track.artist}, position ${at + 1} of ${player.state.queue.length}` +
+        (show ? `, ${show}` : ''));
       row.querySelector('.qrow-time').textContent = track.duration ? fmtTime(track.duration) : '';
     },
   });
 
-  function update(follow) {
-    items = player.state.queue.map((id) => lib.getTrack(id)).filter(Boolean);
-    const remaining = Math.max(0, items.length - player.state.index - 1);
-    head.querySelector('.queue-summary').textContent = items.length
-      ? `${fmtCount(items.length, 'track')} · ${remaining} up next`
-      : 'Nothing queued';
-    head.hidden = !items.length;
+  /** Announced to a screen reader, since a row moving is not a visible event
+      to somebody who cannot see the list. */
+  const live = el('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+  host.appendChild(live);
+  const announce = (msg) => { live.textContent = ''; setTimeout(() => { live.textContent = msg; }, 30); };
 
-    if (!items.length) {
+  /** Keeps focus on the row that just moved rather than on the position. */
+  function refocus(at) {
+    requestAnimationFrame(() => {
+      const row = scroller.querySelector(`.qrow[data-at="${at}"]`);
+      if (row) row.focus();
+    });
+  }
+
+  function update(follow) {
+    const all = player.state.queue.map((id, at) => ({ track: lib.getTrack(id), at }))
+      .filter((e) => e.track);
+    const cursor = player.state.index;
+    const played = all.filter((e) => e.at < cursor).length;
+    items = showPast ? all : all.filter((e) => e.at >= cursor);
+
+    const remaining = Math.max(0, all.length - cursor - 1);
+    head.querySelector('.queue-summary').textContent = all.length
+      ? `${fmtCount(all.length, 'track')} · ${remaining} up next`
+      : 'Nothing queued';
+    pastBtn.hidden = played === 0;
+    pastBtn.textContent = showPast ? `Hide ${played} played` : `${played} played`;
+    pastBtn.title = showPast ? 'Fold the played tracks away' : 'Show what has already gone';
+    pastBtn.setAttribute('aria-expanded', showPast ? 'true' : 'false');
+    head.hidden = !all.length;
+
+    if (!all.length) {
       if (!emptyNode.parentNode) host.appendChild(emptyNode);
       list.setItems([]);
       return;
@@ -332,8 +420,9 @@ function buildQueue(host) {
 
     // Follow the playhead, but only when it has actually left the viewport —
     // yanking the list while someone is reading it would be worse than useless.
-    const i = player.state.index;
-    if (follow && i >= 0) {
+    if (follow && cursor >= 0) {
+      const i = items.findIndex((e) => e.at === cursor);
+      if (i < 0) return;
       const top = scroller.scrollTop;
       const y = i * ROW_H;
       if (y < top || y + ROW_H > top + scroller.clientHeight) list.scrollToIndex(i, 'center');

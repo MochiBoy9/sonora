@@ -246,7 +246,14 @@
 .hero-show { align-items: center; gap: 46px; padding: 52px 40px 48px; }
 
 .hero-show .sleeve-stage {
-  --sleeve-size: 232px;
+  /* R12: 232px was a good size for a cover and too small for the back of one.
+     A back cover has to hold a head, a tracklist, eight rows of spec and a
+     catalogue number, and at 232 the last three spec rows faded out no matter
+     how the flex priorities were arranged — there simply were not enough
+     pixels. 272 is the smallest size at which all four blocks print, and it is
+     also a better size for the front: an album page is a showcase, and this is
+     the object being shown. */
+  --sleeve-size: 272px;
   --floor-h: 52px;
   width: var(--sleeve-size);
   flex: none;
@@ -415,6 +422,12 @@
   overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, #000 84%, transparent);
   mask-image: linear-gradient(to bottom, #000 84%, transparent);
+}
+/* Two pairs to a line above the width where they fit, which halves the block's
+   height and is how a real back cover sets its fine print anyway — the spec is
+   a strip along the bottom, not a column. */
+@media (min-width: 900px) {
+  .back-spec { grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); gap: 1px 8px; }
 }
 .back-spec dt { color: var(--text-3); text-transform: uppercase; letter-spacing: .16em; }
 .back-spec dd { margin: 0; color: var(--text-2); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -732,6 +745,26 @@
   min-width: 0;
   margin-left: auto;
 }
+/* A native <select> in the settings column. Styled to sit beside the switches
+   and segmented pickers without pretending to be one of them — the list of
+   outputs is the system's to draw, and a custom menu would only be a worse
+   copy of it. */
+.settings-select {
+  appearance: none;
+  max-width: 220px;
+  padding: 6px 26px 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) * 0.6);
+  background: var(--surface-2)
+    linear-gradient(45deg, transparent 50%, var(--text-3) 50%) calc(100% - 14px) 52% / 5px 5px no-repeat;
+  color: var(--text);
+  font: inherit;
+  font-size: calc(12.5px * var(--scale));
+  cursor: pointer;
+}
+.settings-select:hover { border-color: var(--line-2); }
+.settings-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* Below this the text and the control stop fitting side by side, so the
    control drops under the text instead of squeezing it. */
 @media (max-width: 520px) {
@@ -876,7 +909,27 @@
 
 .qrow-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .qrow-title { color: var(--text); font-size: calc(12.5px * var(--scale)); font-weight: 530; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qrow-sub { color: var(--text-3); font-size: calc(11.5px * var(--scale)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qrow-sub {
+  display: flex; align-items: baseline; gap: 7px; min-width: 0;
+  color: var(--text-3); font-size: calc(11.5px * var(--scale));
+}
+.qrow-artist { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Where a queued track came from, where that differs from where the queue
+   did. Set apart in the mono face so it reads as a note about the row rather
+   than as part of the artist's name. */
+.qrow-from {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(9px * var(--scale));
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: .75;
+}
+/* The fold. A link rather than a button with a box, because it belongs to the
+   summary line beside it. */
+.queue-past { flex: none; }
+.qrow:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: -2px; }
 .qrow-time { font-family: var(--mono); color: var(--text-3); font-size: calc(11px * var(--scale)); font-variant-numeric: tabular-nums; flex: none; }
 .qrow-remove { opacity: 0; transition: opacity var(--dur-1) linear; }
 .qrow:hover .qrow-remove { opacity: 1; }
@@ -1207,6 +1260,34 @@
   text-transform: uppercase;
   color: var(--text-3);
 }
+/* A sleeve with a back needs a size of its own.
+ *
+ * `.sleeve-flip` is absolutely positioned, so wrapping the artwork in one
+ * takes the art out of flow and the sleeve — which everywhere but the album
+ * page is sized by its own contents — collapses to nothing. The front still
+ * looked right, because the art overflows the empty box; the back cover was
+ * being laid out inside a container 0px tall, which is where its tracklist
+ * went. The album page gives the sleeve an explicit `--sleeve-size`; a card
+ * takes its width from the grid, so the square is stated as a ratio. */
+.card .sleeve.has-back { aspect-ratio: 1 / 1; }
+
+/* R4: how far into the crate you are. Beside the record's name rather than
+   over it, and in the mono face the rest of the app uses for figures. */
+.crate-count {
+  position: absolute;
+  left: 0; right: 0; bottom: 30px;
+  text-align: center;
+  font-family: var(--mono);
+  letter-spacing: .18em;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+/* The half you have already been through. Warmer and a little more solid than
+   the half still to come, because it is nearer the eye — the far stack fades
+   into the box, the near one does not. */
+.crate-item.is-passed { filter: saturate(.86) brightness(.94); }
+
 .crate-hint {
   position: absolute;
   left: 0; right: 0; bottom: 8px;
@@ -1538,7 +1619,13 @@
 
 .floor-row {
   position: absolute;
-  left: 50%;
+  /* R13: the run used to start at the horizontal centre, so at rest the left
+     forty per cent of the room was empty floor and the year ran off the right
+     edge. It starts at a gutter now. The vanishing point stays at the middle
+     of the frame, which is what gives the far years their drift toward the
+     centre — a room seen down its length, rather than a row of covers sliding
+     sideways. */
+  left: var(--floor-gutter, 72px);
   /* Below the horizon, so the rows behind rise toward it and each one shows
      above the one in front instead of sinking behind it. */
   top: 46%;
@@ -1634,6 +1721,36 @@
 .shelf-pad { flex: none; height: 1px; pointer-events: none; }
 .shelf-run > .spine { position: absolute; bottom: 18px; }
 
+/* R3: the divider cards.
+ *
+ * Standing proud of the records either side, and taller than them, because
+ * that is the whole of how a divider works — you find it by looking along the
+ * tops. Card stock rather than a printed sleeve: it is the one thing on the
+ * shelf that is not a record, and it should not read as one. */
+.shelf-tab {
+  position: absolute;
+  bottom: 18px;
+  width: 22px;
+  height: 292px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 9px;
+  border-radius: 3px 3px 1px 1px;
+  background: linear-gradient(100deg, var(--surface-3), var(--surface-2));
+  box-shadow:
+    inset 0 0 0 var(--hair) var(--line-2),
+    0 10px 22px -14px rgb(0 0 0 / .7);
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .1em;
+  color: var(--text-2);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  pointer-events: none;
+  z-index: 1;
+}
+
 /* The description a smart shelf was built from, shown on its own page. It is
    the thing that decides what is below it, so it belongs above the list rather
    than buried in a menu. */
@@ -1656,6 +1773,85 @@
 .floor:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 6px; }
 .floor.is-walking { cursor: grabbing; }
 .floor.is-walking .floor-card { pointer-events: none; }
+
+/* The layer the room's controls stand on. Zero height by design — see the
+   comment beside `floor-hud` in views.js — so the camera underneath still
+   starts at the top of the scroll range. */
+.floor-hud {
+  position: sticky;
+  top: 0;
+  height: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.floor-hud > * { pointer-events: auto; }
+
+/* Said once, along the bottom, out of the way of the room. */
+.floor-hint {
+  position: absolute;
+  left: 0; right: 0;
+  top: calc(78vh - 24px);
+  display: block;
+  text-align: center;
+  opacity: .45;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------- the decade rail (R2) */
+
+/* Standing up, at the right edge, outside the room's own perspective — it is
+   a legend for the floor rather than an object on it, and putting it inside
+   `.floor-camera` would give it the same vanishing point as the records and
+   fold it into the wall. */
+.floor-rail {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 78vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 14px 0 8px;
+  pointer-events: auto;
+}
+.floor-rail-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .16em;
+  color: var(--text-3);
+  padding: 5px 6px;
+  border-right: 2px solid transparent;
+  text-align: right;
+  transition: color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+.floor-rail-btn:hover { color: var(--text); }
+.floor-rail-btn.is-on { color: var(--accent); border-right-color: var(--accent); }
+.floor-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ------------------------------------------ the record that is playing (R1) */
+
+/* A lamp, not a highlight. The room is lit from above and slightly behind, so
+   the record being played gets a little more of that light and a rim where the
+   sleeve catches it — the same thing a spotlit record in a shop window does,
+   rather than a coloured border drawn on top of the artwork. */
+.floor-card.is-playing .floor-art {
+  box-shadow:
+    0 0 0 1px rgb(var(--accent-rgb) / .5),
+    0 0 26px 2px rgb(var(--accent-rgb) / .34),
+    0 14px 30px rgb(0 0 0 / .4);
+}
+.floor-card.is-playing .floor-text b { color: var(--accent); }
+.floor-card:focus-visible { outline: none; }
+.floor-card:focus-visible .floor-art { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .floor-rail-btn { transition: none; }
+}
 
 .floor-mark {
   position: absolute;

@@ -14,7 +14,7 @@ import {
   artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, rulesDialog, Selection,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
-import { enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunning, requestDeviceTilt, stopDeviceTilt, startDeviceTilt } from './motion.js';
+import { reduceMotion, enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunning, requestDeviceTilt, stopDeviceTilt, startDeviceTilt } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
 import { mountCircles } from './circles.js';
 import { mountSound } from './sound.js';
@@ -374,6 +374,16 @@ function sortControl({ store, keys, fallback, onChange }) {
  */
 const RAIL_LETTERS = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
 
+/* A leading digit, a leading symbol and a leading article all belong under "#"
+   rather than under whatever character happens to be first. Shared, because
+   the A–Z rail and the shelf's dividers have to agree about which letter a
+   record files under — and both have to agree with the sort, which uses the
+   same `norm`. */
+function letterOf(v) {
+  const c = norm(v).trim().charAt(0).toUpperCase();
+  return c >= 'A' && c <= 'Z' ? c : '#';
+}
+
 function letterRail({ getItems, keyOf, onJump }) {
   const node = el('div', { class: 'az-rail', role: 'navigation', 'aria-label': 'Jump to a letter' });
   const buttons = new Map();
@@ -387,13 +397,7 @@ function letterRail({ getItems, keyOf, onJump }) {
     node.appendChild(b);
   }
 
-  // A leading digit, a leading symbol and a leading article all belong under
-  // "#" rather than under whatever character happens to be first: the list is
-  // sorted by the same normalised key, so this has to agree with it.
-  const bucket = (v) => {
-    const c = norm(v).trim().charAt(0).toUpperCase();
-    return c >= 'A' && c <= 'Z' ? c : '#';
-  };
+  const bucket = letterOf;
 
   let first = new Map();
   function indexOf(ch) { return first.has(ch) ? first.get(ch) : -1; }
@@ -881,6 +885,11 @@ function viewAlbums(host) {
   host.appendChild(bar);
 
   const ordered = () => lib.sortAlbums(lib.state.albums, sorter.state.key, sorter.state.dir);
+  /* Which key the wall is sorted by, hung off the function itself so a view
+     that wants to group by it — the shelf's dividers — can read it without
+     being handed a second argument it would have to thread through four
+     mounts. */
+  Object.defineProperty(ordered, 'sort', { get: () => sorter.state.key });
 
   const slot = el('div', { class: 'album-slot' });
   host.appendChild(slot);
@@ -975,14 +984,42 @@ function mountShelf(host, ordered) {
 
   let albums = [];
   let offsets = [];          // running x position of each spine
+  let tabs = [];             // { at, x, label } dividers between groups
   let total = 0;
   const live = new Map();    // album key -> element, for what is on screen now
+  const liveTabs = new Map();
+
+  /* R3: the dividers.
+   *
+   * What makes a real shelf navigable is not the spines — a hundred of them
+   * read as one undifferentiated run — it is the cards standing proud between
+   * the groups. Which groups is not this function's decision to make: it is
+   * whatever the shelf is currently sorted by, so an artist sort gets initials
+   * and a year sort gets decades. Sorted by anything else, a divider would be
+   * a card with nothing written on it, so there are none. */
+  const TAB_W = 26;
+
+  function tabFor(album, sort) {
+    if (sort === 'artist' || sort === 'title') {
+      return letterOf(sort === 'artist' ? album.artist : album.title);
+    }
+    if (sort === 'year') return album.year > 0 ? String(Math.floor(album.year / 10) * 10) + 's' : 'No year';
+    return null;
+  }
 
   function measure() {
     albums = ordered ? ordered() : lib.state.albums;
+    const sort = (ordered && ordered.sort) || '';
     offsets = new Array(albums.length);
+    tabs = [];
     let x = 0;
-    for (let i = 0; i < albums.length; i++) { offsets[i] = x; x += widthOf(albums[i]); }
+    let last = null;
+    for (let i = 0; i < albums.length; i++) {
+      const t = tabFor(albums[i], sort);
+      if (t && t !== last) { tabs.push({ at: i, x, label: t }); x += TAB_W; last = t; }
+      offsets[i] = x;
+      x += widthOf(albums[i]);
+    }
     total = x;
   }
 
@@ -1032,12 +1069,33 @@ function mountShelf(host, ordered) {
       shelf.appendChild(node);
       live.set(album.key, node);
     }
+    /* The dividers, windowed the same way the spines are. There are far fewer
+       of them than there are records, but a library sorted by title has
+       twenty-seven and a shelf shows six — building all of them would be the
+       one un-virtualised thing in a view whose whole point is that it is
+       virtualised. */
+    const wantTabs = new Set();
+    for (const t of tabs) if (t.x > left - pad && t.x < right + pad) wantTabs.add(t.label + '@' + t.at);
+    for (const [id, node] of liveTabs) {
+      if (!wantTabs.has(id)) { node.remove(); liveTabs.delete(id); }
+    }
+    for (const t of tabs) {
+      const id = t.label + '@' + t.at;
+      if (!wantTabs.has(id) || liveTabs.has(id)) continue;
+      const node = el('span', { class: 'shelf-tab', 'aria-hidden': 'true', text: t.label });
+      node.style.left = t.x + 'px';
+      shelf.appendChild(node);
+      liveTabs.set(id, node);
+    }
+
     before.style.width = total + 'px';
   }
 
   function rebuild() {
     for (const node of live.values()) node.remove();
+    for (const node of liveTabs.values()) node.remove();
     live.clear();
+    liveTabs.clear();
     measure();
     place();
   }
@@ -1111,10 +1169,70 @@ function mountFloor(host, viewport) {
 
   const stage = el('div', {
     class: 'floor', tabindex: '0', role: 'group',
-    'aria-label': 'Albums by year. Scroll to walk through the years, left and right arrows to walk sideways.',
+    'aria-label': 'Albums by year. Scroll to walk through the years, left and right arrows to walk sideways, ' +
+      'Enter to step into the room, P to walk to what is playing.',
   });
+  /* Everything that is not the room itself lives on one layer above it.
+   *
+   * It has to be a layer rather than two sticky siblings: a sticky element
+   * pins where its *flow* position reaches the top, so a rail placed after the
+   * camera would only pin after 78vh of scrolling, which is to say never at
+   * the top of the page where it is wanted. The HUD takes no height at all,
+   * so the camera still begins at the top of the scroll range, and everything
+   * on it is placed against the frame rather than against the floor. */
+  const hud = el('div', { class: 'floor-hud' });
+  stage.appendChild(hud);
+  hud.appendChild(el('p', {
+    class: 'floor-hint label',
+    text: 'Scroll to walk · ← → sideways · Enter to step in · P for what is playing',
+  }));
   const camera = el('div', { class: 'floor-camera' });
   stage.appendChild(camera);
+
+  /* R2: the decades, down the right edge.
+   *
+   * The Floor is walked by scrolling and by nothing else, and over forty years
+   * that is a long walk with the decade markings on the ground as the only
+   * indication of where you are. The rail is the same information standing up:
+   * which decades this library actually has, which one you are in, and a way
+   * to arrive at one without walking past everything in between.
+   *
+   * `lanesFor()` already works the decades out to place the markers, so this
+   * reads them off `rows` rather than computing anything of its own. */
+  const rail = el('nav', { class: 'floor-rail', 'aria-label': 'Decades' });
+  hud.appendChild(rail);
+  let railBtns = [];
+
+  function buildRail() {
+    rail.textContent = '';
+    railBtns = [];
+    const seen = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const lane = rows[i];
+      const key = lane.undated ? 'undated' : Math.floor(lane.year / 10) * 10;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const btn = el('button', {
+        class: 'floor-rail-btn',
+        text: lane.undated ? 'No year' : String(key).slice(2) + 's',
+        title: lane.undated ? 'Records with no year' : String(key) + 's',
+      });
+      btn.dataset.row = i;
+      btn.addEventListener('click', () => walkTo(i));
+      rail.appendChild(btn);
+      railBtns.push(btn);
+    }
+    rail.hidden = railBtns.length < 2;
+  }
+
+  /** Puts the camera in front of row `r`, scrolling rather than jumping. */
+  function walkTo(r, { x = null, smooth = true } = {}) {
+    const lane = rows[r];
+    if (!lane) return;
+    if (x !== null) camX = Math.max(0, Math.min(maxX, x));
+    viewport.scrollTo({ top: lane.at * ROW_DEPTH, behavior: smooth && !reduceMotion.matches ? 'smooth' : 'instant' });
+    if (!raf) raf = requestAnimationFrame(place);
+  }
 
   let rowCount = 0;
   let items = [];
@@ -1162,6 +1280,12 @@ function mountFloor(host, viewport) {
           el('b', { text: album.title }),
           el('span', { text: album.artist })));
       paintArt(card.querySelector('.art-img'), album.key);
+      card.dataset.key = album.key;
+      /* A2: one tab stop for the whole room, moved by the arrow keys. Ten
+         thousand covers in the tab order would be the same mistake the grid
+         made, and a floor whose focus order runs left-to-right through rows
+         you cannot see is worse than no focus order at all. */
+      card.tabIndex = -1;
       row.appendChild(card);
     }
     camera.appendChild(row);
@@ -1285,12 +1409,70 @@ function mountFloor(host, viewport) {
          itself. A centred row would put 1974's four records and 1991's twenty
          over different ground, so walking right would arrive somewhere
          different in each year and the sideways axis would mean nothing.
-         Left-aligned, one step sideways is the same step in every year. */
-      row.style.transform = `translate3d(${(-SLOT / 2).toFixed(1)}px, 0, ${z.toFixed(1)}px)`;
+         Left-aligned, one step sideways is the same step in every year.
+
+         Where that left edge sits is the stylesheet's business — see
+         `--floor-gutter` — so the room can be given a different margin at a
+         different width without this having to know about it. */
+      row.style.transform = `translate3d(0, 0, ${z.toFixed(1)}px)`;
       // Depth fade, so the far end goes into the room rather than stopping.
       row.style.opacity = String(Math.max(0, Math.min(1, 1 - Math.max(0, d) / (FAR + 2.5))).toFixed(3));
       row.classList.toggle('is-near', d < NEAR_ROWS);
     }
+    paintPlaying();
+    paintRail(advance);
+  }
+
+  /* R1: a quiet lamp on the record that is playing.
+   *
+   * The Floor is a room the library is standing in and it had no idea what was
+   * on the turntable — which is the first thing you would ask a room like
+   * this. The lamp is a class, so the light itself is the stylesheet's; this
+   * only says which record it belongs to. */
+  let litKey = '';
+  function paintPlaying() {
+    const key = player.state.current?.albumKey || '';
+    for (const row of liveRows.values()) {
+      for (const card of row.children) {
+        if (!card.dataset.key) continue;
+        card.classList.toggle('is-playing', !!key && card.dataset.key === key);
+      }
+    }
+    litKey = key;
+  }
+
+  /** Lights the decade the camera is standing in. */
+  function paintRail(advance) {
+    if (!railBtns.length) return;
+    let cur = 0;
+    for (let i = 0; i < rows.length; i++) if (rows[i].at <= advance + 0.5) cur = i;
+    let best = railBtns[0];
+    for (const b of railBtns) if (+b.dataset.row <= cur) best = b;
+    for (const b of railBtns) b.classList.toggle('is-on', b === best);
+  }
+
+  /**
+   * Walks to the record that is playing.
+   *
+   * Both axes: the row is its year and the X is where it sits along that year,
+   * so arriving means standing in front of it rather than merely in the right
+   * decade.
+   */
+  function walkToPlaying() {
+    const key = player.state.current?.albumKey;
+    if (!key) { toast('Nothing is playing'); return false; }
+    for (let r = 0; r < rows.length; r++) {
+      const i = rows[r].albums.findIndex((a) => a.key === key);
+      if (i < 0) continue;
+      /* Centred rather than flush left: the record you asked for should be in
+         front of you, and the gutter is where a row *starts*, not where you
+         are made to stand. */
+      const mid = Math.max(0, viewport.clientWidth / 2 - SLOT);
+      walkTo(r, { x: i * SLOT - mid });
+      return true;
+    }
+    toast('That record is not on the floor');
+    return false;
   }
 
   /** Steps sideways, clamped to the floor's own width. */
@@ -1318,12 +1500,77 @@ function mountFloor(host, viewport) {
   };
   stage.addEventListener('wheel', onWheel, { passive: false });
 
+  /* A2: a keyboard route through the room.
+   *
+   * The comment at the top of this function says the Floor is a fourth mode
+   * and never the only one, precisely because a transformed layout stops
+   * matching the tab order. That is honest and it is also the reason to close
+   * it: a roving focus that follows the *visual* arrangement — left and right
+   * along a year, up and down between years — walks the same room the eye
+   * does, and the camera follows so the focused record is never behind you.
+   *
+   * `cursor` is a position in the room, not an index into a list: a row and a
+   * column, both clamped to what that year actually holds. */
+  let cursor = null;                  // { r, c }
+
+  function focusCell(r, c, { walkX = true } = {}) {
+    const lane = rows[r];
+    if (!lane || !lane.albums.length) return;
+    c = Math.max(0, Math.min(lane.albums.length - 1, c));
+    cursor = { r, c };
+    /* Bring the record into the frame before asking for focus. `.focus()` on
+       something outside the viewport would make the browser scroll to it, and
+       the Floor's scroll position *is* its depth — a browser-initiated scroll
+       here walks the camera somewhere nobody asked to go. */
+    const mid = Math.max(0, viewport.clientWidth / 2 - SLOT);
+    if (walkX) camX = Math.max(0, Math.min(maxX, c * SLOT - mid));
+    viewport.scrollTo({ top: lane.at * ROW_DEPTH, behavior: 'instant' });
+    place();
+    const card = liveRows.get(r)?.children[lane.mark ? c + 1 : c];
+    if (card) card.focus({ preventScroll: true });
+  }
+
   const onKey = (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     const step = e.shiftKey ? SLOT * 3 : SLOT;
-    if (e.key === 'ArrowLeft') { if (walk(-step)) e.preventDefault(); }
-    else if (e.key === 'ArrowRight') { if (walk(step)) e.preventDefault(); }
-    else if (e.key === 'Home') { camX = 0; e.preventDefault(); place(); }
-    else if (e.key === 'End') { camX = maxX; e.preventDefault(); place(); }
+
+    /* Two keyboards in one view, and the difference is where focus is. On the
+       room itself the arrows walk the camera, which is what somebody who has
+       just tabbed in expects. On a record they move between records. */
+    const onCard = e.target.classList?.contains('floor-card');
+
+    if (e.key === 'ArrowLeft') {
+      if (onCard && cursor) { focusCell(cursor.r, cursor.c - 1); e.preventDefault(); }
+      else if (walk(-step)) e.preventDefault();
+    } else if (e.key === 'ArrowRight') {
+      if (onCard && cursor) { focusCell(cursor.r, cursor.c + 1); e.preventDefault(); }
+      else if (walk(step)) e.preventDefault();
+    } else if (e.key === 'ArrowUp' && onCard && cursor && cursor.r > 0) {
+      focusCell(cursor.r - 1, cursor.c); e.preventDefault();
+    } else if (e.key === 'ArrowDown' && onCard && cursor && cursor.r < rowCount - 1) {
+      focusCell(cursor.r + 1, cursor.c); e.preventDefault();
+    } else if (e.key === 'Home') {
+      if (onCard && cursor) focusCell(cursor.r, 0);
+      else { camX = 0; place(); }
+      e.preventDefault();
+    } else if (e.key === 'End') {
+      if (onCard && cursor) focusCell(cursor.r, rows[cursor.r].albums.length - 1);
+      else { camX = maxX; place(); }
+      e.preventDefault();
+    } else if (e.key === 'Enter' && !onCard) {
+      /* Entering the room from its own tab stop: the first record in front of
+         you, rather than the first in the collection. */
+      const advance = viewport.scrollTop / ROW_DEPTH;
+      let r = 0;
+      for (let i = 0; i < rows.length; i++) if (rows[i].at <= advance + 0.5) r = i;
+      focusCell(r, Math.round(camX / SLOT), { walkX: false });
+      e.preventDefault();
+    } else if (e.key === 'p' || e.key === 'P') {
+      /* R1. A key rather than a button, because the Floor has no chrome and
+         should not grow any: it is a room, and the affordances that belong in
+         it are the ones you can walk to. The hint above the rail says so. */
+      if (walkToPlaying()) e.preventDefault();
+    }
   };
   stage.addEventListener('keydown', onKey);
 
@@ -1347,6 +1594,11 @@ function mountFloor(host, viewport) {
 
   const onDown = (e) => {
     if (e.button !== 0) return;
+    /* Not on the controls. `setPointerCapture` below redirects the rest of the
+       gesture — the click included — to the stage, so a press that began on a
+       decade button would be captured away from it and the button would never
+       hear about it. The room is dragged; the things standing on it are not. */
+    if (e.target.closest?.('.floor-hud')) return;
     swallowClick = false;
     drag = { x: e.clientX, from: camX, moved: 0 };
     stage.setPointerCapture?.(e.pointerId);
@@ -1384,11 +1636,18 @@ function mountFloor(host, viewport) {
   ro.observe(viewport);
 
   build();
+  buildRail();
   resize();
   host.appendChild(stage);
   place();
 
-  const off = lib.events.on('change', () => { build(); resize(); });
+  const off = lib.events.on('change', () => { build(); buildRail(); resize(); });
+  /* The lamp follows the turntable, and only repaints when the record changes
+     — a repaint per second of playback would be a style write per second for
+     something that changes once a track. */
+  const offTrack = player.events.on('track', () => {
+    if ((player.state.current?.albumKey || '') !== litKey) place();
+  });
   // Only the rows that exist, which is only the ones you can see.
   const offArt = lib.events.on('art', () => {
     for (const row of liveRows.values()) {
@@ -1399,7 +1658,7 @@ function mountFloor(host, viewport) {
   });
 
   return () => {
-    off(); offArt(); ro.disconnect();
+    off(); offArt(); offTrack(); ro.disconnect();
     viewport.removeEventListener('scroll', onScroll);
     stage.removeEventListener('wheel', onWheel);
     stage.removeEventListener('keydown', onKey);
@@ -1442,8 +1701,17 @@ function mountCrate(host, ordered) {
   const meta = el('div', { class: 'crate-meta' },
     el('h2', { class: 'crate-title' }),
     el('p', { class: 'crate-sub' }));
-  const hint = el('p', { class: 'crate-hint label', text: 'Arrow keys to flip · Enter to open' });
-  box.append(rail, meta, hint);
+  const hint = el('p', { class: 'crate-hint label', text: 'Arrow keys to flip · F to turn it over · Enter to open' });
+  /* R4: where you are in the crate.
+   *
+   * Eleven records exist at once and every one of them stood behind the front
+   * one, so a crate of fifty thousand looked exactly like a crate of eleven
+   * and flipping gave no sense of travel at all. Real crate-digging is mostly
+   * about what you have already pushed past, so the near half now leans the
+   * other way — the same eleven nodes, redistributed, which costs nothing —
+   * and the count says the rest. */
+  const count = el('p', { class: 'crate-count label' });
+  box.append(rail, meta, count, hint);
   host.appendChild(box);
 
   let albums = ordered ? ordered() : lib.state.albums;
@@ -1474,18 +1742,30 @@ function mountCrate(host, ordered) {
       // forward of the rest, because it is the one being looked at. Folding it
       // into the same formula as its neighbours turns it 42 degrees and pushes
       // it sideways, which is a crate with nothing at the front of it.
+      /* R4. The records behind the front one are what is still to come and
+         they recede; the ones in front of it are what you have already pushed
+         past, and they lean the other way, toward you, the way a stack does
+         when you have tipped half of it forward. The two halves therefore read
+         as different piles rather than as one symmetrical fan, which is the
+         whole difference between flipping through a crate and looking at a
+         carousel. */
       const s = o < 0 ? -1 : 1;
       const d = Math.abs(o);
-      const x = d === 0 ? 0 : s * (58 + (d - 1) * 30);
-      const z = d === 0 ? 70 : -d * 120;
-      const ry = d === 0 ? 0 : -s * 44;
+      const passed = o < 0;
+      const x = d === 0 ? 0 : s * (passed ? 44 + (d - 1) * 22 : 58 + (d - 1) * 30);
+      const z = d === 0 ? 70 : (passed ? 40 - d * 26 : -d * 120);
+      const ry = d === 0 ? 0 : (passed ? 62 : -44) * -s;
       // The -50% pair is the centring the stylesheet asked for and cannot
       // apply itself, because this line replaces the whole transform.
       node.style.transform =
         `translate(-50%, -50%) translate3d(${x.toFixed(1)}px, 0, ${z.toFixed(0)}px)` +
         ` rotateY(${ry.toFixed(0)}deg)`;
-      node.style.opacity = d === 0 ? '1' : String(Math.max(0.15, 1 - d * 0.22));
-      node.style.zIndex = String(20 - d);
+      node.style.opacity = d === 0 ? '1' : String(Math.max(0.15, 1 - d * (passed ? 0.16 : 0.22)));
+      /* A passed record is nearer the eye than the front one, so it has to be
+         drawn over it, or the near half sinks into the record it is in front
+         of and the lean means nothing. */
+      node.style.zIndex = String(passed ? 30 + d : 20 - d);
+      node.classList.toggle('is-passed', passed);
       node.classList.toggle('is-front', o === 0);
       node.setAttribute('aria-selected', o === 0 ? 'true' : 'false');
       // Only the record at the front is a target. Clicking one behind it and
@@ -1498,16 +1778,57 @@ function mountCrate(host, ordered) {
     meta.querySelector('.crate-title').textContent = cur.title;
     meta.querySelector('.crate-sub').textContent =
       [cur.artist, cur.year || null, fmtCount(cur.tracks.length, 'track')].filter(Boolean).join(' · ');
+    count.textContent = `${at + 1} of ${albums.length}`;
     box.setAttribute('aria-activedescendant', '');
+    paintBack();
   }
 
-  const move = (by) => { at += by; paint(); };
+  /* R5: turn the record over.
+   *
+   * The back cover is typeset, real and legible, and exactly one of the four
+   * album views could reach it — which is odd, because holding a record up to
+   * look at it is precisely the moment you turn it over. Only the front record
+   * gets a back: the other ten are edge-on and would be ten back covers nobody
+   * can see, built and thrown away on every keypress.
+   */
+  let flipped = false;
+  let backKey = '';
+
+  function paintBack() {
+    const node = cards.get(0);
+    const album = albums[at];
+    if (!node || !album) return;
+    const inner = node.querySelector('.sleeve');
+    if (!inner) return;
+
+    if (backKey !== album.key) {
+      backKey = album.key;
+      inner.querySelector('.sleeve-flip')?.replaceWith(...inner.querySelector('.sleeve-flip').childNodes);
+      inner.querySelector('.sleeve-back')?.remove();
+      /* The same two-element arrangement `sleeve()` builds, for the same
+         reason: the pointer tilt is written inline on `.sleeve`, so the flip
+         needs an element of its own or one would overwrite the other. */
+      const face = [...inner.children];
+      const flip = el('div', { class: 'sleeve-flip' }, ...face, backCover(album));
+      inner.appendChild(flip);
+      inner.classList.add('has-back');
+    }
+    inner.classList.toggle('is-flipped', flipped);
+    inner.querySelector('.sleeve-back')?.setAttribute('aria-hidden', flipped ? 'false' : 'true');
+    node.setAttribute('aria-label', `${album.title} by ${album.artist}${flipped ? ', back cover' : ''}`);
+  }
+
+  /* Flipping to the next record puts the new one face out. Carrying the turn
+     across would mean arriving at a record you have never seen from the back,
+     which is not what turning one over means. */
+  const move = (by) => { at += by; flipped = false; paint(); };
 
   box.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowRight') { move(1); e.preventDefault(); }
     else if (e.key === 'ArrowLeft') { move(-1); e.preventDefault(); }
     else if (e.key === 'Home') { at = 0; paint(); e.preventDefault(); }
     else if (e.key === 'End') { at = albums.length - 1; paint(); e.preventDefault(); }
+    else if (e.key === 'f' || e.key === 'F') { flipped = !flipped; paintBack(); e.preventDefault(); }
     else if (e.key === 'Enter' && albums[at]) {
       markTransition(cards.get(0)?.querySelector('.sleeve'));
       location.hash = '#/album/' + albums[at].key;
@@ -2656,6 +2977,49 @@ function viewSettings(host) {
       el('div', { class: 'settings-note', text: 'How long the two overlap. At zero the next track starts the instant the last one ends — what a live album needs.' })),
     el('div', { class: 'settings-actions settings-slider' }, fadeSlider, fadeValue)));
 
+  /* Q7: which shape the overlap takes. Two ramps that each run 0..1 sum to 1
+     in amplitude, which is a dip of about 3dB in the middle where the two
+     tracks are uncorrelated — audible on anything with a steady bed under it.
+     The equal-power pair sums to 1 in *power* instead and holds the level, at
+     the cost of a bump where the two do correlate. Neither is right for every
+     pair of records, so it is a choice rather than a constant. */
+  const curvePick = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Crossfade shape' });
+  for (const [mode, label, hint] of [
+    ['equal', 'Hold the level', 'Equal power: the overlap stays as loud as either track alone'],
+    ['linear', 'Straight lines', 'Equal amplitude: dips slightly in the middle, and never bumps'],
+  ]) {
+    const b = el('button', {
+      class: 'seg' + (player.state.fadeCurve === mode ? ' is-on' : ''),
+      role: 'radio', 'aria-checked': String(player.state.fadeCurve === mode),
+      text: label, title: hint,
+    });
+    b.addEventListener('click', () => {
+      player.setFadeCurve(mode);
+      for (const x of curvePick.children) {
+        const on = x === b;
+        x.classList.toggle('is-on', on);
+        x.setAttribute('aria-checked', String(on));
+      }
+    });
+    curvePick.appendChild(b);
+  }
+
+  const curveRow = el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('sliders') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Crossfade shape' }),
+      el('div', { class: 'settings-note', text: 'Holding the level suits most records. Straight lines are the safer choice where two tracks share a drone or a room \u2014 there, holding the level can bump.' })),
+    el('div', { class: 'settings-actions' }, curvePick));
+  curveRow.hidden = player.state.crossfade === 0;
+  pbRows.appendChild(curveRow);
+
+  /* The shape only exists while there is an overlap to shape, so the row
+     appears with the slider rather than sitting there greyed out. */
+  const paintCurveRow = () => { curveRow.hidden = !player.state.seamless || player.state.crossfade === 0; };
+  fadeSlider.addEventListener('input', paintCurveRow);
+  seamlessSwitch.addEventListener('click', paintCurveRow);
+  paintCurveRow();
+
   const levelPick = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Loudness levelling' });
   for (const [mode, label, hint] of [
     ['off', 'Off', 'Play every file at the level it was mastered'],
@@ -2740,6 +3104,60 @@ function viewSettings(host) {
   pbRows.appendChild(toggleRow('sliders', 'Land the crossfade on the beat',
     'Where both tracks have a clear tempo and the two are close, the overlap starts on a beat rather than on a stopwatch.',
     () => player.state.beatMatch, (v) => player.setBeatMatch(v)));
+
+  /* Q8: which output the sound leaves by. The browser will only name devices
+     once it has been given permission to look at them, and asking for that
+     permission means asking for a microphone \u2014 too steep a price to pay on
+     the chance somebody owns two sets of speakers. So the list stays a button
+     until it is wanted. */
+  if (player.canRouteOutput()) {
+    const pick = el('select', { class: 'settings-select', 'aria-label': 'Output device' });
+    const note = el('div', { class: 'settings-note', text: 'Sonora plays through whatever the system is using. Choose a different output to send it somewhere else.' });
+    let loaded = false;
+
+    const fill = async () => {
+      const devices = await player.outputs();
+      pick.textContent = '';
+      pick.appendChild(el('option', { value: '', text: 'System default' }));
+      for (const d of devices) pick.appendChild(el('option', { value: d.deviceId, text: d.label }));
+      pick.value = player.state.sink || '';
+      loaded = true;
+    };
+
+    const reveal = el('button', { class: 'btn sm', text: 'Choose\u2026' });
+    reveal.addEventListener('click', async () => {
+      reveal.disabled = true;
+      const ok = await player.askForOutputs();
+      reveal.disabled = false;
+      if (!ok) { note.textContent = 'The browser would not list the outputs. Sonora keeps using the system default.'; return; }
+      reveal.hidden = true;
+      pick.hidden = false;
+      await fill();
+    });
+    pick.hidden = true;
+    pick.addEventListener('change', async () => {
+      const res = await player.setSink(pick.value);
+      if (!res.ok && pick.value) {
+        pick.value = '';
+        toast('That output is no longer there');
+      }
+    });
+    /* Where permission has already been granted the list can be built without
+       asking again, so the button never appears. */
+    player.outputsNamed().then((named) => {
+      if (!named) return;
+      reveal.hidden = true;
+      pick.hidden = false;
+      if (!loaded) fill();
+    });
+    navigator.mediaDevices?.addEventListener?.('devicechange', () => { if (loaded) fill(); });
+
+    pbRows.appendChild(el('div', { class: 'settings-row' },
+      el('div', { class: 'settings-ico', html: ico('volume') }),
+      el('div', { class: 'settings-text' },
+        el('div', { class: 'settings-name', text: 'Play through' }), note),
+      el('div', { class: 'settings-actions' }, reveal, pick)));
+  }
 
   playback.appendChild(pbRows);
   host.appendChild(playback);

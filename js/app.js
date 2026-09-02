@@ -1,6 +1,6 @@
 /* app.js — shell: routing, navigation, search, shortcuts, theming, ingestion. */
 
-import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle } from './util.js';
+import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle, fmtTime } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { renderView, hasLiveSelection } from './views.js';
@@ -882,6 +882,17 @@ async function boot() {
     if (did?.applied) toast(`Rack for “${did.label}”`);
     else if (did?.released) toast('Back to your rack');
   });
+  /* Q10: a long recording picks up where it was left, and says so. Silently
+     starting an hour in would look like a bug to anybody who wanted the top,
+     so the resume is announced and is undone by one press. */
+  player.events.on('resumed', ({ track, at }) => toast(`Picked up at ${fmtTime(at)}`, {
+    duration: 6000,
+    action: {
+      label: 'Start over',
+      onSelect: () => { player.clearLongMark(track.id); player.seek(0); },
+    },
+  }));
+
   player.events.on('unavailable', (t) => toast(`Can't reach “${t.title}” — reconnect its folder`, {
     action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
   }));
