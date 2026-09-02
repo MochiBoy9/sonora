@@ -1709,9 +1709,14 @@ function mountCrate(host, ordered) {
     'data-clips': '',
   });
   const rail = el('div', { class: 'crate-rail' });
+  const count = el('p', { class: 'crate-count label' });
   const meta = el('div', { class: 'crate-meta' },
     el('h2', { class: 'crate-title' }),
-    el('p', { class: 'crate-sub' }));
+    el('p', { class: 'crate-sub' }),
+    /* Inside the block rather than positioned under it. Absolutely placed at
+       its own `bottom`, it sat in the space the two lines above it need — and
+       at 620px, where the subtitle wraps, it printed straight through them. */
+    count);
   const hint = el('p', { class: 'crate-hint label', text: 'Arrow keys to flip · F to turn it over · Enter to open' });
   /* R4: where you are in the crate.
    *
@@ -1721,8 +1726,7 @@ function mountCrate(host, ordered) {
    * about what you have already pushed past, so the near half now leans the
    * other way — the same eleven nodes, redistributed, which costs nothing —
    * and the count says the rest. */
-  const count = el('p', { class: 'crate-count label' });
-  box.append(rail, meta, count, hint);
+  box.append(rail, meta, hint);
   host.appendChild(box);
 
   let albums = ordered ? ordered() : lib.state.albums;

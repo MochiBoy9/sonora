@@ -1287,16 +1287,15 @@
  * takes its width from the grid, so the square is stated as a ratio. */
 .card .sleeve.has-back { aspect-ratio: 1 / 1; }
 
-/* R4: how far into the crate you are. Beside the record's name rather than
-   over it, and in the mono face the rest of the app uses for figures. */
+/* R4: how far into the crate you are. The third line of the block that names
+   the record, in the mono face the rest of the app uses for figures — placed
+   by the flex column above rather than at its own `bottom`, so a subtitle that
+   wraps pushes it down instead of printing through it. */
 .crate-count {
-  position: absolute;
-  left: 0; right: 0; bottom: 30px;
-  text-align: center;
   font-family: var(--mono);
   letter-spacing: .18em;
   color: var(--text-3);
-  pointer-events: none;
+  margin-top: 1px;
 }
 
 /* The half you have already been through. Warmer and a little more solid than
