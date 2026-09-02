@@ -12,7 +12,7 @@
  *
  * So this asks a different question, in two ways.
  *
- * THE LINT is five rules about the gap between what the CSS says and what
+ * THE LINT is seven rules about the gap between what the CSS says and what
  * arrives on screen. Each one is a shape that a real defect took:
  *
  *   collapsed   a flex child squeezed below the height its own content needs.
@@ -29,6 +29,13 @@
  *               tracklist spilled onto.
  *   buried      an interactive control under the transport. Carried over from
  *               `layout.mjs`, which is where it was first caught.
+ *   small       H3: a tap target under 44 by 44, on a coarse-pointer sweep.
+ *               Nearly every control in the application, the first time it
+ *               ran — including a 19px record spine and a 20px scrubber.
+ *   faint       J3: text under WCAG's 4.5:1, or 3:1 where it is large.
+ *               Contrast had been measured once, by hand, on two tokens; this
+ *               measures every text node on every surface in both schemes,
+ *               which is the same walk the rules above already do.
  *
  * THE GOLDENS are the other half, because a lint can only find what somebody
  * has already been bitten by. Every surface is photographed and compared with
@@ -36,6 +43,17 @@
  * on screen fails the run and prints where. `--accept` blesses the current
  * state as the new truth, which is the only way to start and the right way to
  * take a deliberate change.
+ *
+ * J4: the goldens are committed, so the accepted appearance travels with the
+ * source rather than living on whichever machine last ran the suite. One
+ * caveat that follows from that and is worth knowing before you go hunting:
+ * a screenshot is not perfectly reproducible across machines — font hinting,
+ * GPU rasterisation and the exact Chromium build all move pixels — so a run on
+ * a different machine from the one that blessed them may disagree everywhere
+ * at once. That pattern is the tell. A real regression is one or two surfaces
+ * with a named region; a machine difference is all eighty at a fraction of a
+ * percent, and the answer to it is `--accept` on the machine you intend to
+ * work from, not a hunt through the CSS.
  *
  * Neither half needs a network, a service or a dependency the other tools do
  * not already have.
@@ -161,7 +179,7 @@ function comparePNG(a, b, tol = 12) {
 /* ------------------------------------------------------------------ lint */
 
 const LINT = () => {
-  const out = { collapsed: [], clipped: [], tiny: [], stacked: [], buried: [], small: [] };
+  const out = { collapsed: [], clipped: [], tiny: [], stacked: [], buried: [], small: [], faint: [] };
   const name = (e) => {
     const c = String(e.className?.baseVal ?? e.className ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
     return e.tagName.toLowerCase() + (c ? '.' + c : '') + (e.id ? '#' + e.id : '');
@@ -377,6 +395,90 @@ const LINT = () => {
       if (r.width < 2 || r.height < 2) continue;
       if (r.width >= HIT && r.height >= HIT) continue;
       out.small.push(`${name(e)} ${Math.round(r.width)}×${Math.round(r.height)}`);
+    }
+  }
+
+  /* J3: contrast, measured rather than remembered.
+   *
+   * It was fixed once, by hand, on two tokens — and nothing has re-checked
+   * them since, so the next regression arrives silently in a theme nobody was
+   * looking at. This suite already visits every surface in two schemes and
+   * already walks every element on each; computing the ratio for the text it
+   * finds is the same walk with arithmetic on the end.
+   *
+   * WCAG's 4.5:1 for body text and 3:1 for large text, which are the two
+   * numbers everybody argues about and nobody has a better answer than.
+   * "Large" is 24px, or 18.66px bold — the spec's own definition.
+   *
+   * The background is found by walking up until something is not transparent,
+   * which is what the eye does. It cannot see through an image or a gradient,
+   * so anything painted over one is skipped rather than guessed at: a wrong
+   * pass is worse than no reading, and a wrong *fail* would have somebody
+   * chasing a number that was never real.
+   */
+  const rgba = (v) => {
+    const m = String(v).match(/[\d.]+/g);
+    if (!m || m.length < 3) return null;
+    return { r: +m[0], g: +m[1], b: +m[2], a: m.length > 3 ? +m[3] : 1 };
+  };
+  const lin = (c) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+  const lum = (c) => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+  const over = (fg, bg) => ({
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1,
+  });
+
+  /** The colour actually behind an element, or null where it cannot be known. */
+  function behind(el) {
+    let acc = null;                       // layers between the text and the page
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.backgroundImage && cs.backgroundImage !== 'none') return null;
+      const c = rgba(cs.backgroundColor);
+      if (!c || !c.a) continue;
+      acc = acc ? over(acc, c) : c;
+      if (acc.a >= 0.999) return acc;
+    }
+    const root = rgba(getComputedStyle(document.documentElement).backgroundColor);
+    if (!root || !root.a) return null;
+    return acc ? over(acc, root) : root;
+  }
+
+  for (const e of all) {
+    /* Ornament and logotypes are out.
+     *
+     * `aria-hidden` is the app saying a thing carries no information — the
+     * numbers beside the nav items, the ticks on a meter — and a decorative
+     * mark set faint on purpose is not body text that has gone wrong.
+     * `data-logotype` is the one exemption WCAG grants by name: "text that is
+     * part of a logo or brand name has no contrast requirement". Both are
+     * narrow, both have to be written on the element, and neither should ever
+     * be reached for to quiet this rule about something somebody has to read. */
+    if (e.closest('.sprite, .sr-only, [aria-hidden="true"], [data-logotype]')) continue;
+    if (e.children.length) continue;                       // leaves only
+    const text = e.textContent.trim();
+    if (!text) continue;
+    const v = shown(e);
+    if (!v || !visible(e)) continue;
+
+    const fg = rgba(v.cs.color);
+    if (!fg) continue;
+    const bg = behind(e);
+    if (!bg) continue;                                     // over art, or a gradient
+
+    const opacity = parseFloat(v.cs.opacity);
+    const solid = over({ ...fg, a: fg.a * (isFinite(opacity) ? opacity : 1) }, bg);
+    const l1 = lum(solid), l2 = lum(bg);
+    const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+
+    const px = parseFloat(v.cs.fontSize);
+    const bold = parseInt(v.cs.fontWeight, 10) >= 700;
+    const large = px >= 24 || (bold && px >= 18.66);
+    const need = large ? 3 : 4.5;
+    if (ratio + 0.05 < need) {
+      out.faint.push(`${name(e)} ${ratio.toFixed(2)}:1 needs ${need} "${text.slice(0, 18)}"`);
     }
   }
 

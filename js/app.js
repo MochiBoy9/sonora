@@ -203,7 +203,11 @@ function buildSidebar() {
 
   const brand = el('a', { class: 'brand', href: '#/home', 'aria-label': 'Sonora — home' },
     el('span', { class: 'brand-mark', html: ico('logo') }),
-    el('span', { class: 'brand-name', html: 'SON<b>ORA</b>' }));
+    /* A logotype, which WCAG exempts from contrast by name: "text that is part
+       of a logo or brand name has no contrast requirement". Said out loud with
+       an attribute rather than left for somebody to rediscover, because the
+       exemption is narrow and this is the only thing in the app that has it. */
+    el('span', { class: 'brand-name', 'data-logotype': '', html: 'SON<b>ORA</b>' }));
 
   const nav = el('nav', { class: 'nav', 'aria-label': 'Library' });
   pill = el('div', { class: 'nav-pill' });
@@ -212,7 +216,12 @@ function buildSidebar() {
     const link = el('a', {
       class: 'nav-item', href: '#/' + item.route, data: { route: item.route },
     },
-      el('span', { class: 'nav-num', text: String(i + 1).padStart(2, '0') }),
+      /* Ornament, and hidden from assistive tech as such: the number is the
+         item's position in a list that already has an order, so a screen
+         reader announcing "zero two, Songs" is reading out the furniture. It
+         is also why the contrast rule skips it — a decorative number set
+         faint on purpose is not body text that has gone wrong. */
+      el('span', { class: 'nav-num', 'aria-hidden': 'true', text: String(i + 1).padStart(2, '0') }),
       el('span', { class: 'nav-ico', html: ico(item.icon) }),
       el('span', { class: 'nav-label', text: item.label }));
     /* C1: Favourites is a destination for a drag as well as a place to go.

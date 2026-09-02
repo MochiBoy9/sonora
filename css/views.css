@@ -27,7 +27,7 @@
   align-items: center;
   gap: 10px;
   font-family: var(--mono);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-size: calc(10.5px * var(--scale));
   font-weight: 500;
   letter-spacing: .24em;
@@ -143,7 +143,7 @@
   width: 198px;
   height: 198px;
   margin: -8px -4px -8px 0;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .bloom svg { width: 100%; height: 100%; overflow: visible; }
 .bloom-ring { stroke: rgb(var(--accent-rgb) / .34); stroke-width: 1; fill: none; }
@@ -349,7 +349,7 @@
   font-size: calc(9.5px * var(--scale));
   letter-spacing: .2em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .back-title {
@@ -513,7 +513,7 @@
 .flip-btn .ico { width: 13px; height: 13px; }
 .hero-show:hover .flip-btn, .flip-btn:focus-visible, .flip-btn[aria-pressed="true"] { opacity: 1; }
 .hero-show:hover .zoom-btn, .zoom-btn:focus-visible { opacity: 1; }
-.flip-btn:hover { color: var(--accent); background: rgb(var(--accent-rgb) / .12); }
+.flip-btn:hover { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .12); }
 /* No pointer means no hover to reveal it with. */
 @media (hover: none) { .flip-btn { opacity: 1; } }
 
@@ -629,12 +629,12 @@
   .hero-show .sleeve-stage { --sleeve-size: 200px; align-self: center; }
 }
 .hero-link { color: var(--text); font-weight: 500; transition: color var(--dur-1) linear; }
-.hero-link:hover { color: var(--accent); }
+.hero-link:hover { color: var(--accent-ink); }
 /* D1: a link that sits among facts rather than among names. It has to read as
    part of the run of small print and still be plainly clickable, so it takes
    the weight of the facts and keeps the underline on hover. */
 .hero-link.subtle { color: var(--text-2); font-weight: 400; }
-.hero-link.subtle:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.hero-link.subtle:hover { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 3px; }
 .dot { width: 3px; height: 3px; background: currentColor; opacity: .45; }
 
 /* Wrapping rather than squeezing. Four controls and three gaps come to
@@ -741,7 +741,7 @@
   display: grid;
   place-items: center;
   background: var(--glass-2);
-  color: var(--accent);
+  color: var(--accent-ink);
   box-shadow: var(--sh-2), inset 0 0 0 var(--hair) var(--accent-line);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
@@ -776,7 +776,7 @@
   display: grid;
   place-items: center;
   width: 66px; height: 66px;
-  color: var(--accent);
+  color: var(--accent-ink);
   background: rgb(var(--accent-rgb) / .07);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
   margin-bottom: 6px;
@@ -809,7 +809,7 @@
   display: grid;
   place-items: center;
   width: 34px; height: 34px;
-  color: var(--accent);
+  color: var(--accent-ink);
   background: rgb(var(--accent-rgb) / .08);
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   flex: none;
@@ -915,7 +915,7 @@
 .np-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .np-title { font-size: calc(18px * var(--scale)); letter-spacing: -.02em; overflow-wrap: anywhere; }
 .np-artist { color: var(--text); font-size: calc(13px * var(--scale)); font-weight: 550; transition: color var(--dur-1) linear; }
-.np-artist:hover { color: var(--accent); }
+.np-artist:hover { color: var(--accent-ink); }
 .np-album {
   color: var(--text-3);
   font-family: var(--mono);
@@ -941,7 +941,7 @@
   text-align: left;
   transition: background var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.np-next-row:hover { background: rgb(var(--accent-rgb) / .1); border-left-color: var(--accent); }
+.np-next-row:hover { background: rgb(var(--accent-rgb) / .1); border-left-color: var(--accent-ink); }
 .np-next-label {
   font-family: var(--mono);
   color: var(--text-3);
@@ -1024,7 +1024,7 @@
 .qrow-act-next { left: 0; }
 .qrow-act-remove { right: 0; }
 .qrow[data-swipe="next"] .qrow-act-next,
-.qrow[data-swipe="remove"] .qrow-act-remove { color: var(--accent); }
+.qrow[data-swipe="remove"] .qrow-act-remove { color: var(--accent-ink); }
 .qrow[data-swipe="remove"] .qrow-act-remove { color: var(--warn); }
 /* Only the direction being swiped is lit; the other stays dim behind the row
    it has not moved off. */
@@ -1032,8 +1032,8 @@
 .qrow.is-swiping .qrow-act { opacity: calc(.35 + .65 * var(--swipe, 0)); }
 .qrow:hover { background: rgb(var(--accent-rgb) / .07); border-left-color: var(--line-3); }
 .qrow.is-past { opacity: .4; }
-.qrow.is-current { background: rgb(var(--accent-rgb) / .12); border-left-color: var(--accent); }
-.qrow.is-current .qrow-title { color: var(--accent); }
+.qrow.is-current { background: rgb(var(--accent-rgb) / .12); border-left-color: var(--accent-ink); }
+.qrow.is-current .qrow-title { color: var(--accent-ink); }
 .qrow.is-dragging { opacity: .35; }
 .qrow.is-drop { box-shadow: inset 0 2px 0 var(--accent); }
 
@@ -1057,7 +1057,7 @@
   font-size: calc(9px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-ink);
   opacity: .75;
 }
 /* The fold. A link rather than a button with a box, because it belongs to the
@@ -1160,7 +1160,7 @@
 }
 .circle-tip[hidden] { display: none; }
 .circle-tip strong { font-size: calc(13.5px * var(--scale)); }
-.circle-tip-value { font-family: var(--mono); color: var(--accent); font-size: calc(12px * var(--scale)); letter-spacing: .06em; }
+.circle-tip-value { font-family: var(--mono); color: var(--accent-ink); font-size: calc(12px * var(--scale)); letter-spacing: .06em; }
 .circle-tip-share { color: var(--text-3); font-size: calc(11.5px * var(--scale)); }
 
 .circle-pins {
@@ -1196,7 +1196,7 @@
   background: var(--accent);
 }
 .circle-pin-name { font-size: calc(12.5px * var(--scale)); font-weight: 540; }
-.circle-pin-value { color: var(--accent); font-size: calc(11px * var(--scale)); letter-spacing: .06em; }
+.circle-pin-value { color: var(--accent-ink); font-size: calc(11px * var(--scale)); letter-spacing: .06em; }
 .circle-compare { margin-left: 4px; }
 .circle-empty { padding-top: 40px; }
 
@@ -1234,7 +1234,7 @@
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
-.band-card-title { display: block; margin-bottom: 12px; color: var(--accent); }
+.band-card-title { display: block; margin-bottom: 12px; color: var(--accent-ink); }
 .band-text { font-size: calc(13px * var(--scale)); line-height: 1.6; color: var(--text-2); }
 .band-text + .link-btn { margin-top: 10px; display: inline-block; }
 .band-facts { grid-template-columns: 92px minmax(0, 1fr); }
@@ -1251,10 +1251,10 @@
 }
 .band-row-year { color: var(--text-3); font-size: calc(11px * var(--scale)); width: 34px; flex: none; }
 .band-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.band-row.is-owned .band-row-title { color: var(--accent); }
+.band-row.is-owned .band-row-title { color: var(--accent-ink); }
 .band-row-detail { width: 100%; padding-left: 44px; }
 .band-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.band-link:hover { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+.band-link:hover { color: var(--accent-ink); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
 .band-source { grid-column: 1 / -1; margin-top: 2px; }
 .band-consent { margin: 12px 0; padding-left: 18px; color: var(--text-2); font-size: calc(13px * var(--scale)); line-height: 1.7; list-style: square; }
 .band-consent li { margin-bottom: 4px; }
@@ -1443,7 +1443,7 @@
 
 .settings-range {
   width: clamp(120px, 22vw, 220px);
-  accent-color: var(--accent);
+  accent-color: var(--accent-ink);
   cursor: pointer;
 }
 .settings-range:disabled { opacity: .4; cursor: default; }
@@ -1453,7 +1453,7 @@
   font-family: var(--mono);
   font-size: calc(11.5px * var(--scale));
   letter-spacing: .06em;
-  color: var(--accent);
+  color: var(--accent-ink);
   font-variant-numeric: tabular-nums;
 }
 .settings-range:disabled + .settings-value { color: var(--text-3); }
@@ -1494,7 +1494,7 @@
 
 .file-ico { flex: none; display: grid; place-items: center; color: var(--text-3); }
 .file-ico .ico { width: 15px; height: 15px; }
-.file-row.is-open > .file-ico { color: var(--accent); }
+.file-row.is-open > .file-ico { color: var(--accent-ink); }
 
 .file-name {
   flex: 1 1 auto;
@@ -1551,7 +1551,7 @@
 }
 /* An identical file is a fact; the same recording in two files is a judgement.
    Only the fact gets the accent. */
-.dupe-reason.is-hard { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+.dupe-reason.is-hard { color: var(--accent-ink); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
 
 .dupe-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .dupe-size { flex: none; font-family: var(--mono); font-size: calc(11px * var(--scale)); color: var(--text-3); font-variant-numeric: tabular-nums; }
@@ -1903,7 +1903,7 @@
   font-family: var(--mono);
   font-size: calc(12px * var(--scale));
   letter-spacing: .03em;
-  color: var(--accent);
+  color: var(--accent-ink);
   padding-left: 12px;
   border-left: 2px solid var(--accent-line);
 }
@@ -1974,7 +1974,7 @@
   transition: color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
 }
 .floor-rail-btn:hover { color: var(--text); }
-.floor-rail-btn.is-on { color: var(--accent); border-right-color: var(--accent); }
+.floor-rail-btn.is-on { color: var(--accent-ink); border-right-color: var(--accent-ink); }
 .floor-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ------------------------------------------ the record that is playing (R1) */
@@ -1989,7 +1989,7 @@
     0 0 26px 2px rgb(var(--accent-rgb) / .34),
     0 14px 30px rgb(0 0 0 / .4);
 }
-.floor-card.is-playing .floor-text b { color: var(--accent); }
+.floor-card.is-playing .floor-text b { color: var(--accent-ink); }
 .floor-card:focus-visible { outline: none; }
 .floor-card:focus-visible .floor-art { outline: 2px solid var(--accent); outline-offset: 3px; }
 
@@ -2080,7 +2080,7 @@
   cursor: pointer;
   text-align: left;
 }
-.linkish:hover { color: var(--accent); text-decoration: underline; }
+.linkish:hover { color: var(--accent-ink); text-decoration: underline; }
 
 /* The circle that stands for all the rest. Drawn as an outline rather than a
    disc, so it does not read as one more artist. */
@@ -2205,7 +2205,7 @@
   font-family: var(--mono);
   font-size: calc(17px * var(--scale));
   font-variant-numeric: tabular-nums;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .attn-head[aria-expanded="true"] { background: var(--surface-hi); }
 .attn-actions { padding: 0 16px 12px; }
@@ -2261,7 +2261,7 @@
   max-height: 34vh;
   overflow-y: auto;
 }
-.replace-count { color: var(--accent); font-size: calc(13px * var(--scale)); margin-bottom: 6px; }
+.replace-count { color: var(--accent-ink); font-size: calc(13px * var(--scale)); margin-bottom: 6px; }
 .replace-list { list-style: none; margin: 0; padding: 0; }
 .replace-list li {
   display: flex;
@@ -2301,7 +2301,7 @@
   text-decoration: none;
   font-size: calc(11.5px * var(--scale));
 }
-.over-chip:hover { border-color: var(--accent-line); color: var(--accent); }
+.over-chip:hover { border-color: var(--accent-line); color: var(--accent-ink); }
 
 
 /* R6: the cover, looked at.
@@ -2587,8 +2587,8 @@ body.lb-open { overflow: hidden; }
   line-height: 1.5;
   transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.noticed:hover { color: var(--text); border-left-color: var(--accent); }
-.noticed-mark { color: var(--accent); opacity: .7; align-self: center; }
+.noticed:hover { color: var(--text); border-left-color: var(--accent-ink); }
+.noticed-mark { color: var(--accent-ink); opacity: .7; align-self: center; }
 .noticed-mark svg { width: 14px; height: 14px; display: block; }
 
 /* D3: the filter language, made pressable.
@@ -2610,7 +2610,7 @@ body.lb-open { overflow: hidden; }
 .filter-chip:hover { color: var(--text); background: rgb(var(--surface-2-rgb) / .9); }
 .filter-chip.is-on {
   background: rgb(var(--accent-rgb) / .16);
-  color: var(--accent);
+  color: var(--accent-ink);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
 }
 
@@ -2627,7 +2627,7 @@ body.lb-open { overflow: hidden; }
   font-family: var(--mono);
   font-size: calc(10.5px * var(--scale));
   padding: 2px 7px;
-  color: var(--accent);
+  color: var(--accent-ink);
   background: rgb(var(--accent-rgb) / .1);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
   border-radius: var(--r-sm);

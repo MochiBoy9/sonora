@@ -169,7 +169,7 @@
   bottom: 100%;
   font-family: var(--mono);
   font-size: calc(9.5px * var(--scale));
-  color: var(--accent);
+  color: var(--accent-ink);
   opacity: 0;
   transition: opacity var(--dur-1) linear;
   pointer-events: none;
@@ -200,7 +200,7 @@
   direction: rtl;
   width: 22px;
   height: 96px;
-  accent-color: var(--accent);
+  accent-color: var(--accent-ink);
 }
 .fader-hz, .fader-db {
   font-family: var(--mono);
@@ -210,7 +210,7 @@
   white-space: nowrap;
 }
 .fader-db { color: var(--text-2); }
-.fader.is-boosted .fader-db { color: var(--accent); }
+.fader.is-boosted .fader-db { color: var(--accent-ink); }
 .fader.is-cut .fader-db { color: var(--warn); }
 
 /* ------------------------------------------------------------------ knobs */
@@ -231,7 +231,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.rack-row input[type="range"] { width: 100%; min-width: 0; accent-color: var(--accent); }
+.rack-row input[type="range"] { width: 100%; min-width: 0; accent-color: var(--accent-ink); }
 .rack-val {
   font-family: var(--mono);
   font-size: calc(10.5px * var(--scale));
@@ -240,7 +240,7 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.rack-row.is-set .rack-val { color: var(--accent); }
+.rack-row.is-set .rack-val { color: var(--accent-ink); }
 
 .rack-note {
   font-size: calc(11px * var(--scale));
@@ -281,7 +281,7 @@
    like the bypass beside them — the head is a row of switches and they should
    read as one instrument. */
 .rack-match.is-on, .rack-slot.is-on {
-  color: var(--accent);
+  color: var(--accent-ink);
   border-color: var(--accent-line);
   background: rgb(var(--accent-rgb) / .12);
 }
@@ -294,7 +294,7 @@
 .mono-check.is-on {
   color: var(--bg);
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-ink);
 }
 .preset.is-on {
   color: var(--on-accent);
@@ -508,7 +508,7 @@
   place-items: center;
   background: rgb(var(--bg-rgb) / .7);
   box-shadow: inset 0 0 0 2px var(--accent);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-family: var(--mono);
   letter-spacing: .14em;
   text-transform: uppercase;

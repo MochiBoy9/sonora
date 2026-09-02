@@ -1,17 +1,73 @@
-/* Measures Sonora against a large library.
+/* Measures Sonora against a large library — and fails when it gets slower.
  *
- *   node tools/perf.mjs <library-dir>
+ *   node tools/perf.mjs <library-dir> [--report]
  *
  * Reports import throughput, first-paint cost per view, scroll frame times and
  * search latency. Frame times come from requestAnimationFrame deltas while a
  * scripted scroll runs, which is the number that decides whether a list feels
  * smooth.
+ *
+ * J2: it used to only report, which meant a change that halved the frame rate
+ * passed every suite in the repository. Now every measurement has a budget and
+ * a run that breaks one exits non-zero.
+ *
+ * The budgets below are *ceilings, generously set* rather than targets, and
+ * that is deliberate. This runs on whatever machine is to hand — a laptop on
+ * battery, a CI box sharing a core with three other jobs — so a threshold tight
+ * enough to catch a 10% regression would fail half the time for reasons that
+ * have nothing to do with the code, and a suite that cries wolf is a suite
+ * people pass `--report` to for ever. These are set to catch the change that
+ * makes something *qualitatively* worse: a scroll that drops to 30fps, a paint
+ * that becomes visible, an import that halves in speed. The numbers next to
+ * them are what this machine actually measures, so the headroom is visible.
+ *
+ * `--report` prints everything and asserts nothing, for when you want a
+ * reading rather than a verdict.
  */
 
 import { chromium } from 'playwright';
 
-const LIB = process.argv[2];
+const args = process.argv.slice(2);
+const REPORT_ONLY = args.includes('--report');
+const LIB = args.find((a) => !a.startsWith('--'));
 const BASE = 'http://127.0.0.1:8123/index.html';
+
+/* Every budget in one table, because the numbers are the interesting part of
+   this file and hunting for them among the measurements is how they end up
+   quietly diverging from what they are supposed to mean. */
+const BUDGET = {
+  // A scripted flick through a virtualised list. 16.7ms is one frame at 60Hz;
+  // the median has to be a frame or the list is not keeping up at all. The p95
+  // allows two dropped frames in a scroll of sixty, and the worst allows one
+  // long one — a garbage collection lands somewhere in every run.
+  scrollMedian: 18,
+  scrollP95: 34,
+  scrollWorst: 120,
+  // First paint of a route, from the click to the first row existing. Past
+  // about 200ms a page transition stops feeling like a transition.
+  routePaint: 400,
+  // Search runs on every keystroke over the whole library, so it has one
+  // frame to finish in or typing stutters.
+  searchMs: 16,
+  // Files a second through the import pipeline. A floor rather than a ceiling.
+  importRate: 6,
+  // Painting a stored library back from IndexedDB, which is what a launch is.
+  coldStart: 4000,
+  // Live DOM nodes in a virtualised list, however many tracks it holds. This
+  // one is tight on purpose: it is not a timing, it is the property that makes
+  // every timing above hold at fifty thousand tracks, and if it breaks the
+  // suite should say so on the smallest library rather than waiting for
+  // somebody to try a big one.
+  liveNodes: 80,
+};
+
+const failures = [];
+/** Records a measurement against its budget and prints the comparison. */
+function budget(label, value, limit, { floor = false, unit = 'ms' } = {}) {
+  const bad = floor ? value < limit : value > limit;
+  if (bad) failures.push(`${label}: ${value}${unit} against a budget of ${floor ? 'at least ' : ''}${limit}${unit}`);
+  return bad ? ' ✗' : '';
+}
 
 const browser = await chromium.launch({
   executablePath: process.env.SONORA_CHROMIUM || undefined,
@@ -55,7 +111,11 @@ const count = await page.evaluate(() =>
   document.querySelector('.page-sub')?.textContent || '');
 console.log(`\nimport      ${(importMs / 1000).toFixed(1)}s   (${count.trim()})`);
 const tracks = parseInt((count.match(/([\d,]+) tracks/) || [0, '0'])[1].replace(/,/g, ''), 10);
-if (tracks) console.log(`            ${Math.round(tracks / (importMs / 1000))} files/second`);
+if (tracks) {
+  const rate = Math.round(tracks / (importMs / 1000));
+  console.log(`            ${rate} files/second` +
+              budget('import throughput', rate, BUDGET.importRate, { floor: true, unit: '/s' }));
+}
 
 /* ---------------------------------------------------------------- view cost */
 
@@ -71,7 +131,8 @@ async function timeRoute(label, selector, click) {
     }
     return performance.now() - t;
   }, { selector, click });
-  console.log(`${label.padEnd(12)}${ms.toFixed(0)}ms to first paint`);
+  console.log(`${label.padEnd(12)}${ms.toFixed(0)}ms to first paint` +
+              budget(`${label} first paint`, Math.round(ms), BUDGET.routePaint));
   await page.waitForTimeout(250);
 }
 
@@ -120,7 +181,11 @@ async function scrollTest(label, route) {
   });
 
   console.log(`${label.padEnd(16)}median ${result.median.toFixed(1)}ms · p95 ${result.p95.toFixed(1)}ms · worst ` +
-              `${result.worst.toFixed(1)}ms · ${result.nodes} live nodes`);
+              `${result.worst.toFixed(1)}ms · ${result.nodes} live nodes` +
+              budget(`${label} median`, +result.median.toFixed(1), BUDGET.scrollMedian) +
+              budget(`${label} p95`, +result.p95.toFixed(1), BUDGET.scrollP95) +
+              budget(`${label} worst frame`, +result.worst.toFixed(1), BUDGET.scrollWorst) +
+              budget(`${label} live nodes`, result.nodes, BUDGET.liveNodes, { unit: '' }));
 }
 
 console.log('');
@@ -144,7 +209,10 @@ const search = await page.evaluate(async () => {
   }
   return runs;
 });
-for (const r of search) console.log(`search "${r.q}"`.padEnd(24) + `${r.ms}ms · ${r.hits} results shown · ${r.route}`);
+for (const r of search) {
+  console.log(`search "${r.q}"`.padEnd(24) + `${r.ms}ms · ${r.hits} results shown · ${r.route}` +
+              budget(`search "${r.q}"`, r.ms, BUDGET.searchMs));
+}
 
 /* ---------------------------------------------------------------- memory */
 
@@ -162,6 +230,24 @@ await page.reload({ waitUntil: 'domcontentloaded' });
 // intro, and this is meant to measure the library, not the welcome sequence.
 await page.waitForFunction(() => (document.querySelector('.page-sub')?.textContent || '').includes('track'),
                            null, { timeout: 30000 });
-console.log(`cold start  ${Date.now() - t1}ms to a painted library from IndexedDB`);
+const cold = Date.now() - t1;
+console.log(`cold start  ${cold}ms to a painted library from IndexedDB` +
+            budget('cold start', cold, BUDGET.coldStart));
 
 await browser.close();
+
+/* ---------------------------------------------------------------- verdict */
+
+if (!failures.length) {
+  console.log('\nEVERY BUDGET MET');
+} else if (REPORT_ONLY) {
+  console.log(`\n${failures.length} OVER BUDGET (reporting only):`);
+  for (const f of failures) console.log('  - ' + f);
+} else {
+  console.log(`\n${failures.length} PERFORMANCE BUDGET(S) BROKEN:`);
+  for (const f of failures) console.log('  - ' + f);
+  console.log('\nThese are ceilings with a lot of headroom, so one of them going over is');
+  console.log('a real change rather than noise — but check the machine is not busy before');
+  console.log('going looking. `--report` measures without failing.');
+  process.exitCode = 1;
+}
