@@ -401,10 +401,19 @@ function buildTopbar() {
     }
   });
 
-  lib.events.on('progress', ({ done, total }) => {
+  lib.events.on('progress', ({ done, total, file }) => {
     progress.hidden = false;
     progress.querySelector('.scan-text').textContent =
       total ? `Reading ${done.toLocaleString()} of ${total.toLocaleString()}` : 'Scanning…';
+    /* I2: which file. On a large import the bar alone is twenty minutes of a
+       bar, and it is the one that is taking a long time that you want named. */
+    let now = progress.querySelector('.scan-file');
+    if (!now) {
+      now = el('div', { class: 'scan-file' });
+      progress.appendChild(now);
+    }
+    now.textContent = file || '';
+    now.hidden = !file;
   });
   lib.events.on('scan', (on, report) => {
     if (on) { progress.hidden = false; progress.querySelector('.scan-text').textContent = 'Scanning…'; }
@@ -450,6 +459,17 @@ function announceImport(report) {
     });
   } else {
     toast(`Added ${report.added.toLocaleString()} ${report.added === 1 ? 'track' : 'tracks'}`);
+  }
+
+  /* I2: and what it could not read. A separate toast rather than a clause,
+     because the two are different news and the second one is the one somebody
+     may want to act on — it carries a way to see the list rather than a
+     number they can do nothing with. */
+  if (report.failed) {
+    toast(`${report.failed} ${report.failed === 1 ? 'file' : 'files'} had nothing in ${report.failed === 1 ? 'it' : 'them'} to read`, {
+      duration: 7000,
+      action: { label: 'Which?', onSelect: () => { location.hash = '#/settings'; } },
+    });
   }
 }
 
@@ -1088,6 +1108,11 @@ async function boot() {
     ? `${lib.trackCount().toLocaleString()} TRACKS · ${lib.state.albums.length.toLocaleString()} ALBUMS`
     : 'NO LIBRARY YET');
   await stats.init();
+  /* I1: notice files added while the application was open. Not a watcher —
+     there is no filesystem event to subscribe to here — but a check when the
+     window comes back after a couple of minutes away, which is when somebody
+     has been off doing exactly that. */
+  lib.watchForChanges();
   intro.report(lib.serial);
 
   navigate();

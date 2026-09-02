@@ -78,8 +78,12 @@ function ensureWorker() {
       if (done) { coverWaits.delete(msg.id); done(msg.blob ? msg : null); }
       return;
     }
+    if (msg.type === 'failed') {
+      noteScanFailure(msg.name, msg.reason);
+      return;
+    }
     if (msg.type === 'progress') {
-      state.progress = { done: msg.done, total: msg.total };
+      state.progress = { done: msg.done, total: msg.total, file: msg.file || '' };
       events.emit('progress', state.progress);
     } else if (msg.type === 'done') {
       flushArt();
@@ -94,6 +98,24 @@ function ensureWorker() {
 function absorb(batch) {
   const rows = [];
   for (const { track, art } of batch) {
+    /* Nothing from the file itself.
+     *
+     * Not "no artist and no album": the reader falls back to the folder tree,
+     * so `Broken/Album/03 Bogus.mp3` arrives with an artist and an album that
+     * were never in the file. `guessed` is the list of fields it had to take
+     * from the path, and a track where that covers both is a track the reader
+     * learned nothing from — which is exactly the file somebody is looking for
+     * when their library has come out wrong.
+     *
+     * Counted while the batch is in hand rather than by walking the library
+     * afterwards, and only during a scan, so a rescan that touches nothing
+     * reports nothing. */
+    if (state.scanning) {
+      const g = String(track.guessed || '').split(' ');
+      if (g.includes('artist') && g.includes('album')) {
+        noteScanFailure(track.name || track.path || track.id, 'nothing in the file — read from the folder name');
+      }
+    }
     /* Corrections the listener made survive a rescan.
      *
      * The parser hands back what the file says, and what the file says has not
@@ -461,7 +483,12 @@ function scheduleReindex() {
 export function reindex() {
   const albumBy = new Map();
 
-  for (const t of state.tracks.values()) {
+  /* I4: a folder switched off is not in the library today. Filtered rather
+     than deleted, which is the whole point — the tracks stay in the index with
+     every correction, favourite and play count attached, and turning the
+     folder back on is this function running again rather than twenty minutes
+     of rescanning. */
+  for (const t of live()) {
     let al = albumBy.get(t.albumKey);
     if (!al) {
       albumBy.set(t.albumKey, al = {
@@ -493,7 +520,7 @@ export function reindex() {
   mergeAlbums(albumBy);
 
   const artistBy = new Map();
-  for (const t of state.tracks.values()) {
+  for (const t of live()) {
     let ar = artistBy.get(t.artistKey);
     if (!ar) {
       artistBy.set(t.artistKey, ar = {
@@ -630,10 +657,38 @@ function mergeAlbums(albumBy) {
 
 /* ------------------------------------------------------------------ queries */
 
-export const allTracks = () => [...state.tracks.values()];
+/* I4: what is in the library *today*.
+ *
+ * `state.tracks` is the index, which holds everything ever scanned including
+ * the tracks of a folder that has been switched off — that is the whole point
+ * of switching one off rather than removing it, since the corrections and
+ * favourites hang on those rows. Everything that answers "what is in the
+ * library" goes through here; `getTrack` deliberately does not, because a
+ * queued or favourited track from a folder that is off is still a track that
+ * exists and asking for it by id should find it. */
+function* live() {
+  const off = offRoots();
+  for (const t of state.tracks.values()) {
+    if (off.size && off.has(t.rootId)) continue;
+    yield t;
+  }
+}
+const offRoots = () => {
+  const out = new Set();
+  for (const r of state.roots) if (r.off) out.add(r.id);
+  return out;
+};
+
+export const allTracks = () => [...live()];
 export const getTrack = (id) => state.tracks.get(id);
 export const isAvailable = (id) => handles.has(id);
-export const trackCount = () => state.tracks.size;
+export const trackCount = () => {
+  const off = offRoots();
+  if (!off.size) return state.tracks.size;
+  let n = 0;
+  for (const _ of live()) n++;
+  return n;
+};
 
 export function sortTracks(list, key, dir = 1) {
   const by = {
@@ -763,7 +818,7 @@ export function search(query, limit = 60) {
      names no words at all and should return every track that satisfies both,
      rather than the empty result an all-text search would give. */
   if (parsed.filters.length && !parsed.words.length) {
-    const hits = [...state.tracks.values()].filter((t) => parsed.filters.every((f) => f.test(t)));
+    const hits = [...live()].filter((t) => parsed.filters.every((f) => f.test(t)));
     return {
       query,
       tracks: sortTracks(hits, 'title', 1).slice(0, limit),
@@ -789,7 +844,7 @@ export function search(query, limit = 60) {
   };
 
   const tracks = [];
-  for (const t of state.tracks.values()) {
+  for (const t of live()) {
     // Words and filters are an AND: "beatles unplayed" means both.
     if (parsed.filters.length && !parsed.filters.every((f) => f.test(t))) continue;
     const s = scoreOf(t.search, t.title);
@@ -1181,7 +1236,77 @@ export async function addDataTransfer(dt) {
 }
 
 /** Walks a handle root, diffs against what we already know, imports the rest. */
+/* ------------------------------------------------------------------ I1
+ *
+ * Checking for new files.
+ *
+ * The library rescans at launch and never again: add an album to the folder
+ * while the application is open and nothing happens, with no way to ask short
+ * of reloading the page. The scan already re-parses only what changed — size
+ * and modification time decide — so asking again is cheap and the answer is
+ * usually "nothing".
+ */
+export async function rescanAll() {
+  const roots = state.roots.filter((r) => r.handle && !r.off);
+  if (!roots.length) return { ok: false, reason: 'nothing to scan' };
+  for (const root of roots) await scanRoot(root);
+  lastCheck = Date.now();
+  return { ok: true, roots: roots.length };
+}
+
+let lastCheck = 0;
+export const lastChecked = () => lastCheck;
+
+/* And automatically, when the window comes back after a while.
+ *
+ * "A while" rather than every focus: alt-tabbing to a browser and back is not
+ * a reason to walk twenty thousand files, and a scan that runs every time you
+ * glance at another window is a scan that is always running. Two minutes is
+ * long enough that this is a return rather than a glance. */
+const AUTO_CHECK_AFTER = 2 * 60 * 1000;
+
+export function watchForChanges() {
+  const onFocus = () => {
+    if (state.scanning) return;
+    if (Date.now() - lastCheck < AUTO_CHECK_AFTER) return;
+    if (!state.roots.some((r) => r.handle && !r.off)) return;
+    lastCheck = Date.now();
+    idle(() => { rescanAll().catch(() => {}); });
+  };
+  addEventListener('focus', onFocus);
+  return () => removeEventListener('focus', onFocus);
+}
+
+/* ------------------------------------------------------------------ I4
+ *
+ * Turning a folder off without removing it.
+ *
+ * Multiple folders are supported and the only two options were keep and
+ * remove — and removing empties everything that came from it, corrections and
+ * favourites included. A drive that is not plugged in today is not a folder
+ * you want to forget.
+ *
+ * Off means hidden from the library and left in the index: the tracks stay in
+ * IndexedDB with everything attached to them, and turning it back on is a
+ * reindex rather than a rescan.
+ */
+export async function setRootOff(id, off) {
+  const root = state.roots.find((r) => r.id === id);
+  if (!root) return false;
+  root.off = !!off;
+  await db.putRoot(serialiseRoot(root)).catch(() => {});
+  reindex();
+  events.emit('roots');
+  events.emit('change');
+  return true;
+}
+
+export const isRootOff = (id) => !!state.roots.find((r) => r.id === id)?.off;
+
 export async function scanRoot(root) {
+  // A folder that has been switched off is not scanned. It still has its
+  // tracks in the index; they are simply not in the library today.
+  if (root.off) return;
   // The loose-files bucket has no directory to walk: its handles are held
   // individually, and re-scanning it would diff against an empty listing and
   // delete every track in it.
@@ -1270,7 +1395,46 @@ async function ingest(root, entries) {
   scheduleReindex();
 }
 
-const serialiseRoot = (r) => ({ id: r.id, name: r.name, kind: r.kind, handle: r.handle, count: r.count });
+const serialiseRoot = (r) =>
+  ({ id: r.id, name: r.name, kind: r.kind, handle: r.handle, count: r.count, off: !!r.off });
+
+/* I2: what this run could not do.
+ *
+ * The scan bar shows progress, which on a twenty-thousand-file import is
+ * twenty minutes of a bar — and anything unreadable was folded into a count
+ * nobody could open. A file that failed has a name and a reason, and both are
+ * worth more than the number.
+ *
+ * Capped, because a folder of the wrong kind of file produces one failure per
+ * file and a list of nine thousand is not a list. The count is exact; the
+ * names stop at fifty. */
+const FAILURE_CAP = 50;
+let scanFailures = [];
+let scanFailCount = 0;
+
+/** Files this run could not read, and why. */
+export const lastFailures = () => ({ list: scanFailures.slice(), total: scanFailCount });
+
+/**
+ * Called for a file the import could not read properly.
+ *
+ * Two different things end up here and both belong in the same list, because
+ * the question being answered is "which files came in badly":
+ *
+ *   — the tag reader threw. Rare: it is deliberately forgiving and returns
+ *     something for a truncated FLAC, an empty MP3 and a file of pure noise,
+ *     all of which were tried. This is the safety net for a real read error —
+ *     a file that vanishes mid-scan, a permission withdrawn, a device that
+ *     stops answering.
+ *   — the file was read and said nothing. This is the common one, and it is
+ *     the one that leaves a library looking mysteriously wrong: a track with
+ *     a filename for a title, no artist and no album is indistinguishable
+ *     from a badly tagged rip until somebody says which files they were.
+ */
+export function noteScanFailure(name, reason) {
+  scanFailCount++;
+  if (scanFailures.length < FAILURE_CAP) scanFailures.push({ name, reason });
+}
 
 function startScan() {
   if (state.scanning) return;
@@ -1278,9 +1442,13 @@ function startScan() {
   // Folds from before this import — the ones the launch reindex did — are the
   // library's history, not this import's news.
   mergedThisScan.clear();
-  state.progress = { done: 0, total: 0 };
+  scanFailures = [];
+  scanFailCount = 0;
+  scanStartedAt = Date.now();
+  state.progress = { done: 0, total: 0, file: '' };
   events.emit('scan', true);
 }
+let scanStartedAt = 0;
 
 function finishScan() {
   if (!state.scanning) return;
@@ -1292,8 +1460,48 @@ function finishScan() {
   const added = state.progress.total || 0;
   const merged = [...mergedThisScan].map(([key, title]) => ({ key, title }));
   mergedThisScan.clear();
-  events.emit('scan', false, { added, merged });
-  state.progress = { done: 0, total: 0 };
+  const report = {
+    at: Date.now(),
+    ms: scanStartedAt ? Date.now() - scanStartedAt : 0,
+    added,
+    merged,
+    failed: scanFailCount,
+    failures: scanFailures.slice(),
+  };
+  /* I3: kept, not just toasted. "Added 50 tracks · merged Graduation" named
+     the merge, which is exactly right, and then it was gone in four seconds
+     and the merge was unreviewable. The last few runs are written down. */
+  rememberRun(report);
+  events.emit('scan', false, report);
+  state.progress = { done: 0, total: 0, file: '' };
+}
+
+/* ------------------------------------------------------------------ I3
+ *
+ * The last few import runs, kept. Five, because the question this answers is
+ * "what did that last import do" and the answer stops being interesting well
+ * before it stops being storable. */
+const RUN_LIMIT = 5;
+let runs = [];
+
+export const importRuns = () => runs.slice();
+
+function rememberRun(report) {
+  // A run that did nothing is not news. Startup rescans of an unchanged folder
+  // are most of the runs there are, and a history of "added 0" is a history of
+  // nothing.
+  if (!report.added && !report.failed && !report.merged.length) return;
+  runs.unshift({
+    at: report.at,
+    ms: report.ms,
+    added: report.added,
+    failed: report.failed,
+    merged: report.merged.map((m) => m.title),
+    failures: report.failures.slice(0, 12),
+  });
+  runs = runs.slice(0, RUN_LIMIT);
+  db.setKV('importRuns', runs).catch(() => {});
+  events.emit('runs');
 }
 
 /** Fallback for browsers without module workers. Chunked so the UI survives. */
@@ -1345,12 +1553,6 @@ export async function removeRoot(rootId) {
   if (orphans.length) {
     for (const k of orphans) { artMisses.delete(k); artURLs.delete(k); }
     db.deleteArt(orphans).catch(() => {});
-  }
-}
-
-export async function rescanAll() {
-  for (const root of state.roots) {
-    if (root.handle) await scanRoot(root);
   }
 }
 
@@ -1596,7 +1798,7 @@ export const favouriteTracks = () =>
 
 /** Paints the stored library first, then reconnects to disk in the background. */
 export async function init() {
-  const [tracks, roots, playlists, recent, faves, sn, own] = await Promise.all([
+  const [tracks, roots, playlists, recent, faves, sn, own, savedRuns] = await Promise.all([
     db.getAllTracks().catch(() => []),
     db.getRoots().catch(() => []),
     db.getPlaylists().catch(() => []),
@@ -1604,6 +1806,7 @@ export async function init() {
     db.getKV('favourites').catch(() => null),
     db.getKV('serial').catch(() => null),
     db.getKV('ownArt').catch(() => null),
+    db.getKV('importRuns').catch(() => null),
   ]);
 
   serial = typeof sn === 'string' && sn ? sn : makeSerial();
@@ -1625,6 +1828,12 @@ export async function init() {
       if (accent) accents.set(k, accent);
     }
   }
+  // I3: what the last few imports did, across sessions — the question "what
+  // did that import do" is usually asked after a reload.
+  if (Array.isArray(savedRuns)) {
+    runs = savedRuns.filter((r) => r && typeof r.at === 'number').slice(0, RUN_LIMIT);
+  }
+
   reindex();
   events.emit('ready');
 

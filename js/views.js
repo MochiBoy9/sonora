@@ -2918,6 +2918,7 @@ function bandOverview(artistName) {
 /* ------------------------------------------------------------------ SETTINGS */
 
 function viewSettings(host) {
+  const offs = [];
   const head = el('header', { class: 'page-head' },
     el('p', { class: 'eyebrow', text: 'System' }),
     el('h1', { class: 'page-title', text: 'Settings' }),
@@ -3167,24 +3168,44 @@ function viewSettings(host) {
   const folders = el('section', { class: 'block' }, sectionHead('Music folders'));
   const list = el('div', { class: 'rows' });
 
+  const onOff = (root) => {
+    const btn = el('button', {
+      class: 'switch' + (root.off ? '' : ' is-on'),
+      role: 'switch', 'aria-checked': String(!root.off),
+      title: root.off ? 'Bring this folder back into the library' : 'Hide this folder without forgetting anything about it',
+    }, el('span', { class: 'switch-knob' }));
+    btn.addEventListener('click', async () => {
+      await lib.setRootOff(root.id, !root.off);
+      paintRoots();
+      toast(root.off ? `“${root.name}” is back` : `“${root.name}” hidden — nothing was forgotten`);
+    });
+    return btn;
+  };
+
   const paintRoots = () => {
     list.textContent = '';
     if (!lib.state.roots.length) {
       list.appendChild(el('p', { class: 'muted', text: 'No folders added yet.' }));
     }
     for (const root of lib.state.roots) {
-      const row = el('div', { class: 'settings-row' },
+      const row = el('div', { class: 'settings-row' + (root.off ? ' is-off' : '') },
         el('div', { class: 'settings-ico', html: ico('folder') }),
         el('div', { class: 'settings-text' },
           el('div', { class: 'settings-name', text: root.name }),
           el('div', { class: 'settings-note', text:
-            root.needsPermission ? 'Permission needed — click Reconnect'
+            root.off ? 'Off — its tracks are out of the library, and everything you have told Sonora about them is kept'
+            : root.needsPermission ? 'Permission needed — click Reconnect'
             : root.needsReconnect ? 'Re-add this folder to play its files this session'
             : `${fmtCount(root.count || 0, 'file')} · ${root.kind === 'handle' ? 'linked folder' : 'session only'}` })),
         el('div', { class: 'settings-actions' },
+          /* I4: off, not gone. The only two options were keep and remove, and
+             removing empties everything that came from the folder —
+             corrections and favourites included. A drive that is not plugged
+             in today is not a folder you want to forget. */
+          onOff(root),
           (root.needsPermission || root.needsReconnect)
             ? el('button', { class: 'btn ghost sm', text: 'Reconnect', onclick: () => document.dispatchEvent(new CustomEvent('sonora:add')) })
-            : el('button', { class: 'btn ghost sm', text: 'Rescan', onclick: () => lib.scanRoot(root) }),
+            : el('button', { class: 'btn ghost sm', text: 'Rescan', disabled: !!root.off, onclick: () => lib.scanRoot(root) }),
           el('button', {
             class: 'icon-btn', html: ico('trash'), title: 'Remove',
             onclick: () => dialog({
@@ -3202,6 +3223,75 @@ function viewSettings(host) {
     el('button', { class: 'btn primary', html: ico('plus') + '<span>Add folder</span>', onclick: () => document.dispatchEvent(new CustomEvent('sonora:add')) }),
     el('button', { class: 'btn ghost', html: ico('refresh') + '<span>Rescan all</span>', onclick: () => lib.rescanAll() })));
   host.appendChild(folders);
+
+  /* --- what the imports did ---
+   *
+   * I3. "Added 50 tracks · merged Graduation" was a toast: it named the merge,
+   * which is exactly right, and then it was gone in four seconds and the merge
+   * was unreviewable. I2's failures had nowhere to be read at all. The last few
+   * runs are kept and both live here.
+   */
+  const imports = el('section', { class: 'block' }, sectionHead('Recent imports'));
+  const runList = el('div', { class: 'rows' });
+  imports.appendChild(runList);
+  imports.appendChild(el('div', { class: 'toolbar' },
+    el('button', {
+      class: 'btn ghost', html: ico('refresh') + '<span>Check for new files</span>',
+      title: 'Walk the folders again. Only files that changed are re-read.',
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        const r = await lib.rescanAll();
+        btn.disabled = false;
+        if (!r.ok) toast('No folders to check');
+      },
+    })));
+
+  const paintRuns = () => {
+    const runs = lib.importRuns();
+    runList.textContent = '';
+    if (!runs.length) {
+      runList.appendChild(el('p', { class: 'muted', text: 'Nothing imported yet this library. Runs that add, merge or fail on something are listed here.' }));
+      return;
+    }
+    for (const run of runs) {
+      const bits = [];
+      if (run.added) bits.push(fmtCount(run.added, 'track') + ' added');
+      if (run.merged.length) bits.push('merged ' + run.merged.slice(0, 3).map((t) => `“${t}”`).join(', ') +
+        (run.merged.length > 3 ? ` and ${run.merged.length - 3} more` : ''));
+      if (run.failed) bits.push(`${run.failed} read from the folder name`);
+
+      const row = el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-ico', html: ico(run.failed ? 'info' : 'database') }),
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: fmtAgo(run.at) + (run.ms > 1500 ? ` · ${(run.ms / 1000).toFixed(0)}s` : '') }),
+          el('div', { class: 'settings-note', text: bits.join(' · ') || 'Nothing changed' })),
+        el('div', { class: 'settings-actions' },
+          run.failures.length
+            ? el('button', {
+              class: 'btn ghost sm', text: 'Which ones',
+              onclick: () => dialog({
+                title: `${fmtCount(run.failed, 'file')} Sonora learned nothing from`,
+                width: 520,
+                body: el('div', {},
+                  el('p', { class: 'muted', text: 'Everything about these came from the folder they are in rather than from the files themselves. They were imported all the same, and they play — but the artist and album are a guess, and this is the list to check when the library has come out wrong. Sonora never writes to your files.' }),
+                  el('ul', { class: 'fail-list' }, run.failures.map((f) =>
+                    el('li', {},
+                      el('span', { class: 'fail-name', text: f.name }),
+                      el('span', { class: 'fail-why', text: f.reason })))),
+                  run.failed > run.failures.length
+                    ? el('p', { class: 'muted', text: `and ${run.failed - run.failures.length} more` })
+                    : null),
+                actions: [{ label: 'Close', primary: true }],
+              }),
+            })
+            : null));
+      runList.appendChild(row);
+    }
+  };
+  paintRuns();
+  offs.push(lib.events.on('runs', paintRuns));
+  host.appendChild(imports);
 
   /* --- connection --- */
   const conn = el('section', { class: 'block' }, sectionHead('Connection'));
@@ -3637,9 +3727,9 @@ function viewSettings(host) {
     el('p', { class: 'muted small mono', text: lib.serial }));
   host.appendChild(about);
 
-  enter([head, folders, conn, appearance, viz, online, listening, storage, shape, keys, about], { each: 34, y: 12 });
-  const off = lib.events.on('roots', paintRoots);
-  return () => off();
+  enter([head, folders, imports, conn, appearance, viz, online, listening, storage, shape, keys, about], { each: 34, y: 12 });
+  offs.push(lib.events.on('roots', paintRoots));
+  return () => { while (offs.length) offs.pop()(); };
 }
 
 /**
