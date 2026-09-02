@@ -1,6 +1,6 @@
 /* app.js — shell: routing, navigation, search, shortcuts, theming, ingestion. */
 
-import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle, fmtTime } from './util.js';
+import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle, fmtTime, fmtAgo, fmtCount } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { renderView, hasLiveSelection } from './views.js';
@@ -709,6 +709,8 @@ function registerKeys() {
       alt: 'Mod+Y', run: () => { runUndo(true); } });
   K({ id: 'undo', group: 'The library', combo: 'Mod+Z', label: 'Undo the last change',
       run: () => { runUndo(false); } });
+  K({ id: 'history', group: 'The library', combo: 'H', label: 'Everything you have changed',
+      run: () => { showHistory(); } });
 
   /* Before the plain B below it, for the reason the Redo pair gives: a
      single-letter binding matches with Shift held, so ⇧B would otherwise be
@@ -859,6 +861,79 @@ function showShortcuts() {
  * reports the miss instead. The entry still moves to the redo side, because a
  * stack you cannot walk past is worse than one with a dud step in it.
  */
+/* D5: the stack, visible.
+ *
+ * Undo reaches every change the index holds and its whole interface was ⌘Z, so
+ * you could not see what you had done, could not tell what a run of edits
+ * amounted to, and could not step back past one thing to reach another. */
+let historySheet = null;
+
+function showHistory() {
+  if (historySheet) { historySheet.close(); historySheet = null; return; }
+
+  const body = el('div', { class: 'undo-history' });
+
+  const paint = () => {
+    const h = undoStack.history();
+    body.textContent = '';
+
+    if (!h.past.length && !h.future.length) {
+      body.appendChild(el('p', { class: 'muted', text: 'Nothing to take back yet. Corrections, playlists, favourites and imports all land here.' }));
+      return;
+    }
+
+    /* Newest first, which is the order they will be undone in — a list that
+       reads top to bottom and undoes bottom to top would be a list nobody can
+       aim with. Anything already undone sits above the line, greyed, because
+       it is still reachable by redo and pretending otherwise loses it. */
+    if (h.future.length) {
+      const ul = el('ul', { class: 'undo-list is-future' });
+      for (const e of [...h.future].reverse()) {
+        ul.appendChild(el('li', {},
+          el('span', { class: 'undo-label', text: e.label }),
+          el('span', { class: 'undo-when', text: 'undone' })));
+      }
+      body.appendChild(el('h4', { class: 'undo-head', text: 'Taken back' }));
+      body.appendChild(ul);
+    }
+
+    const ul = el('ul', { class: 'undo-list' });
+    for (const e of [...h.past].reverse()) {
+      const row = el('li', {},
+        el('span', { class: 'undo-label', text: e.label }),
+        el('span', { class: 'undo-when', text: e.at ? fmtAgo(e.at) : '' }),
+        el('button', {
+          class: 'btn sm ghost',
+          /* What the button does is what the list is for: not "undo this one"
+             — the stack is ordered and a hole in it is not a thing that can
+             exist — but "put everything back to here", which is the question
+             somebody scrolling a history is actually asking. */
+          text: e.depth === 1 ? 'Undo' : `Back to here (${e.depth})`,
+          title: `Takes back ${e.depth === 1 ? 'this change' : `these ${e.depth} changes`}`,
+          onclick: async () => {
+            const n = await undoStack.undoTo(e.depth);
+            toast(n === e.depth ? `Took back ${fmtCount(n, 'change')}` : `Took back ${n} of ${e.depth} — the rest could not be undone`);
+            paint();
+          },
+        }));
+      ul.appendChild(row);
+    }
+    if (h.future.length) body.appendChild(el('h4', { class: 'undo-head', text: 'Done' }));
+    body.appendChild(ul);
+  };
+
+  paint();
+  const off = undoStack.events.on('change', paint);
+
+  historySheet = dialog({
+    title: 'What you have changed',
+    body,
+    width: 520,
+    actions: [{ label: 'Close', primary: true }],
+    onClose: () => { off(); historySheet = null; },
+  });
+}
+
 async function runUndo(redo) {
   const label = redo ? undoStack.nextRedo() : undoStack.nextUndo();
   if (!label) { toast(redo ? 'Nothing to redo' : 'Nothing to undo'); return; }

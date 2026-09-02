@@ -25,6 +25,7 @@ import * as rack from './audio.js';
 import * as band from './band.js';
 import * as session from './session.js';
 import * as looks from './looks.js';
+import * as backup from './backup.js';
 
 const ROW_H = 56;
 
@@ -3376,6 +3377,122 @@ function viewSettings(host) {
    * storage, which a browser short of room may evict without asking, and there
    * is no server copy to come back from, because there is no server.
    */
+  /* D3 and D4: the copy that lives somewhere else.
+   *
+   * The row above is honest about destroying the overlays and there was no way
+   * to take a copy first — which, in an application with no account and no
+   * server, means there was no other copy of months of corrections anywhere.
+   * Written and read as one JSON file. */
+  const backupNote = el('div', { class: 'settings-note',
+    text: 'Playlists, favourites, corrections, chosen covers, racks, listening totals and settings. Not the audio.' });
+  const withArt = el('button', {
+    class: 'switch', role: 'switch', 'aria-checked': 'false',
+    title: 'Include the artwork thumbnails. Much larger, and they can be rebuilt from your files in seconds.',
+  }, el('span', { class: 'switch-knob' }));
+  let artIn = false;
+  withArt.addEventListener('click', () => {
+    artIn = !artIn;
+    withArt.classList.toggle('is-on', artIn);
+    withArt.setAttribute('aria-checked', String(artIn));
+  });
+
+  const saveBackup = el('button', {
+    class: 'btn ghost sm', text: 'Save a backup',
+    onclick: async () => {
+      saveBackup.disabled = true;
+      saveBackup.textContent = 'Collecting…';
+      try {
+        const doc = await backup.build({ art: artIn });
+        const blob = new Blob([JSON.stringify(doc)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = el('a', { href: url, download: `sonora-backup-${doc.saved.slice(0, 10)}.json` });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toast(`Saved ${fmtCount(doc.counts.overlays, 'correction')} · ${fmtCount(doc.counts.playlists, 'playlist')} · ${fmtCount(doc.counts.favourites, 'favourite')}`);
+      } finally {
+        saveBackup.disabled = false;
+        saveBackup.textContent = 'Save a backup';
+      }
+    },
+  });
+
+  const restorePicker = el('input', {
+    type: 'file', accept: '.json,application/json', hidden: true,
+    onchange: async () => {
+      const file = restorePicker.files && restorePicker.files[0];
+      restorePicker.value = '';
+      if (file) offerBackup(await file.text());
+    },
+  });
+  const restoreBtn = el('button', {
+    class: 'btn ghost sm', text: 'Read one back',
+    onclick: () => restorePicker.click(),
+  });
+
+  /** Shows what merging a backup would do, and merges only if asked. */
+  function offerBackup(text) {
+    const read = backup.inspect(text);
+    if (!read.ok) { toast(read.reason); return; }
+    const s = read.summary;
+    const lines = [];
+    if (s.overlays) lines.push(`${fmtCount(s.overlays, 'correction')}, ${s.matched} of which match tracks you have`);
+    if (s.favourites) lines.push(`${fmtCount(s.favourites, 'favourite')}, ${s.favMatched} matched`);
+    if (s.playlists) lines.push(`${fmtCount(s.playlists, 'playlist')}, ${s.newPlaylists} new to this library`);
+    if (s.art) lines.push(`${fmtCount(s.art, 'cover')}`);
+
+    /* Settings are off by default and stated separately. The common case is a
+       fresh browser that has just rescanned the same folder, where what is
+       wanted back is the work — and quietly replacing the crossfade, the Look
+       and the output device with a six-month-old machine's is a surprise. */
+    let bringSettings = false;
+    const settingsSwitch = el('button', {
+      class: 'switch', role: 'switch', 'aria-checked': 'false',
+    }, el('span', { class: 'switch-knob' }));
+    settingsSwitch.addEventListener('click', () => {
+      bringSettings = !bringSettings;
+      settingsSwitch.classList.toggle('is-on', bringSettings);
+      settingsSwitch.setAttribute('aria-checked', String(bringSettings));
+    });
+
+    const body = el('div', {},
+      el('p', { text: read.saved ? `Saved ${read.saved.slice(0, 10)}.` : 'A Sonora backup.' }),
+      lines.length
+        ? el('ul', { class: 'backup-list' }, lines.map((t) => el('li', { text: t })))
+        : el('p', { class: 'muted', text: 'There is nothing in it this library does not already have.' }),
+      s.roots.length
+        ? el('p', { class: 'muted', text: `It came from: ${s.roots.join(', ')}. Folder permissions cannot be carried between browsers, so you will be asked to point at them again.` })
+        : null,
+      el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: 'Also bring the settings and the Look' }),
+          el('div', { class: 'settings-note', text: 'Off by default: what you usually want back is the work, not another machine\u2019s crossfade.' })),
+        el('div', { class: 'settings-actions' }, settingsSwitch)),
+      el('p', { class: 'muted', text: 'Nothing is replaced — this merges, and the whole merge is one undo.' }));
+
+    dialog({
+      title: 'Read this backup in?',
+      body,
+      width: 520,
+      actions: [
+        { label: 'Cancel' },
+        { label: 'Merge it in', primary: true, onSelect: async () => {
+          const res = await backup.merge(read, { settings: bringSettings });
+          if (!res.ok) { toast('That backup could not be read'); return; }
+          const d = res.done;
+          toast(`Restored ${fmtCount(d.overlays, 'correction')}, ${fmtCount(d.favourites, 'favourite')}, ${fmtCount(d.playlists, 'playlist')}`);
+        } },
+      ],
+    });
+  }
+
+  storage.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('file') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Backup' }), backupNote),
+    el('div', { class: 'settings-actions' }, withArt, saveBackup, restoreBtn, restorePicker)));
+
   const keepNote = el('div', { class: 'settings-note', text: 'Checking…' });
   const keepBtn = el('button', { class: 'btn ghost sm', text: 'Ask to keep it', hidden: true });
   storage.appendChild(el('div', { class: 'settings-row' },

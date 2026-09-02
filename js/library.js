@@ -210,6 +210,40 @@ function snapshotTracks(rows) {
 }
 
 /** Puts snapshots back. Returns how many tracks were still there to put back. */
+/**
+ * Writes whole tracks back to the index, for the backup importer.
+ *
+ * `restoreTracks` below is the undo path and only touches the editable fields,
+ * because that is all an undo of a correction may touch. A backup carries play
+ * counts and ratings as well, and the rows it hands over have already been
+ * merged field by field — so this writes what it is given and reindexes.
+ */
+export async function restoreFromBackup(rows) {
+  const out = [];
+  for (const row of rows) {
+    const t = state.tracks.get(row.id);
+    if (!t) continue;
+    Object.assign(t, row);
+    /* Assigned *and* cleared. `Object.assign` writes what the row has and
+       leaves everything it does not, so restoring a snapshot taken before a
+       correction left the correction's `edits` in place — and `applyEdits`
+       below then put the corrected title straight back. A restore that cannot
+       remove a field is not a restore. */
+    if (!row.edits) delete t.edits;
+    if (!row.orig) delete t.orig;
+    applyEdits(t);
+    t.albumKey = albumKeyOf(t.albumArtist || t.artist || '', t.album);
+    decorate(t);
+    out.push(t);
+  }
+  if (out.length) {
+    await db.putTracks(out).catch(() => {});
+    reindex();
+    events.emit('change');
+  }
+  return out.length;
+}
+
 async function restoreTracks(snaps) {
   const rows = [];
   for (const s of snaps) {
