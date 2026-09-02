@@ -1247,6 +1247,53 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 @media (max-width: 1180px) { .trow-played { display: none; } }
 @media (max-width: 1040px) { .trow-plays { display: none; } }
 
+/* B3: the stars.
+ *
+ * Drawn at rest as five faint outlines rather than as nothing, because a
+ * column that is invisible until you hover is a column nobody discovers. The
+ * unrated state is dim enough to read as "empty" from a metre away and solid
+ * enough to be a target. */
+.trow-rating { flex: none; width: 88px; }
+.rating {
+  display: inline-flex;
+  gap: 1px;
+  border-radius: var(--r-sm);
+  outline-offset: 2px;
+}
+.rating-star {
+  width: 16px; height: 20px;
+  display: grid; place-items: center;
+  padding: 0; border: 0; background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: .45;
+  transition: opacity .12s ease, color .12s ease, transform .12s var(--ease-out);
+}
+.rating-star svg { width: 13px; height: 13px; }
+.rating-star [href$="star-fill"] { display: none; }
+.rating-star.is-on {
+  color: var(--accent);
+  opacity: 1;
+}
+.rating-star.is-on [href$="star"] { display: none; }
+.rating-star.is-on [href$="star-fill"] { display: block; }
+.rating:hover .rating-star { opacity: .8; }
+.rating-star:hover { transform: scale(1.18); opacity: 1; }
+/* Hovering a star lights everything to its left, the way every rating control
+   since the beginning has — done with a sibling selector rather than script so
+   it costs nothing on a list that recycles its rows. */
+.rating:hover .rating-star:hover ~ .rating-star { opacity: .45; color: var(--text-3); }
+.rating:hover .rating-star:hover ~ .rating-star.is-on [href$="star-fill"] { display: none; }
+.rating:hover .rating-star:hover ~ .rating-star.is-on [href$="star"] { display: block; }
+.thead .trow-rating { width: 88px; }
+
+@media (max-width: 1120px) { .trow-rating { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rating-star { transition: none; }
+  .rating-star:hover { transform: none; }
+}
+
 /* Present to a screen reader, absent to everything else. Used for the live
    region that announces a queue row moving, which is not a visible event to
    somebody who cannot see the list. */
@@ -1678,3 +1725,44 @@ select.input { padding-right: 8px; }
 /* The backup preview's list of what a file would bring. */
 .backup-list { margin: 8px 0 12px 18px; padding: 0; }
 .backup-list li { margin: 3px 0; color: var(--text-2); font-size: calc(13px * var(--scale)); }
+
+/* C1/C2/C3: direct manipulation.
+ *
+ * A drop target has to say it is one *before* the drop, which is the whole
+ * difficulty with drag and drop as an interface — the affordance is invisible
+ * until you commit. `is-dragging-tracks` on the root lights every target the
+ * moment a drag starts, so the answer to "where can this go" is on screen
+ * while it can still be acted on. */
+.trow.is-dragging, .card.is-dragging { opacity: .4; }
+
+html.is-dragging-tracks .side-playlist:not(.is-smart),
+html.is-dragging-tracks .nav-item[data-route="favourites"] {
+  outline: 1px dashed rgb(var(--accent-rgb) / .38);
+  outline-offset: -2px;
+  border-radius: var(--r-sm);
+}
+html.is-dragging-tracks .side-playlist.is-smart { opacity: .45; }
+
+.is-drop-tracks {
+  background: rgb(var(--accent-rgb) / .16) !important;
+  outline: 1px solid var(--accent) !important;
+  outline-offset: -2px;
+}
+
+/* The count that follows the pointer when more than one thing is moving. Off
+   screen at the moment it is captured, so it never paints in place. */
+.drag-ghost {
+  position: fixed;
+  top: -200px; left: -200px;
+  min-width: 36px; height: 36px;
+  display: grid; place-items: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: var(--shadow-2);
+  pointer-events: none;
+}

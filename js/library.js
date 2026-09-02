@@ -96,6 +96,50 @@ function ensureWorker() {
 }
 
 /** Incoming batch from the parser: merge, persist, repaint. */
+/* ------------------------------------------------------------------ moves */
+
+/**
+ * B7: a track that moved, rather than one that vanished and one that arrived.
+ *
+ * A track's id is its root plus its path, so renaming a folder deletes every
+ * row under it and creates an identical set with different names — and every
+ * correction, favourite, play count, rating and measurement attached to the
+ * old ids goes with them. The file is the same file. Sonora had no way to know
+ * that, and quietly threw away a year of somebody's work for the crime of
+ * tidying up a directory.
+ *
+ * A move is recognised by the file itself: same byte length, same modification
+ * time, same duration, and — where the tagger wrote one — the same MusicBrainz
+ * recording id, which is B6 earning its keep. All four have to agree, because
+ * the cost of a false positive is a track wearing somebody else's history.
+ * Duration is checked in `absorb`, not here, because the new file has not been
+ * parsed yet when the match is proposed.
+ *
+ * The candidates are keyed by size and mtime and hold at most one track each:
+ * two files that are byte-identical and stamped identically are a duplicate,
+ * not a move, and guessing which of them moved where would be a coin toss.
+ */
+const moveCandidates = new Map();     // 'size:mtime' -> saved history, or null
+const pendingMoves = new Map();       // new track id -> saved history
+let movedCount = 0;                   // carried across in this scan, for the report
+
+/** Everything about a track that belongs to the listener rather than the file. */
+const HISTORY_KEYS = ['playCount', 'lastPlayed', 'rating', 'dr', 'bpm', 'bpmConfidence',
+                      'centroid', 'truncated', 'analysedAt', 'accent'];
+
+function saveHistory(t) {
+  const out = { id: t.id, mb: t.mbTrack || '', duration: t.duration || 0 };
+  if (t.edits) out.edits = { ...t.edits };
+  if (t.orig) out.orig = { ...t.orig };
+  for (const k of HISTORY_KEYS) if (t[k] !== undefined) out[k] = t[k];
+  out.favourite = isFavourite(t.id);
+  return out;
+}
+
+/** True where the saved history is worth carrying at all. */
+const worthCarrying = (h) =>
+  !!(h && (h.edits || h.favourite || h.playCount > 0 || h.rating > 0 || h.dr > 0 || h.bpm > 0));
+
 function absorb(batch) {
   const rows = [];
   for (const { track, art } of batch) {
@@ -125,6 +169,22 @@ function absorb(batch) {
      * Clearing an edit therefore reveals the file's own tag again instead of
      * leaving a blank, which is the behaviour that makes the feature safe to
      * use on a library you care about. */
+    /* A file that moved rather than appeared. The proposal was made from the
+       size and the timestamp; the duration and the recording id are checked
+       here, now that the file has actually been read. */
+    const moved = pendingMoves.get(track.id);
+    if (moved) {
+      pendingMoves.delete(track.id);
+      const sameLength = Math.abs((moved.duration || 0) - (track.duration || 0)) < 0.75;
+      const sameWork = !moved.mb || !track.mbTrack || moved.mb === track.mbTrack;
+      if (sameLength && sameWork) {
+        if (moved.edits) track.edits = moved.edits;
+        for (const k of HISTORY_KEYS) if (moved[k] !== undefined) track[k] = moved[k];
+        if (moved.favourite) toggleFavourite(track.id, true);
+        movedCount++;
+      }
+    }
+
     const prior = state.tracks.get(track.id);
     if (prior && prior.edits) {
       track.edits = prior.edits;
@@ -529,6 +589,12 @@ export function reindex() {
     al.duration += t.duration || 0;
     if (!al.accent && t.accent) al.accent = t.accent;
     if (t.year && (!al.year || t.year < al.year)) al.year = t.year;
+    /* B4: when the record came out, which is not when this copy was made. The
+       earliest wins for the same reason the year does — a set where one file
+       carries the original date and the rest don't is still that record. */
+    if (t.originalYear && (!al.originalYear || t.originalYear < al.originalYear)) {
+      al.originalYear = t.originalYear;
+    }
     if (t.addedAt > al.addedAt) al.addedAt = t.addedAt;
     al.plays += t.playCount || 0;
     if ((t.lastPlayed || 0) > al.lastPlayed) al.lastPlayed = t.lastPlayed;
@@ -1340,6 +1406,11 @@ export function sortTracks(list, key, dir = 1) {
     duration: (a, b) => (a.duration || 0) - (b.duration || 0),
     added:  (a, b) => (a.addedAt || 0) - (b.addedAt || 0),
     year:   (a, b) => (a.year || 0) - (b.year || 0),
+    /* B4: sorted by when the music is from, not when this copy was pressed —
+       a 2015 remaster of a 1971 record belongs with 1971, which is the whole
+       reason the original date is worth reading. */
+    released: (a, b) => (a.originalYear || a.year || 0) - (b.originalYear || b.year || 0),
+    rating: (a, b) => (a.rating || 0) - (b.rating || 0),
     // Unmeasured tracks sort as zero, which puts them at the quiet end
     // ascending and out of the way descending — either is better than
     // pretending they are the most squashed masters in the library.
@@ -1371,6 +1442,8 @@ export function sortAlbums(list, key, dir = 1) {
     artist: (a, b) => cmpText(a.artist, b.artist) || (a.year - b.year) || cmpText(a.title, b.title),
     title:  (a, b) => cmpText(a.title, b.title),
     year:   (a, b) => (a.year || 0) - (b.year || 0) || cmpText(a.artist, b.artist),
+    released: (a, b) => ((a.originalYear || a.year || 0) - (b.originalYear || b.year || 0))
+                        || cmpText(a.artist, b.artist),
     added:  (a, b) => (a.addedAt || 0) - (b.addedAt || 0),
     length: (a, b) => (a.duration || 0) - (b.duration || 0),
     tracks: (a, b) => a.tracks.length - b.tracks.length,
@@ -1400,6 +1473,18 @@ export function sortArtists(list, key, dir = 1) {
    `lossless` search filter, which have to agree about what the word means. */
 const LOSSLESS = new Set(['flac', 'wav', 'wave', 'aiff', 'aif', 'ape', 'wv', 'tta']);
 
+/**
+ * B2: the tempo, measured for preference and tagged as a fallback.
+ *
+ * Sonora derives BPM from the audio, which is the honest number and also the
+ * one that isn't there until the track has been analysed. A fully tagged
+ * library already knows, and refusing to read it means a DJ's collection
+ * starts from nothing. The measurement wins wherever it exists; anywhere the
+ * two are shown rather than compared, `tempoSource` says which this is.
+ */
+export const tempoOf = (t) => (t && t.bpm > 0 ? t.bpm : (t && t.bpmTag) || 0);
+export const tempoSource = (t) => (t && t.bpm > 0 ? 'measured' : t && t.bpmTag ? 'tagged' : '');
+
 /* ------------------------------------------------------------------ filters
  *
  * The one box people actually use only ever matched text in a title, an artist
@@ -1419,8 +1504,24 @@ const FILTERS = [
   [/^<(\d+(?:\.\d+)?)min$/, (t, m) => (t.duration || 0) > 0 && t.duration < +m[1] * 60],
   [/^dr>(\d+(?:\.\d+)?)$/, (t, m) => t.dr > 0 && t.dr > +m[1]],
   [/^dr<(\d+(?:\.\d+)?)$/, (t, m) => t.dr > 0 && t.dr < +m[1]],
-  [/^bpm>(\d+)$/, (t, m) => t.bpm > 0 && t.bpm > +m[1]],
-  [/^bpm<(\d+)$/, (t, m) => t.bpm > 0 && t.bpm < +m[1]],
+  [/^bpm>(\d+)$/, (t, m) => tempoOf(t) > +m[1]],
+  [/^bpm<(\d+)$/, (t, m) => tempoOf(t) > 0 && tempoOf(t) < +m[1]],
+  /* B4: the year the music is from, which for a reissue is not `year:`. Falls
+     back to the release date so `orig:1971` still finds a 1971 pressing that
+     was never remastered. */
+  [/^orig(?:inal)?:(\d{4})$/, (t, m) => (t.originalYear || t.year) === +m[1]],
+  [/^reissue$/, (t) => t.originalYear > 0 && t.year > 0 && t.originalYear < t.year],
+  /* B1: the comment, which is prose and so is searched rather than matched.
+     Kept out of the general haystack on purpose — a paragraph about a vinyl
+     rip should not outrank a song with the word in its title. */
+  [/^note:(.+)$/, (t, m) => !!t.comment && norm(t.comment).includes(norm(m[1]))],
+  [/^noted$/, (t) => !!t.comment],
+  /* B3: the stars. `rated` is any of them; the comparisons take one. */
+  [/^rated$/, (t) => (t.rating || 0) > 0],
+  [/^unrated$/, (t) => !(t.rating > 0)],
+  [/^rating>=?(\d)$/, (t, m) => (t.rating || 0) >= +m[1]],
+  [/^rating<=?(\d)$/, (t, m) => (t.rating || 0) > 0 && (t.rating || 0) <= +m[1]],
+  [/^rating:(\d)$/, (t, m) => (t.rating || 0) === +m[1]],
   [/^format:([a-z0-9]+)$/, (t, m) => ext(t.name || '') === m[1]],
   [/^fav(?:ourite)?$/, (t) => isFavourite(t.id)],
   [/^unplayed$/, (t) => !(t.playCount > 0)],
@@ -2057,12 +2158,40 @@ async function ingest(root, entries) {
     });
   }
 
-  // Anything under this root we no longer see on disk is gone.
+  /* Anything under this root we no longer see on disk is gone — or has moved,
+     which looks exactly the same from here. B7: what the listener put on it is
+     held aside under the file's own fingerprint before the row is dropped, and
+     claimed below by whichever new file turns out to be the same recording. */
   const stale = [];
+  moveCandidates.clear();
   for (const [id, t] of state.tracks) {
-    if (t.rootId === root.id && !seen.has(id)) { stale.push(id); state.tracks.delete(id); handles.delete(id); }
+    if (t.rootId !== root.id || seen.has(id)) continue;
+    stale.push(id);
+    state.tracks.delete(id);
+    handles.delete(id);
+    const history = saveHistory(t);
+    if (!worthCarrying(history)) continue;
+    const key = t.size + ':' + t.mtime;
+    // A second file with the same fingerprint makes the first ambiguous, and
+    // an ambiguous match is worse than none: both are struck out.
+    moveCandidates.set(key, moveCandidates.has(key) ? null : history);
   }
   if (stale.length) db.deleteTracks(stale).catch(() => {});
+
+  /* Now the other half: a job with no track behind it, whose file matches one
+     of the rows that just went. Claimed rather than copied — one departure can
+     only account for one arrival. */
+  if (moveCandidates.size) {
+    for (const job of jobs) {
+      if (state.tracks.has(job.id)) continue;
+      const key = job.size + ':' + job.mtime;
+      const history = moveCandidates.get(key);
+      if (!history) continue;
+      moveCandidates.delete(key);
+      pendingMoves.set(job.id, history);
+    }
+    moveCandidates.clear();
+  }
 
   root.count = seen.size;
   root.needsReconnect = false;
@@ -2135,6 +2264,8 @@ function startScan() {
   foundPlaylists = [];
   scanFailures = [];
   scanFailCount = 0;
+  movedCount = 0;
+  pendingMoves.clear();
   scanStartedAt = Date.now();
   state.progress = { done: 0, total: 0, file: '' };
   events.emit('scan', true);
@@ -2159,7 +2290,12 @@ function finishScan() {
     failed: scanFailCount,
     failures: scanFailures.slice(),
     playlistFiles: foundPlaylists.slice(),
+    // B7: files that turned out to have moved rather than been replaced. Worth
+    // saying out loud — it is the difference between a rename and a loss, and
+    // silence would leave the listener no way to tell which just happened.
+    moved: movedCount,
   };
+  pendingMoves.clear();
   /* I3: kept, not just toasted. "Added 50 tracks · merged Graduation" named
      the merge, which is exactly right, and then it was gone in four seconds
      and the merge was unreviewable. The last few runs are written down. */
@@ -2182,12 +2318,13 @@ function rememberRun(report) {
   // A run that did nothing is not news. Startup rescans of an unchanged folder
   // are most of the runs there are, and a history of "added 0" is a history of
   // nothing.
-  if (!report.added && !report.failed && !report.merged.length) return;
+  if (!report.added && !report.failed && !report.merged.length && !report.moved) return;
   runs.unshift({
     at: report.at,
     ms: report.ms,
     added: report.added,
     failed: report.failed,
+    moved: report.moved || 0,
     merged: report.merged.map((m) => m.title),
     failures: report.failures.slice(0, 12),
   });
@@ -2315,15 +2452,16 @@ export async function updatePlaylist(id, patch) {
   return p;
 }
 
+/** Returns how many were actually new to the playlist. */
 export async function addToPlaylist(id, trackIds) {
   const p = state.playlists.find((x) => x.id === id);
-  if (!p) return;
+  if (!p) return 0;
   const have = new Set(p.tracks);
   // Only the ones that were not already in it: undoing an add of a track that
   // was in the playlist beforehand must not remove it.
   const added = [...new Set(trackIds)].filter((t) => !have.has(t));
   for (const t of added) p.tracks.push(t);
-  if (!added.length) return;
+  if (!added.length) return 0;
   await db.putPlaylist(p).catch(() => {});
   events.emit('playlists');
   undo.push({
@@ -2341,6 +2479,7 @@ export async function addToPlaylist(id, trackIds) {
       return patchPlaylist(id, { tracks: cur.tracks.concat(added.filter((t) => !back.has(t))) });
     },
   });
+  return added.length;
 }
 
 export async function removePlaylist(id) {
@@ -2421,6 +2560,68 @@ export function notePlay(track) {
 }
 
 export const recentTracks = () => history.recent.map((id) => state.tracks.get(id)).filter(Boolean);
+
+/* ------------------------------------------------------------------ ratings */
+
+/**
+ * B3: stars, because a favourite is one bit.
+ *
+ * One bit can say "I love this" and cannot say "worth keeping but I never
+ * reach for it", which is most of a library. Zero to five, zero meaning
+ * unrated rather than bad — there is no way to express "actively hate" and
+ * there shouldn't be, since the answer to that is to delete the file.
+ *
+ * Unlike a favourite this lives *on* the track rather than in a list beside
+ * it, because unlike a favourite it is a judgment about the recording and not
+ * a shortlist with an order. Files arrive with a rating already in them —
+ * POPM, `rate`, `RATING` — and the tag is the starting position, not the
+ * final word: setting one here overwrites it and a rescan will not undo that,
+ * which is the same bargain every other correction makes.
+ */
+export async function setRating(ids, stars) {
+  const list = Array.isArray(ids) ? ids : [ids];
+  const n = Math.max(0, Math.min(5, Math.round(stars || 0)));
+  const rows = [];
+  const before = [];
+  for (const each of list) {
+    const t = typeof each === 'string' ? state.tracks.get(each) : each;
+    if (!t || (t.rating || 0) === n) continue;
+    before.push({ id: t.id, rating: t.rating || 0 });
+    if (n) t.rating = n; else delete t.rating;
+    rows.push(t);
+  }
+  if (!rows.length) return 0;
+
+  const apply = async (snap) => {
+    const back = [];
+    for (const { id, rating } of snap) {
+      const t = state.tracks.get(id);
+      if (!t) continue;
+      if (rating) t.rating = rating; else delete t.rating;
+      back.push(t);
+    }
+    await db.putTracks(back).catch(() => {});
+    events.emit('change');
+    return back.length;
+  };
+
+  await db.putTracks(rows).catch(() => {});
+  events.emit('change');
+  const after = rows.map((t) => ({ id: t.id, rating: t.rating || 0 }));
+  undo.push({
+    label: rows.length === 1 ? `the rating on “${rows[0].title}”` : `${rows.length} ratings`,
+    undo: () => apply(before),
+    redo: () => apply(after),
+  });
+  return rows.length;
+}
+
+/** The stars on a track, or on the tracks of an album where they agree. */
+export function ratingOf(tracks) {
+  const list = Array.isArray(tracks) ? tracks : [tracks];
+  const seen = new Set(list.filter(Boolean).map((t) => t.rating || 0));
+  return seen.size === 1 ? [...seen][0] : 0;
+}
 
 export function recentAlbums(limit = 12) {
   const seen = new Set(), out = [];

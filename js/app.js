@@ -20,6 +20,7 @@ import { startOffline } from './offline.js';
 import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
 import * as db from './db.js';
 import * as keys from './keys.js';
+import * as drag from './drag.js';
 import * as m3u from './m3u.js';
 import * as shopWindow from './idle.js';
 import * as peakmap from './peaks.js';
@@ -205,12 +206,23 @@ function buildSidebar() {
   pill = el('div', { class: 'nav-pill' });
   nav.appendChild(pill);
   NAV.forEach((item, i) => {
-    nav.appendChild(el('a', {
+    const link = el('a', {
       class: 'nav-item', href: '#/' + item.route, data: { route: item.route },
     },
       el('span', { class: 'nav-num', text: String(i + 1).padStart(2, '0') }),
       el('span', { class: 'nav-ico', html: ico(item.icon) }),
-      el('span', { class: 'nav-label', text: item.label })));
+      el('span', { class: 'nav-label', text: item.label }));
+    /* C1: Favourites is a destination for a drag as well as a place to go.
+       It is the only nav entry that holds a list somebody curates, so it is the
+       only one that can be dropped on. */
+    if (item.route === 'favourites') {
+      drag.acceptTracks(link, (ids) => {
+        let n = 0;
+        for (const id of ids) if (!lib.isFavourite(id)) { lib.toggleFavourite(id, true); n++; }
+        toast(n ? `Favourited ${fmtCount(n, 'track')}` : 'Already in your favourites');
+      });
+    }
+    nav.appendChild(link);
   });
 
   const playlistHead = el('div', { class: 'side-head' },
@@ -293,6 +305,21 @@ function buildSidebar() {
       row.classList.add('is-drop');
     });
     row.addEventListener('dragleave', () => row.classList.remove('is-drop'));
+
+    /* C1: and the drop everybody expected all along — tracks onto a playlist.
+       A smart shelf refuses, because it does not hold tracks: it describes
+       them, and dropping a song on a description is a request the shelf has no
+       way to honour. Saying so beats swallowing it. */
+    drag.acceptTracks(row, async (ids) => {
+      if (p.smart) {
+        toast(`“${p.name}” describes itself — it cannot be added to`);
+        return;
+      }
+      const n = await lib.addToPlaylist(p.id, ids);
+      if (n) toast(`Added ${fmtCount(n, 'track')} to “${p.name}”`, { duration: 3600 });
+      else toast(`Already in “${p.name}”`);
+    });
+
     row.addEventListener('drop', async (e) => {
       e.preventDefault();
       row.classList.remove('is-drop');
@@ -370,6 +397,15 @@ function buildSidebar() {
       e.preventDefault();
       head.classList.remove('is-drop');
       if (dragId) await lib.movePlaylist(dragId, f.id);
+    });
+    /* Tracks dropped on a folder open it rather than being filed into it — a
+       folder holds playlists, not songs, and the useful answer to "I aimed at
+       the folder" is to show what is inside so the aim can be corrected. */
+    drag.acceptTracks(head, () => {
+      openFolders.add(f.id);
+      saveOpen();
+      paintPlaylists();
+      toast('Drop it on a playlist inside the folder');
     });
     return head;
   };
@@ -592,6 +628,14 @@ function announceImport(report) {
     });
   } else {
     toast(`Added ${report.added.toLocaleString()} ${report.added === 1 ? 'track' : 'tracks'}`);
+  }
+
+  /* B7: and the ones that only appeared to be new. A rename of a folder used
+     to read as "added 400 tracks" with four hundred play counts silently gone;
+     saying so is how the listener knows it didn't happen. */
+  if (report.moved) {
+    toast(`${report.moved} ${report.moved === 1 ? 'file had' : 'files had'} moved · kept what you'd put on them`,
+      { duration: 6000 });
   }
 
   /* I2: and what it could not read. A separate toast rather than a clause,

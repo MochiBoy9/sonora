@@ -1590,6 +1590,28 @@ export function playNext(tracks) {
   warmNext();
 }
 
+/**
+ * C2: puts tracks at a chosen place in the queue.
+ *
+ * `playNext` and `enqueue` are the two ends of this; a drop lands wherever the
+ * pointer was, which is neither. The index is clamped rather than rejected —
+ * a drop past the last row means the end, which is what it looks like.
+ */
+export function insertAt(tracks, at) {
+  const ids = tracks.map((t) => (typeof t === 'string' ? t : t.id));
+  if (!ids.length) return 0;
+  const where = Math.max(0, Math.min(state.queue.length, at | 0));
+  state.queue.splice(where, 0, ...ids);
+  baseOrder.push(...ids);
+  noteOrigin(ids, 'Added');
+  // A track inserted before the playhead moves the playhead with it, so the
+  // song that is playing carries on being the song that is playing.
+  if (where <= state.index) state.index += ids.length;
+  if (state.index < 0 && state.queue.length) jumpTo(0);
+  else { events.emit('queue'); warmNext(); }
+  return ids.length;
+}
+
 export function enqueue(tracks) {
   const ids = tracks.map((t) => (typeof t === 'string' ? t : t.id));
   state.queue.push(...ids);

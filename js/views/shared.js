@@ -14,6 +14,7 @@ import * as player from '../player.js';
 import { Selection, emptyState, menu, paintArt, sectionHead, sleeve, toast, trackMenu, trackRowFactory } from '../ui.js';
 import { el, fmtCount, ico, norm } from '../util.js';
 import { VirtualList } from '../virtual.js';
+import * as drag from '../drag.js';
 import { viewHome } from './home.js';
 
 const ROW_H = 56;
@@ -269,6 +270,7 @@ export function columnHeader(columns, sortState, onSort) {
   if (columns.includes('dr')) html += '<div class="trow-dr"><button class="sortable" data-sort="dr" title="Dynamic range">DR</button></div>';
   if (columns.includes('plays')) html += '<div class="trow-plays"><button class="sortable" data-sort="plays" title="How many times you have played it">Plays</button></div>';
   if (columns.includes('played')) html += '<div class="trow-played"><button class="sortable" data-sort="played" title="When you last played it">Last</button></div>';
+  if (columns.includes('rating')) html += '<div class="trow-rating"><button class="sortable" data-sort="rating" title="What you made of it">Rating</button></div>';
   if (columns.includes('duration')) html += `<div class="trow-time"><button class="sortable" data-sort="duration">${ico('clock')}</button></div>`;
   html += '<div class="trow-actions"></div>';
   head.innerHTML = html;
@@ -411,7 +413,7 @@ export function letterRail({ getItems, keyOf, onJump }) {
 /* ------------------------------------------------------------------ cards */
 
 export function albumCard(album, { onOpen } = {}) {
-  const card = el('article', { class: 'card', tabindex: '0', role: 'button' });
+  const card = el('article', { class: 'card', tabindex: '0', role: 'button', draggable: 'true' });
   card.innerHTML =
     '<div class="card-art sleeve-stage">' +
       '<div class="sleeve">' +
@@ -451,6 +453,16 @@ export function albumCard(album, { onOpen } = {}) {
     const al = albumOf(card.dataset.key);
     if (al) menu(trackMenu(al.tracks, { origin: { type: 'album', key: al.key, label: al.title } }), { event: e });
   });
+
+  /* C3: a record can be picked up off the wall. It carries its tracks in the
+     order the album is in, which is the order somebody dragging a record
+     plainly means. */
+  card.addEventListener('dragstart', (e) => {
+    const al = albumOf(card.dataset.key);
+    if (!al || !drag.startAlbumDrag(e, [al.key], `“${al.title}”`)) { e.preventDefault(); return; }
+    card.classList.add('is-dragging');
+  });
+  card.addEventListener('dragend', () => { card.classList.remove('is-dragging'); drag.endDrag(); });
 
   if (album) renderAlbumCard(card, album);
   return card;

@@ -12,6 +12,7 @@ import { VirtualList } from './virtual.js';
 import { createVisualizer } from './visualizer.js';
 import { storedMode } from './stage.js';
 import { tick, animate, enter, ease, reduceMotion } from './motion.js';
+import * as drag from './drag.js';
 
 const ROW_H = 56;
 
@@ -273,6 +274,14 @@ function buildQueue(host) {
   const scroller = el('div', { class: 'queue-scroll' });
   host.appendChild(scroller);
 
+  /* C2: the panel itself takes a drop, so aiming at the empty space below the
+     last row means "at the end" rather than nothing at all. Rows stop their own
+     drops from reaching here, so a precise aim still wins. */
+  drag.acceptTracks(host, (ids) => {
+    player.enqueue(ids);
+    toast(`${fmtCount(ids.length, 'track')} added to the queue`);
+  });
+
   const emptyNode = emptyState({ icon: 'queue', title: 'The queue is empty', note: 'Play an album or add tracks to build one up.' });
 
   let items = [];
@@ -349,6 +358,16 @@ function buildQueue(host) {
         e.preventDefault();
         row.classList.remove('is-drop');
         const to = +row.dataset.at;
+        /* C2: a track dragged in from the library lands here rather than at
+           the end. Checked before the reorder, because a drag from outside has
+           no `dragFrom` and would otherwise fall through as a no-op. */
+        const incoming = drag.draggingTracks();
+        if (incoming) {
+          const n = player.insertAt(incoming.ids, to);
+          drag.endDrag();
+          if (n) toast(`${fmtCount(n, 'track')} into the queue`);
+          return;
+        }
         if (dragFrom < 0 || dragFrom === to) return;
         player.moveInQueue(dragFrom, to);
       });

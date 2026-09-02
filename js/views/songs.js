@@ -10,7 +10,7 @@ import { columnHeader, decode, letterRail, playAll, shuffleAll, trackTable } fro
 const songSort = { key: 'title', dir: 1 };
 
 export function viewSongs(host) {
-  const columns = ['index', 'art', 'title', 'album', 'dr', 'plays', 'played', 'duration'];
+  const columns = ['index', 'art', 'title', 'album', 'dr', 'plays', 'played', 'rating', 'duration'];
   const all = lib.allTracks();
   const head = el('header', { class: 'page-head' },
     el('p', { class: 'eyebrow', text: 'Library' }),

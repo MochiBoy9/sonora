@@ -447,6 +447,23 @@
 .back-spec dt { color: var(--text-3); text-transform: uppercase; letter-spacing: .16em; }
 .back-spec dd { margin: 0; color: var(--text-2); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* B1: the note off the file, set as a note is set on a real sleeve — small,
+   italic, and clamped to three lines so a rip log cannot push the catalogue
+   number off the bottom of the card. */
+.back-note {
+  flex: none;
+  margin: 5px 0 0;
+  font-size: calc(9px * var(--scale));
+  line-height: 1.42;
+  font-style: italic;
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .back-cat {
   flex: none;
   display: flex;
@@ -566,6 +583,11 @@
 .hero-facts { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
 .hero-link { color: var(--text); font-weight: 500; transition: color var(--dur-1) linear; }
 .hero-link:hover { color: var(--accent); }
+/* D1: a link that sits among facts rather than among names. It has to read as
+   part of the run of small print and still be plainly clickable, so it takes
+   the weight of the facts and keeps the underline on hover. */
+.hero-link.subtle { color: var(--text-2); font-weight: 400; }
+.hero-link.subtle:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .dot { width: 3px; height: 3px; background: currentColor; opacity: .45; }
 
 /* Wrapping rather than squeezing. Four controls and three gaps come to
@@ -2424,3 +2446,18 @@ body.lb-open { overflow: hidden; }
 .analysis-cell.is-warn .analysis-value { color: var(--warn); }
 .analysis-note { color: var(--text-3); font-size: calc(11.5px * var(--scale)); line-height: 1.35; }
 .analysis-foot { margin-top: 10px; font-size: calc(11.5px * var(--scale)); }
+
+/* D2: why a record is on the "Near this one" shelf. Printed under the card
+   rather than in a tooltip — the reason is the point of the shelf, and a claim
+   you have to hover to read is a claim nobody checks. */
+.card-why {
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

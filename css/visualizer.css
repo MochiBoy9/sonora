@@ -561,3 +561,18 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
   font-size: calc(13px * var(--scale));
   overflow-wrap: anywhere;
 }
+
+/* B1: the note off the file, set apart from the fields above it because it is
+   the only thing on this panel written in sentences. */
+.stage-credit-note {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: var(--hair) solid var(--line);
+  color: var(--text-3);
+  font-size: calc(12px * var(--scale));
+  line-height: 1.5;
+  font-style: italic;
+  max-height: 7.5em;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}

@@ -358,6 +358,8 @@ export function viewSettings(host) {
       if (run.merged.length) bits.push('merged ' + run.merged.slice(0, 3).map((t) => `“${t}”`).join(', ') +
         (run.merged.length > 3 ? ` and ${run.merged.length - 3} more` : ''));
       if (run.failed) bits.push(`${run.failed} read from the folder name`);
+      // B7. Worth its own clause: it is the run where nothing was lost.
+      if (run.moved) bits.push(fmtCount(run.moved, 'track') + ' re-filed after a move');
 
       const row = el('div', { class: 'settings-row' },
         el('div', { class: 'settings-ico', html: ico(run.failed ? 'info' : 'database') }),

@@ -163,8 +163,18 @@ export function openStage(backdrop) {
     const extra = [];
     if (t && t.albumArtist && t.albumArtist !== t.artist) extra.push(['On a record by', t.albumArtist]);
     if (t && t.album) extra.push(['From', t.album]);
+    // B4: the two dates, where they disagree. On a remaster this is the only
+    // place in the app that says what you are actually listening to.
+    if (t && t.originalYear && t.originalYear !== t.year) {
+      extra.push(['Originally', String(t.originalYear) + (t.year ? ` · this issue ${t.year}` : '')]);
+    }
+    /* B2: the tempo, and which of the two it is. Sonora measures one and the
+       file often claims one; showing either without saying which would make
+       them look like the same number, and they routinely are not. */
+    const bpm = lib.tempoOf(t);
+    if (bpm) extra.push(['Tempo', `${Math.round(bpm)} BPM · ${lib.tempoSource(t)}`]);
 
-    creditBtn.hidden = !rows.length && !extra.length;
+    creditBtn.hidden = !rows.length && !extra.length && !(t && t.comment);
     if (creditBtn.hidden) wantCredits = false;
     creditBox.hidden = !(wantCredits && !creditBtn.hidden);
     creditBtn.setAttribute('aria-pressed', wantCredits ? 'true' : 'false');
@@ -180,6 +190,9 @@ export function openStage(backdrop) {
       dl.append(el('dt', { text: label }), el('dd', { text: String(t[key]) }));
     }
     creditBox.appendChild(dl);
+    /* B1: and the note, under the rest, as prose rather than as a field. It is
+       the one thing here somebody wrote in sentences. */
+    if (t && t.comment) creditBox.appendChild(el('p', { class: 'stage-credit-note', text: t.comment }));
   }
 
   creditBtn.addEventListener('click', () => {

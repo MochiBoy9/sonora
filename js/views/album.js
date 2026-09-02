@@ -8,7 +8,32 @@ import { enter, tilt3d } from '../motion.js';
 import * as player from '../player.js';
 import { dialog, lightbox, menu, paintArt, playFab, sectionHead, sleeve, toast, trackMenu, trackRowFactory } from '../ui.js';
 import { el, fmtBytes, fmtCount, fmtTime, fmtTotal, formatName, ico } from '../util.js';
-import { albumOf, decode, markTransition, notFound, playAll, shelf, shuffleAll } from './shared.js';
+import { albumCard, albumOf, decode, markTransition, notFound, playAll, shelf, shuffleAll } from './shared.js';
+import * as similar from '../similar.js';
+
+/**
+ * D1: the genres of a set of tracks, as links, separated as the facts above
+ * them are.
+ *
+ * Two at most. A compilation can carry nine, and a hero that wraps onto a
+ * fourth line to list them all is a worse page than one that names the two
+ * that describe most of the record.
+ */
+function genreLinks(tracks) {
+  const count = new Map();
+  for (const t of tracks) {
+    const g = (t.genre || '').trim();
+    if (g) count.set(g, (count.get(g) || 0) + 1);
+  }
+  if (!count.size) return [];
+  const top = [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2);
+  const out = [];
+  for (const [name] of top) {
+    out.push(el('span', { class: 'dot' }));
+    out.push(el('a', { class: 'hero-link subtle', href: '#/genre/' + encodeURIComponent(name), text: name }));
+  }
+  return out;
+}
 
 /* ------------------------------------------------------------------ ALBUM */
 
@@ -35,7 +60,14 @@ export function viewAlbum(host, key) {
         album.year ? el('span', { class: 'dot' }) : null,
         el('span', { text: fmtCount(album.tracks.length, 'track') }),
         el('span', { class: 'dot' }),
-        el('span', { text: fmtTotal(album.duration) }))));
+        el('span', { text: fmtTotal(album.duration) }),
+        /* D1: the genre, and a door into the genre pages.
+         *
+         * I built the genre route, the wall and the per-genre page, and then
+         * linked to none of it from anywhere a genre is actually printed — the
+         * sidebar was the only way in. A genre on a record is the most natural
+         * link in the app and it was plain text. */
+        ...genreLinks(album.tracks))));
 
   const actions = el('div', { class: 'hero-actions' },
     playFab(() => playAll(album.tracks, 0, origin)),
@@ -150,6 +182,23 @@ export function viewAlbum(host, key) {
    * empty analysis panel teaches somebody that the feature is broken. */
   const analysis = analysisPanel(album);
   if (analysis) host.appendChild(analysis);
+
+  /* D2: and what sits near it.
+   *
+   * The same four measurements the panel above prints, used to answer the
+   * question the panel makes you want to ask. Each card carries the reason it
+   * is here, because a shelf of records with no stated basis is a shelf you
+   * have to take on trust — and this one is arithmetic, not taste, so it can
+   * afford to show its working. */
+  const near = similar.nearAlbum(key, 8);
+  if (near.length) {
+    const block = shelf('Near this one', near, (hit) => {
+      const card = albumCard(hit.album);
+      card.appendChild(el('div', { class: 'card-why', text: similar.reasonFor(hit) }));
+      return card;
+    });
+    if (block) host.appendChild(block);
+  }
 
   enter([hero], { y: 16, z: -90, wipe: true });
   enter(list.children, { each: 13, y: 8, delay: 80 });
@@ -582,10 +631,29 @@ export function backCover(album) {
     ? 'DR' + Math.round(drs.reduce((a, b) => a + b, 0) / drs.length) +
       (drs.length < album.tracks.length ? ` · ${drs.length} of ${album.tracks.length}` : '')
     : '');
+  // B4: a reissue says what it is a reissue of. Only where the two differ —
+  // "Released 1971 · Originally 1971" is a row that says nothing twice.
+  row('Originally', album.originalYear && album.originalYear !== album.year
+    ? String(album.originalYear) : '');
   row('Discs', discs.length > 1 ? String(discs.length) : '');
   row('On disk', bytes ? fmtBytes(bytes) : '');
   row('Runtime', album.duration ? fmtTotal(album.duration) : '');
   if (spec.children.length) back.appendChild(spec);
+
+  /* B1: the note somebody wrote into the file.
+   *
+   * The comment tag is where people put the thing that fits nowhere else —
+   * the pressing, the source, "rip from my own vinyl, 2009" — and Sonora read
+   * it for years and threw it away between the worker and the track. The back
+   * of a sleeve is where a note like that belongs.
+   *
+   * Printed once for the record where every track agrees, which is what a
+   * whole-album rip looks like; a compilation whose files each carry a
+   * different note gets nothing rather than an arbitrary one of them. */
+  const notes = new Set(album.tracks.map((t) => (t.comment || '').trim()).filter(Boolean));
+  if (notes.size === 1 && album.tracks.every((t) => (t.comment || '').trim())) {
+    back.appendChild(el('p', { class: 'back-note', text: [...notes][0] }));
+  }
 
   // The album key, which is a hash, set where a catalogue number goes. It is
   // the only stable name this record has inside the app.

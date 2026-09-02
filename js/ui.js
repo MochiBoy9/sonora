@@ -5,6 +5,7 @@ import * as lib from './library.js';
 import * as player from './player.js';
 import { animate, ease, enter, spring, settled } from './motion.js';
 import * as rules from './rules.js';
+import * as drag from './drag.js';
 
 /* ------------------------------------------------------------------ artwork */
 
@@ -248,7 +249,7 @@ export class Selection {
 
 export function trackRowFactory({ columns = ['index', 'title', 'album', 'duration'], onPlay, onMenu, onPick, selection }) {
   const create = () => {
-    const row = el('div', { class: 'trow', role: 'row', tabindex: '-1' });
+    const row = el('div', { class: 'trow', role: 'row', tabindex: '-1', draggable: 'true' });
     let html = '';
     if (columns.includes('index')) html += '<div class="trow-index"><span class="n"></span>' + eqMarkup +
       `<button class="trow-play" title="Play" aria-label="Play">${ico('play')}</button></div>`;
@@ -266,6 +267,11 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
        than of the file, which is a reason to be able to see it. */
     if (columns.includes('plays')) html += '<div class="trow-plays"></div>';
     if (columns.includes('played')) html += '<div class="trow-played"></div>';
+    /* B3: five stars, drawn as one strip of buttons rather than five controls.
+       A rating is a single value, so it behaves like a slider: arrow keys move
+       it, the same star again clears it, and the whole strip is one tab stop
+       so a table of five hundred rows does not become three thousand. */
+    if (columns.includes('rating')) html += ratingMarkup;
     if (columns.includes('duration')) html += '<div class="trow-time"></div>';
     html += '<div class="trow-actions">' +
       `<button class="icon-btn ghost trow-fav" aria-label="Favourite" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>` +
@@ -279,6 +285,15 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
     row.addEventListener('click', (e) => {
       if (e.target.closest('.trow-play')) return onPlay?.(parseInt(row.dataset.index, 10));
       if (e.target.closest('.trow-fav')) return toggleRowFavourite(row);
+      const star = e.target.closest('.rating-star');
+      if (star) {
+        const t = lib.getTrack(row.dataset.id);
+        const want = +star.dataset.star;
+        // The star you are already on means "no, none" — otherwise three stars
+        // is a floor you can never get back under without an edit dialog.
+        lib.setRating(row.dataset.id, (t && t.rating) === want ? 0 : want);
+        return;
+      }
       if (e.target.closest('.trow-more')) return onMenu?.(parseInt(row.dataset.index, 10), e.target.closest('.trow-more'));
       // A plain click on the row body picks it. Nothing used to happen here,
       // so this takes no gesture away from anybody.
@@ -291,6 +306,30 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
       e.preventDefault();
       onMenu?.(parseInt(row.dataset.index, 10), null, e);
     });
+    /* C1: a row can be picked up.
+     *
+     * A drag that starts on a row inside the selection takes the whole
+     * selection; one that starts outside it takes just that row and leaves the
+     * selection alone — which is what every file manager does and therefore
+     * what fingers already expect. */
+    row.addEventListener('dragstart', (e) => {
+      const id = row.dataset.id;
+      if (!id) return;
+      const ids = selection && selection.has(id) ? [...selection.ids] : [id];
+      const label = ids.length === 1
+        ? `“${(lib.getTrack(id) || {}).title || 'track'}”`
+        : `${ids.length} tracks`;
+      if (!drag.startTrackDrag(e, ids, label)) { e.preventDefault(); return; }
+      row.classList.add('is-dragging');
+    });
+    row.addEventListener('dragend', () => { row.classList.remove('is-dragging'); drag.endDrag(); });
+
+    const strip = row.querySelector('.rating');
+    if (strip) {
+      wireRating(strip,
+        () => (lib.getTrack(row.dataset.id) || {}).rating || 0,
+        (n) => lib.setRating(row.dataset.id, n));
+    }
     return row;
   };
 
@@ -357,6 +396,9 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
       played.classList.toggle('is-none', !track.lastPlayed);
     }
 
+    const rating = row.querySelector('.trow-rating');
+    if (rating) paintRating(rating, track.rating || 0);
+
     const time = row.querySelector('.trow-time');
     if (time) {
       const text = track.duration ? fmtTime(track.duration) : '--:--';
@@ -365,6 +407,53 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
   };
 
   return { create, render };
+}
+
+/* ------------------------------------------------------------------ ratings */
+
+const ratingMarkup = '<div class="trow-rating"><div class="rating" role="slider" tabindex="0" ' +
+  'aria-label="Rating" aria-valuemin="0" aria-valuemax="5" aria-valuenow="0" aria-valuetext="Unrated">' +
+  [1, 2, 3, 4, 5].map((n) =>
+    `<button class="rating-star" tabindex="-1" data-star="${n}" aria-hidden="true">${ico('star')}${ico('star-fill')}</button>`
+  ).join('') + '</div></div>';
+
+const STAR_TEXT = ['Unrated', 'One star', 'Two stars', 'Three stars', 'Four stars', 'Five stars'];
+
+/** Fills a rating strip in. Cheap enough to call on every row recycle. */
+export function paintRating(host, stars) {
+  const strip = host.classList.contains('rating') ? host : host.querySelector('.rating');
+  if (!strip) return;
+  const n = Math.max(0, Math.min(5, stars | 0));
+  if (+strip.getAttribute('aria-valuenow') !== n) {
+    strip.setAttribute('aria-valuenow', String(n));
+    strip.setAttribute('aria-valuetext', STAR_TEXT[n]);
+  }
+  strip.classList.toggle('is-unrated', !n);
+  const kids = strip.children;
+  for (let i = 0; i < kids.length; i++) kids[i].classList.toggle('is-on', i < n);
+}
+
+/**
+ * Makes a rating strip usable from the keyboard, for whoever owns it.
+ *
+ * The strip is one control with five buttons inside it rather than five
+ * controls, so the arrow keys are the interface and the buttons are pixels.
+ * `get` says what it currently reads; `set` is told where to move it.
+ */
+export function wireRating(strip, get, set) {
+  strip.addEventListener('keydown', (e) => {
+    const at = get() || 0;
+    let next = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = Math.min(5, at + 1);
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = Math.max(0, at - 1);
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = 5;
+    else if (/^[0-5]$/.test(e.key)) next = +e.key;
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+    set(next);
+  });
 }
 
 /* ------------------------------------------------------------------ menus */
