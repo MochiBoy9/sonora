@@ -495,6 +495,7 @@
 }
 .flip-btn .ico { width: 13px; height: 13px; }
 .hero-show:hover .flip-btn, .flip-btn:focus-visible, .flip-btn[aria-pressed="true"] { opacity: 1; }
+.hero-show:hover .zoom-btn, .zoom-btn:focus-visible { opacity: 1; }
 .flip-btn:hover { color: var(--accent); background: rgb(var(--accent-rgb) / .12); }
 /* No pointer means no hover to reveal it with. */
 @media (hover: none) { .flip-btn { opacity: 1; } }
@@ -2173,3 +2174,254 @@
   font-size: calc(11.5px * var(--scale));
 }
 .over-chip:hover { border-color: var(--accent-line); color: var(--accent); }
+
+
+/* R6: the cover, looked at.
+   Black rather than the app's own scrim: this is a picture being shown, and
+   anything tinted behind it is a colour cast over somebody's artwork. */
+.lb {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 28px;
+  background: rgb(0 0 0 / .92);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.lb-frame { display: grid; place-items: center; min-height: 0; }
+.lb-img {
+  max-width: 100%;
+  max-height: 100%;
+  /* Nearest-neighbour would be honest about a small cover and unbearable to
+     look at; a smooth upscale is what every image viewer does and the caption
+     says what the real size is. */
+  object-fit: contain;
+  box-shadow: 0 30px 90px -30px rgb(0 0 0 / .9);
+  border-radius: 2px;
+}
+.lb-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: var(--text-2);
+}
+.lb-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lb-text b { color: #fff; font-size: calc(15px * var(--scale)); }
+.lb-text span { color: rgb(255 255 255 / .6); font-size: calc(12.5px * var(--scale)); }
+.lb-size {
+  flex: none;
+  color: rgb(255 255 255 / .45);
+  font-family: var(--mono);
+  font-size: calc(11px * var(--scale));
+  letter-spacing: .08em;
+}
+.lb-close { color: rgb(255 255 255 / .8); }
+.lb-close:hover { color: #fff; }
+/* The page behind it does not scroll while it is up. */
+body.lb-open { overflow: hidden; }
+
+/* Two buttons on the floor now, so they sit either side of the centre line
+   rather than both claiming it. The flip keeps the left half and hangs off its
+   own right edge; Look takes the right half and hangs off its left. */
+.hero-show .flip-btn { left: calc(50% - 7px); transform: translateX(-100%); }
+.hero-show .zoom-btn { left: calc(50% + 7px); transform: none; }
+
+
+/* ------------------------------------------------------------------ R9
+
+   Wear.
+
+   Two marks, both bounded so a favourite record stays readable: a ring where
+   the disc has rubbed the inside of the sleeve, and a little more sheen where
+   the card has been handled. `--wear` is the Look's own dial and is zero by
+   default; `--played` is this record's own figure, set by renderAlbumCard.
+
+   Drawn on the stage rather than on the artwork, so it sits *on* the sleeve
+   in the same plane as the edge and the highlight rather than being composited
+   into somebody's picture. */
+.card-art { --worn: calc(var(--wear, 0) * var(--played, 0)); }
+.card-art::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: var(--worn);
+  /* The ring: a disc-shaped scuff at about the radius of a 12" record inside a
+     12" sleeve, which is nearly the full width — and never reaching the
+     middle, where the title usually is. */
+  background:
+    radial-gradient(circle at 50% 50%,
+      transparent 0 40%,
+      rgb(255 255 255 / .05) 43%,
+      rgb(255 255 255 / .11) 46%,
+      rgb(255 255 255 / .05) 49%,
+      transparent 52%),
+    radial-gradient(circle at 50% 50%,
+      transparent 0 45%,
+      rgb(0 0 0 / .10) 47.5%,
+      transparent 50%);
+  mix-blend-mode: soft-light;
+  border-radius: inherit;
+}
+/* And the handled corners: brighter where a card is picked up, which is the
+   top corners and the leading edge. */
+.card-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: calc(var(--worn) * .7);
+  background:
+    radial-gradient(120% 80% at 8% 4%, rgb(255 255 255 / .16), transparent 42%),
+    radial-gradient(120% 80% at 96% 6%, rgb(255 255 255 / .12), transparent 40%);
+  mix-blend-mode: screen;
+  border-radius: inherit;
+}
+
+
+/* ------------------------------------------------------------------ R10
+
+   The shop window. Over everything but under nothing — a click anywhere takes
+   it away, so it must not eat the click that dismisses it. */
+.idle {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  background: rgb(var(--bg-rgb) / .96);
+  animation: idle-in 600ms var(--ease) both;
+}
+.idle.is-out { animation: idle-out 300ms var(--ease) both; }
+@keyframes idle-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes idle-out { from { opacity: 1 } to { opacity: 0 } }
+
+.idle-stack {
+  position: relative;
+  width: min(58vmin, 520px);
+  aspect-ratio: 1;
+}
+.idle-face {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: scale(1.04);
+  transition: opacity 1600ms var(--ease), transform 9000ms linear;
+  box-shadow: 0 40px 120px -40px rgb(0 0 0 / .9);
+  background: rgb(var(--surface-rgb) / .6);
+}
+/* The drift: a very slow push in, so a still picture is not a still picture. */
+.idle-face.is-in { opacity: 1; transform: scale(1.09); }
+.idle-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.idle-caption {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 8vh;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.idle-caption b { color: var(--text); font-size: calc(19px * var(--scale)); font-weight: 600; }
+.idle-caption span { color: var(--text-3); font-size: calc(13px * var(--scale)); }
+
+@media (prefers-reduced-motion: reduce) {
+  /* The covers still change; they simply cut rather than gliding. */
+  .idle, .idle.is-out { animation: none; }
+  .idle-face { transition: none; transform: none; }
+  .idle-face.is-in { transform: none; }
+}
+
+
+/* ------------------------------------------------------------------ R7
+
+   The gatefold.
+
+   The spread is twice the width of the sleeve and hangs off its left edge, so
+   opening pushes the left-hand panel out into the space the hero has and the
+   right-hand panel stays exactly where the cover was — which is what a
+   gatefold does when you open it on a table. */
+.sleeve-back.is-gate {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  padding: 0;
+  width: 200%;
+  left: -100%;
+}
+.gate-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 15px 16px 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+/* The fold. A crease rather than a border: two panels of one sheet, and the
+   light catches the valley between them. */
+.gate-left {
+  border-right: var(--hair) solid var(--line);
+  box-shadow: inset -14px 0 18px -18px rgb(0 0 0 / .8);
+}
+.gate-right { box-shadow: inset 14px 0 18px -18px rgb(0 0 0 / .8); }
+.gate-list { flex: 1 1 auto; min-height: 0; }
+
+/* While it is open the hero gives the spread the room, and the text goes
+   underneath rather than being squeezed into a column. */
+.hero-show.is-open { flex-wrap: wrap; }
+.hero-show.is-open .sleeve-stage { margin-right: var(--sleeve-size); }
+.hero-show.is-open .hero-meta { flex-basis: 100%; }
+
+@media (max-width: 720px) {
+  /* No room to open sideways: the spread stacks instead, which is a gatefold
+     stood on its end and is still legible. */
+  .sleeve-back.is-gate { grid-template-columns: 1fr; width: 100%; left: 0; grid-template-rows: 1fr 1fr; }
+  .gate-left { border-right: 0; border-bottom: var(--hair) solid var(--line); box-shadow: none; }
+  .gate-right { box-shadow: none; }
+  .hero-show.is-open .sleeve-stage { margin-right: 0; }
+}
+
+
+/* ------------------------------------------------------------------ T2/T3
+
+   What a record measures. Four figures at most, each with what it means under
+   it — a panel of bare numbers is a panel nobody reads twice. */
+.analysis { margin-top: 26px; }
+.analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+.analysis-cell {
+  padding: 12px 14px;
+  border: var(--hair) solid var(--line);
+  border-radius: var(--radius);
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  background: rgb(var(--surface-rgb) / .5);
+}
+.analysis-cell.is-warn { border-color: rgb(var(--accent-rgb) / .3); background: rgb(255 200 87 / .06); }
+.analysis-label {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.analysis-value {
+  color: var(--text);
+  font-size: calc(23px * var(--scale));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+  margin: 3px 0 2px;
+}
+.analysis-cell.is-warn .analysis-value { color: var(--warn); }
+.analysis-note { color: var(--text-3); font-size: calc(11.5px * var(--scale)); line-height: 1.35; }
+.analysis-foot { margin-top: 10px; font-size: calc(11.5px * var(--scale)); }

@@ -70,6 +70,27 @@ export const SCHEMA = [
     label: 'Parallax', hint: 'How far panels lift off the world as you point at them' },
   { id: 'motion',   group: 'Depth',   kind: 'choice', def: 'full', label: 'Motion',
     options: [['full', 'Full'], ['calm', 'Calm'], ['none', 'None']] },
+
+  /* R9: wear.
+   *
+   * Off by default, and this is the one piece of pure decoration in the whole
+   * application that earns its place — the sleeve model already lights, shades
+   * and relights itself from the artwork's own luminance, and `playCount` has
+   * been kept since the first release. A record you have played four hundred
+   * times looking played is the same fact the library already holds, said in
+   * the material rather than in a number.
+   *
+   * Bounded, deliberately: at full strength a favourite record must still be
+   * readable, so the ring never reaches the middle and the sheen never washes
+   * out the picture. */
+  { id: 'wear', group: 'Material', kind: 'range', def: 0, min: 0, max: 100, step: 1, unit: '%',
+    label: 'Wear', hint: 'Ring wear on the records you have played most. Off at zero.' },
+
+  /* R10: how long before the shop window. Zero is off, which is the default —
+     a player that starts doing things on its own without being asked is a
+     player somebody turns off. */
+  { id: 'idle', group: 'Depth', kind: 'range', def: 0, min: 0, max: 30, step: 1, unit: ' min',
+    label: 'Drift after', hint: 'Sit still for this long and Sonora drifts through your covers. Zero is off.' },
 ];
 
 const BY_ID = new Map(SCHEMA.map((s) => [s.id, s]));
@@ -210,6 +231,9 @@ export function apply(root = document.documentElement) {
   style.setProperty('--glow', String(clamp(s.glow / 100, 0, 2)));
   style.setProperty('--grid-a', String(clamp(s.grid / 100, 0, 1)));
   style.setProperty('--parallax', String(clamp(s.parallax / 100, 0, 1)));
+  // R9. Zero is off, and off is the default: nothing else in this application
+  // is decoration, and this is opted into rather than out of.
+  style.setProperty('--wear', String(clamp((s.wear ?? 0) / 100, 0, 1)));
 
   root.setAttribute('data-motion', s.motion);
   root.setAttribute('data-scene', s.scene);

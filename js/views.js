@@ -11,7 +11,7 @@ import * as player from './player.js';
 import * as db from './db.js';
 import { VirtualList, VirtualGrid } from './virtual.js';
 import {
-  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, rulesDialog, Selection,
+  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, rulesDialog, lightbox, Selection,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
 import { reduceMotion, enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunning, requestDeviceTilt, stopDeviceTilt, startDeviceTilt } from './motion.js';
@@ -479,6 +479,15 @@ const thicknessOf = (album) =>
 
 export function renderAlbumCard(card, album) {
   card.dataset.key = album.key;
+  /* R9: how played this record is, 0..1, for the stylesheet to wear it in.
+   *
+   * A logarithm, not a ratio: the difference between never and twice is the
+   * interesting one, and between three hundred and four hundred there is
+   * nothing to see. `log(1 + plays) / log(1 + 120)` reaches full wear at about
+   * a hundred and twenty plays, which is a record somebody has genuinely
+   * lived with, and is already halfway there at eleven. */
+  const plays = album.plays || 0;
+  card.style.setProperty('--played', plays ? Math.min(1, Math.log1p(plays) / Math.log1p(120)).toFixed(3) : '0');
   paintArt(card.querySelector('.art-img'), album.key);
   card.querySelector('.sleeve')?.style.setProperty('--thick', thicknessOf(album).toFixed(3));
   // Two extra plates behind a record that came on more than one disc. Drawn by
@@ -1919,16 +1928,23 @@ function viewAlbum(host, key) {
    * traded discoverability for a trick. The button says what it does, takes
    * focus, and answers Enter and Space for free. */
   const flip = art.querySelector('.sleeve');
+  const gate = isGatefold(album);
   const flipBtn = el('button', {
     class: 'flip-btn', 'aria-pressed': 'false',
-    title: 'Turn the sleeve over', 'aria-label': 'Show the back of the sleeve',
-    html: ico('refresh') + '<span>Back</span>',
+    title: gate ? 'Open the gatefold' : 'Turn the sleeve over',
+    'aria-label': gate ? 'Open the gatefold' : 'Show the back of the sleeve',
+    html: ico('refresh') + `<span>${gate ? 'Open' : 'Back'}</span>`,
     onclick: () => {
       const on = !flip.classList.contains('is-flipped');
       flip.classList.toggle('is-flipped', on);
       flipBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
       flipBtn.setAttribute('aria-label', on ? 'Show the front of the sleeve' : 'Show the back of the sleeve');
-      flipBtn.querySelector('span').textContent = on ? 'Front' : 'Back';
+      flipBtn.querySelector('span').textContent = on
+        ? (gate ? 'Close' : 'Front')
+        : (gate ? 'Open' : 'Back');
+      // A gatefold opens rather than turning over, so the hero widens to make
+      // room for the spread and puts itself back when it closes.
+      hero.classList.toggle('is-open', gate && on);
       // The back is real content, not decoration, so it stops being hidden
       // from a screen reader the moment it is the side facing out.
       art.querySelector('.sleeve-back').setAttribute('aria-hidden', on ? 'false' : 'true');
@@ -1936,7 +1952,34 @@ function viewAlbum(host, key) {
   });
   art.appendChild(flipBtn);
 
-  const columns = ['index', 'title', 'duration'];
+  /* R6: a button to look at the picture, beside the one that turns it over.
+   *
+   * A button rather than a click on the sleeve, for the same reason the flip
+   * is a button: the largest element on the page doing something unguessable
+   * is a page that has traded discoverability for a trick — and the sleeve
+   * already tilts, turns and accepts a dropped cover. */
+  const zoomBtn = el('button', {
+    class: 'flip-btn zoom-btn', title: 'Look at the cover',
+    'aria-label': 'Look at the cover, full size',
+    html: ico('expand') + '<span>Look</span>',
+    onclick: () => lightbox(key, { title: album.title, artist: album.artist }),
+  });
+  art.appendChild(zoomBtn);
+
+  /* T2: dynamic range where you are looking at one record.
+   *
+   * DR is a column in the Songs table and a row in the back cover's spec
+   * block — which is the block that gives way when the card runs out of room —
+   * and on the album page itself it was nowhere. It costs no new analysis:
+   * every figure here is already on the track.
+   *
+   * Honest about coverage: a figure is only ever known for a track that has
+   * actually been listened to, so "DR11 · 4 of 9 measured" is a partial
+   * reading said out loud, and a bare "DR11" over nine tracks would be a
+   * claim about five of them nobody has made. */
+  const columns = isGatefold(album) || album.tracks.some((t) => t.dr > 0)
+    ? ['index', 'title', 'dr', 'duration']
+    : ['index', 'title', 'duration'];
   const oneArtist = album.tracks.every((t) => t.artist === album.artist);
   const list = el('div', { class: 'plain-list' + (oneArtist ? ' no-sub' : '') });
   const factory = trackRowFactory({
@@ -1961,6 +2004,21 @@ function viewAlbum(host, key) {
   });
 
   host.appendChild(list);
+
+  /* T3: what the analysis found, where the record is.
+   *
+   * Tempo with a confidence figure, spectral centroid, and the encoder shelf
+   * that catches a lossless container made from a lossy source — all of it
+   * measured on first listen, all of it kept, and the only door to any of it
+   * was the artist overview. This is a panel about *this* record, which is
+   * where somebody who has just noticed something wants to look.
+   *
+   * Everything here is read from the tracks; nothing is decoded to draw it.
+   * Where nothing has been measured the panel does not appear, because an
+   * empty analysis panel teaches somebody that the feature is broken. */
+  const analysis = analysisPanel(album);
+  if (analysis) host.appendChild(analysis);
+
   enter([hero], { y: 16, z: -90, wipe: true });
   enter(list.children, { each: 13, y: 8, delay: 80 });
 
@@ -2192,7 +2250,151 @@ function acceptCover(art, key) {
  * block prints what is known and says nothing about what is not, which is the
  * only honest thing to do with a record that predates the question.
  */
+/* R7: a gatefold.
+ *
+ * Thickness already follows track count, a multi-disc release already draws as
+ * more than one sleeve, and the back already turns — a double album that opens
+ * is the obvious next member of that family and the most characteristic object
+ * in the whole subject.
+ *
+ * The inner spread is two panels on one hinge: the tracklist runs across both,
+ * broken at the disc, which is exactly how a real gatefold sets it. It appears
+ * in place of the plain back cover, so a record has either one or the other
+ * and never both — the back of a gatefold sleeve is its own outer panel, and
+ * that is what the single-sleeve back already is.
+ */
+/** T2 and T3: what has been measured about this record, or null. */
+function analysisPanel(album) {
+  const drs = album.tracks.filter((t) => t.dr > 0);
+  const bpms = album.tracks.filter((t) => t.bpm > 0 && (t.bpmConfidence || 0) >= 0.4);
+  const cents = album.tracks.filter((t) => t.centroid > 0);
+  const suspect = album.tracks.filter((t) => t.truncated === true);
+  const shelves = album.tracks.filter((t) => t.shelfHz > 0);
+  if (!drs.length && !bpms.length && !cents.length) return null;
+
+  const mean = (list, get) => list.reduce((n, t) => n + get(t), 0) / list.length;
+  const n = album.tracks.length;
+  const facts = [];
+
+  if (drs.length) {
+    const avg = mean(drs, (t) => t.dr);
+    const lo = Math.min(...drs.map((t) => t.dr));
+    const hi = Math.max(...drs.map((t) => t.dr));
+    facts.push({
+      label: 'Dynamic range',
+      value: 'DR' + avg.toFixed(1),
+      note: (lo === hi ? '' : `${lo.toFixed(0)} to ${hi.toFixed(0)} across the record · `) +
+        (drs.length < n ? `${drs.length} of ${n} measured` : 'every track measured'),
+      /* The number people argue about, so it says what it means rather than
+         leaving somebody to guess whether more is better. */
+      hint: 'Peak against average level, in decibels. Above about 12 is a record that breathes; below 8 has been squashed in mastering.',
+    });
+  }
+
+  if (bpms.length) {
+    const avg = mean(bpms, (t) => t.bpm);
+    const spread = Math.max(...bpms.map((t) => t.bpm)) - Math.min(...bpms.map((t) => t.bpm));
+    facts.push({
+      label: 'Tempo',
+      value: Math.round(avg) + ' bpm',
+      note: (spread > 8 ? `${Math.round(spread)} bpm apart at the extremes · ` : 'consistent across the record · ') +
+        `${bpms.length} of ${n} confident`,
+      hint: 'Only tracks the analysis was sure about are counted. An unsure reading is left out rather than averaged in.',
+    });
+  }
+
+  if (cents.length) {
+    const avg = mean(cents, (t) => t.centroid);
+    facts.push({
+      label: 'Brightness',
+      value: (avg / 1000).toFixed(1) + ' kHz',
+      note: `spectral centroid · ${cents.length} of ${n} measured`,
+      hint: 'Where the weight of the sound sits. A dark record is around 1 kHz; anything above 4 is bright, and above 6 is usually a mastering choice.',
+    });
+  }
+
+  if (suspect.length) {
+    const hz = shelves.length ? Math.round(mean(shelves, (t) => t.shelfHz) / 100) / 10 : 0;
+    facts.push({
+      label: 'Encoder shelf',
+      value: hz ? hz.toFixed(1) + ' kHz' : 'found',
+      note: `${suspect.length} of ${n} look like transcodes`,
+      warn: true,
+      hint: 'A lossless container with nothing above a sharp cut-off — the signature of a file that was lossy before it was made lossless.',
+    });
+  }
+
+  const grid = el('div', { class: 'analysis-grid' });
+  for (const f of facts) {
+    grid.appendChild(el('div', { class: 'analysis-cell' + (f.warn ? ' is-warn' : ''), title: f.hint },
+      el('div', { class: 'analysis-label', text: f.label }),
+      el('div', { class: 'analysis-value', text: f.value }),
+      el('div', { class: 'analysis-note', text: f.note })));
+  }
+
+  return el('section', { class: 'block analysis' },
+    sectionHead('What this record measures'),
+    grid,
+    el('p', { class: 'analysis-foot muted',
+      text: 'Measured on first listen and kept. Tracks you have not played yet are not counted.' }));
+}
+
+function isGatefold(album) {
+  return new Set(album.tracks.map((t) => t.disc || 1)).size > 1;
+}
+
+function gatefold(album) {
+  const spread = el('div', { class: 'sleeve-back is-gate', 'aria-hidden': 'true' });
+  const discs = [...new Set(album.tracks.map((t) => t.disc || 1))].sort((a, b) => a - b);
+
+  const left = el('div', { class: 'gate-panel gate-left' });
+  const right = el('div', { class: 'gate-panel gate-right' });
+
+  left.appendChild(el('div', { class: 'back-head' },
+    el('span', { class: 'back-artist', text: album.compilation ? 'Various Artists' : album.artist }),
+    el('span', { class: 'back-title', text: album.title })));
+
+  /* Split by disc rather than by track count: a gatefold that put side one's
+     last two tracks on the right-hand page would be a gatefold nobody has ever
+     seen. With more than two discs the break is at the halfway disc, which is
+     what a triple in a gatefold does. */
+  const half = Math.ceil(discs.length / 2);
+  const leftDiscs = new Set(discs.slice(0, half));
+
+  const listFor = (which) => {
+    const list = el('ol', { class: 'back-list gate-list' });
+    let printed = 0;
+    for (const t of album.tracks) {
+      const d = t.disc || 1;
+      if (leftDiscs.has(d) !== which) continue;
+      if (d !== printed) {
+        printed = d;
+        list.appendChild(el('li', { class: 'back-disc' },
+          el('span', { class: 'back-t', text: 'Disc ' + d })));
+      }
+      list.appendChild(el('li', {},
+        el('span', { class: 'back-n', text: String(t.track || '') }),
+        el('span', { class: 'back-t', text: t.title }),
+        el('span', { class: 'back-d', text: t.duration ? fmtTime(t.duration) : '' })));
+    }
+    return list;
+  };
+
+  left.appendChild(listFor(true));
+  right.appendChild(listFor(false));
+
+  // The catalogue number sits at the foot of the right-hand page, where a
+  // pressing plant puts it.
+  right.appendChild(el('div', { class: 'back-cat' },
+    el('span', { text: 'SNR-' + String(album.key).toUpperCase() }),
+    album.year ? el('span', { text: String(album.year) }) : null));
+
+  spread.append(left, right);
+  return spread;
+}
+
 function backCover(album) {
+  if (isGatefold(album)) return gatefold(album);
   const back = el('div', { class: 'sleeve-back', 'aria-hidden': 'true' });
 
   back.appendChild(el('div', { class: 'back-head' },

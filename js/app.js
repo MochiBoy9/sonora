@@ -21,6 +21,7 @@ import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js
 import * as db from './db.js';
 import * as keys from './keys.js';
 import * as m3u from './m3u.js';
+import * as shopWindow from './idle.js';
 import * as peakmap from './peaks.js';
 import * as undoStack from './undo.js';
 
@@ -1304,6 +1305,12 @@ async function boot() {
      window comes back after a couple of minutes away, which is when somebody
      has been off doing exactly that. */
   lib.watchForChanges();
+  /* R10: the shop window, after a while of nothing. Off unless the Look asks
+     for it; watched from here rather than from the view layer because it
+     outlives every route. */
+  shopWindow.watch();
+  shopWindow.configure({ minutes: looks.state.idle || 0 });
+  looks.events.on('change', (s) => shopWindow.configure({ minutes: s.idle || 0 }));
   intro.report(lib.serial);
 
   navigate();

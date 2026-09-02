@@ -222,6 +222,18 @@ async function handle(job) {
     guessed: tags.guessed || '',
   };
 
+  /* R11: the credits, where the file carries them.
+   *
+   * Only what is there — every one of these is absent from most files, and a
+   * track object carrying eight empty strings is eight empty strings times
+   * twenty thousand tracks in IndexedDB. A missing key is also what lets the
+   * panel print nothing rather than a row of blanks. */
+  for (const k of ['composer', 'lyricist', 'conductor', 'remixer', 'publisher',
+                   'copyright', 'isrc', 'encodedBy', 'encoder']) {
+    const v = tags[k];
+    if (typeof v === 'string' && v.trim()) track[k] = v.trim().slice(0, 200);
+  }
+
   /* What the file is, as opposed to what it says it is.
    *
    * The reader already worked all of this out on its way to the duration and
