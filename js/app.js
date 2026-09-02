@@ -20,6 +20,7 @@ import { startOffline } from './offline.js';
 import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
 import * as db from './db.js';
 import * as keys from './keys.js';
+import * as m3u from './m3u.js';
 import * as peakmap from './peaks.js';
 import * as undoStack from './undo.js';
 
@@ -247,25 +248,152 @@ function buildSidebar() {
 
   side.append(brand, nav, playlistHead, playlists, footer);
 
+  /* L12: folders one level deep, and an order you chose.
+   *
+   * A flat list in creation order is a pile past about fifteen, and there was
+   * no way to move one. Two levels of folder would be a file manager, which
+   * nobody has ever wanted for forty playlists.
+   *
+   * Which folders are open is remembered in this browser rather than in the
+   * index: it is a fact about the window, not about the library, and syncing
+   * it into a backup would carry one machine's idea of tidy onto another. */
+  const OPEN_KEY = 'sonora:folders-open';
+  const openFolders = new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]'));
+  const saveOpen = () => {
+    try { localStorage.setItem(OPEN_KEY, JSON.stringify([...openFolders])); } catch { /* private */ }
+  };
+
+  let dragId = null;
+
+  const playlistRow = (p) => {
+    /* A smart shelf counts what it currently describes rather than what it
+       was storing, and says which kind it is — finding out that a list
+       rewrites itself by watching it change is worse than a small mark. */
+    const count = p.smart ? lib.playlistTracks(p).length : p.tracks.length;
+    const row = el('a', {
+      class: 'side-playlist' + (p.smart ? ' is-smart' : ''),
+      href: '#/playlist/' + p.id, data: { route: 'playlist:' + p.id },
+      title: p.smart ? `${p.name} — describes itself` : p.name,
+      draggable: 'true',
+    },
+      el('span', { class: 'side-playlist-name', text: p.name }),
+      el('span', { class: 'side-playlist-count', text: String(count) }));
+
+    row.addEventListener('dragstart', (e) => {
+      dragId = p.id;
+      row.classList.add('is-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', p.id); } catch { /* Safari */ }
+    });
+    row.addEventListener('dragend', () => { row.classList.remove('is-dragging'); dragId = null; });
+    row.addEventListener('dragover', (e) => {
+      if (!dragId || dragId === p.id) return;
+      e.preventDefault();
+      row.classList.add('is-drop');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('is-drop'));
+    row.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      row.classList.remove('is-drop');
+      if (!dragId || dragId === p.id) return;
+      /* Dropped on a row: land in that row's folder, in that row's place. The
+         order is rebuilt from what is on screen rather than computed, because
+         what is on screen is what the person was aiming at. */
+      const moving = lib.state.playlists.find((x) => x.id === dragId);
+      if (moving && (moving.folder || null) !== (p.folder || null)) {
+        await lib.movePlaylist(dragId, p.folder || null);
+      }
+      const ids = lib.state.playlists.map((x) => x.id).filter((id) => id !== dragId);
+      ids.splice(ids.indexOf(p.id), 0, dragId);
+      await lib.reorderPlaylists(ids);
+    });
+
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const fs = lib.playlistFolders();
+      menu([
+        ...(fs.length ? fs.filter((f) => f.id !== p.folder).map((f) => ({
+          label: `Move to “${f.name}”`, icon: 'folder',
+          onSelect: () => lib.movePlaylist(p.id, f.id),
+        })) : []),
+        p.folder ? { label: 'Take out of the folder', icon: 'chev-left', onSelect: () => lib.movePlaylist(p.id, null) } : null,
+        { label: 'New folder…', icon: 'plus', onSelect: () => promptDialog({
+          title: 'New folder', label: 'Name', value: 'Folder', confirm: 'Create',
+          onConfirm: async (name) => {
+            if (!name) return;
+            const f = await lib.createFolder(name);
+            openFolders.add(f.id);
+            saveOpen();
+            // Opened before the move, because the move is what repaints — a
+            // new folder that swallows the playlist you just filed into it and
+            // then sits shut looks like the move failed.
+            await lib.movePlaylist(p.id, f.id);
+          },
+        }) },
+      ].filter(Boolean), { event: e });
+    });
+    return row;
+  };
+
+  const folderRow = (f, contents) => {
+    const open = openFolders.has(f.id);
+    const head = el('button', {
+      class: 'side-folder' + (open ? ' is-open' : ''),
+      'aria-expanded': String(open),
+    },
+      el('span', { class: 'side-folder-tw', html: ico('chev-right') }),
+      el('span', { class: 'side-playlist-name', text: f.name }),
+      el('span', { class: 'side-playlist-count', text: String(contents.length) }));
+
+    head.addEventListener('click', () => {
+      if (openFolders.has(f.id)) openFolders.delete(f.id); else openFolders.add(f.id);
+      saveOpen();
+      paintPlaylists();
+    });
+    head.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      menu([
+        { label: 'Rename', icon: 'edit', onSelect: () => promptDialog({
+          title: 'Rename folder', label: 'Name', value: f.name,
+          onConfirm: (n) => n && lib.renameFolder(f.id, n),
+        }) },
+        { label: 'Remove the folder', icon: 'trash', danger: true,
+          hint: 'the playlists stay',
+          onSelect: () => lib.removeFolder(f.id) },
+      ], { event: e });
+    });
+    // Dropping onto the folder head files a playlist into it.
+    head.addEventListener('dragover', (e) => { if (dragId) { e.preventDefault(); head.classList.add('is-drop'); } });
+    head.addEventListener('dragleave', () => head.classList.remove('is-drop'));
+    head.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      head.classList.remove('is-drop');
+      if (dragId) await lib.movePlaylist(dragId, f.id);
+    });
+    return head;
+  };
+
   const paintPlaylists = () => {
     playlists.textContent = '';
-    if (!lib.state.playlists.length) {
+    const all = lib.state.playlists;
+    const fs = lib.playlistFolders();
+    if (!all.length && !fs.length) {
       playlists.appendChild(el('p', { class: 'side-empty', text: 'No playlists yet' }));
       return;
     }
-    for (const p of lib.state.playlists) {
-      /* A smart shelf counts what it currently describes rather than what it
-         was storing, and says which kind it is — finding out that a list
-         rewrites itself by watching it change is worse than a small mark. */
-      const count = p.smart ? lib.playlistTracks(p).length : p.tracks.length;
-      playlists.appendChild(el('a', {
-        class: 'side-playlist' + (p.smart ? ' is-smart' : ''),
-        href: '#/playlist/' + p.id, data: { route: 'playlist:' + p.id },
-        title: p.smart ? `${p.name} — describes itself` : p.name,
-      },
-        el('span', { class: 'side-playlist-name', text: p.name }),
-        el('span', { class: 'side-playlist-count', text: String(count) })));
+
+    for (const f of fs) {
+      const inside = all.filter((p) => p.folder === f.id);
+      playlists.appendChild(folderRow(f, inside));
+      if (!openFolders.has(f.id)) continue;
+      const box = el('div', { class: 'side-folder-body' });
+      for (const p of inside) box.appendChild(playlistRow(p));
+      if (!inside.length) box.appendChild(el('p', { class: 'side-empty', text: 'Empty — drag one in' }));
+      playlists.appendChild(box);
     }
+
+    const loose = all.filter((p) => !p.folder || !fs.some((f) => f.id === p.folder));
+    for (const p of loose) playlists.appendChild(playlistRow(p));
     paintNav(parseHash());
   };
   paintPlaylists();
@@ -469,12 +597,71 @@ function announceImport(report) {
      because the two are different news and the second one is the one somebody
      may want to act on — it carries a way to see the list rather than a
      number they can do nothing with. */
+  /* L14: the playlists that were already in the folder.
+   *
+   * Offered once, at the end of the import, and never imported on their own —
+   * a music folder can also hold another player's auto-generated "Recently
+   * Added.m3u", and creating four playlists nobody asked for is worse than not
+   * looking at all. */
+  const lists = report.playlistFiles || [];
+  if (lists.length) {
+    toast(`Found ${lists.length} ${lists.length === 1 ? 'playlist file' : 'playlist files'} in that folder`, {
+      duration: 9000,
+      action: {
+        label: lists.length === 1 ? 'Add it' : 'See them',
+        onSelect: () => offerFoundPlaylists(lists),
+      },
+    });
+  }
+
   if (report.failed) {
     toast(`${report.failed} ${report.failed === 1 ? 'file' : 'files'} had nothing in ${report.failed === 1 ? 'it' : 'them'} to read`, {
       duration: 7000,
       action: { label: 'Which?', onSelect: () => { location.hash = '#/settings'; } },
     });
   }
+}
+
+/** L14: which of the found playlist files to import, if any. */
+async function offerFoundPlaylists(lists) {
+  const picked = new Set(lists.map((l) => l.path));
+  const body = el('div', {},
+    el('p', { text: 'These were sitting in the folder. Sonora will match their paths against your library and tell you what it could not find.' }),
+    el('ul', { class: 'found-lists' }, lists.slice(0, 30).map((l) => {
+      const box = el('input', { type: 'checkbox', checked: true, 'aria-label': l.name });
+      box.addEventListener('change', () => {
+        if (box.checked) picked.add(l.path); else picked.delete(l.path);
+      });
+      return el('li', {}, el('label', {}, box, el('span', { text: l.path })));
+    })));
+
+  dialog({
+    title: `${lists.length} playlist ${lists.length === 1 ? 'file' : 'files'} found`,
+    body,
+    width: 520,
+    actions: [
+      { label: 'Not now' },
+      { label: 'Import the ticked ones', primary: true, onSelect: async () => {
+        let made = 0;
+        let missed = 0;
+        for (const entry of lists) {
+          if (!picked.has(entry.path)) continue;
+          const text = await lib.readPlaylistFile(entry);
+          if (!text) continue;
+          const parsed = m3u.parse(text);
+          const { found, missing } = m3u.resolve(parsed.entries);
+          if (!found.length) { missed++; continue; }
+          const name = parsed.name || entry.name.replace(/\.[^.]+$/, '');
+          await lib.createPlaylist(name, found.map((t) => t.id));
+          made++;
+          missed += missing.length ? 0 : 0;
+        }
+        toast(made
+          ? `Imported ${fmtCount(made, 'playlist')}${missed ? ` · ${missed} matched nothing` : ''}`
+          : 'None of them matched anything in the library');
+      } },
+    ],
+  });
 }
 
 function syncSearchInput(route) {

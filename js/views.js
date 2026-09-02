@@ -26,6 +26,7 @@ import * as band from './band.js';
 import * as session from './session.js';
 import * as looks from './looks.js';
 import * as backup from './backup.js';
+import * as m3u from './m3u.js';
 
 const ROW_H = 56;
 
@@ -2463,6 +2464,15 @@ function viewPlaylists(host) {
     el('p', { class: 'page-sub', text: fmtCount(lib.state.playlists.length, 'playlist') }));
   host.appendChild(head);
 
+  const m3uPicker = el('input', {
+    type: 'file', accept: '.m3u,.m3u8,audio/x-mpegurl', hidden: true,
+    onchange: async () => {
+      const f = m3uPicker.files && m3uPicker.files[0];
+      m3uPicker.value = '';
+      if (f) offerM3U(await f.text(), f.name.replace(/\.[^.]+$/, ''));
+    },
+  });
+
   const bar = el('div', { class: 'toolbar' },
     el('button', {
       class: 'btn primary', html: ico('plus') + '<span>New playlist</span>',
@@ -2470,6 +2480,13 @@ function viewPlaylists(host) {
         title: 'New playlist', label: 'Name', value: 'My playlist', confirm: 'Create',
         onConfirm: async (name) => { if (name) { const p = await lib.createPlaylist(name); location.hash = '#/playlist/' + p.id; } },
       }),
+    }),
+    m3uPicker,
+    el('button', {
+      /* L13: read one in. A file input as well as the drop target, because
+         "open a playlist" is a thing people go looking for. */
+      class: 'btn ghost', html: ico('folder') + '<span>Open an .m3u</span>',
+      onclick: () => m3uPicker.click(),
     }));
   host.appendChild(bar);
 
@@ -2607,6 +2624,62 @@ function viewFavourites(host) {
   return () => { off(); offChange(); table.destroy(); };
 }
 
+/** L13: writes one playlist out as Extended M3U. */
+function saveM3U(p) {
+  const tracks = lib.playlistTracks(p);
+  if (!tracks.length) { toast('Nothing in it to save'); return; }
+  const blob = new Blob([m3u.write(p.name, tracks)], { type: 'audio/x-mpegurl;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = el('a', { href: url, download: m3u.fileName(p.name) });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  toast(`Saved ${fmtCount(tracks.length, 'track')}`);
+}
+
+/**
+ * L13/L14: reads M3U text in, and says plainly what it could not find.
+ *
+ * A path from another player is a path from another machine, so a playlist
+ * that arrives 90% matched is the normal case rather than a failure — and the
+ * missing tenth is worth naming, because it is usually one album that has been
+ * moved rather than ten files that are gone.
+ */
+function offerM3U(text, fallbackName) {
+  const parsed = m3u.parse(text);
+  if (!parsed.entries.length) { toast('That playlist file is empty'); return; }
+  const { found, missing } = m3u.resolve(parsed.entries);
+  const name = parsed.name || fallbackName || 'Imported playlist';
+
+  const body = el('div', {},
+    el('p', { text: `“${name}” lists ${fmtCount(parsed.entries.length, 'track')}. ${found.length} of them are in your library.` }),
+    missing.length
+      ? el('details', { class: 'm3u-missing' },
+        el('summary', { text: `${missing.length} not found` }),
+        el('ul', { class: 'fail-list' }, missing.slice(0, 40).map((e) =>
+          el('li', {}, el('span', { class: 'fail-name', text: e.label || e.path })))),
+        missing.length > 40 ? el('p', { class: 'muted', text: `and ${missing.length - 40} more` }) : null)
+      : null,
+    !found.length
+      ? el('p', { class: 'muted', text: 'None of these paths match anything here. If the music is in a folder Sonora has not been given, add it first.' })
+      : null);
+
+  dialog({
+    title: 'Import this playlist?',
+    body,
+    width: 520,
+    actions: [
+      { label: 'Cancel' },
+      { label: 'Import', primary: true, onSelect: async () => {
+        if (!found.length) { toast('Nothing to import'); return; }
+        await lib.createPlaylist(name, found.map((t) => t.id));
+        toast(`Imported “${name}” — ${fmtCount(found.length, 'track')}`);
+      } },
+    ],
+  });
+}
+
 function viewPlaylist(host, id) {
   const p = lib.state.playlists.find((x) => x.id === id);
   if (!p) return notFound(host, 'Playlist not found');
@@ -2639,6 +2712,10 @@ function viewPlaylist(host, id) {
           }),
         },
         { label: 'Add to queue', icon: 'queue', onSelect: () => { player.enqueue(lib.playlistTracks(p)); toast('Added to queue'); } },
+        { separator: true },
+        /* L13: out of the box. A playlist that exists only inside IndexedDB is
+           the same lock-in this application objects to everywhere else. */
+        { label: 'Save as .m3u8', icon: 'file', onSelect: () => saveM3U(p) },
         { separator: true },
         { label: 'Delete playlist', icon: 'trash', danger: true, onSelect: () => { lib.removePlaylist(p.id); location.hash = '#/playlists'; } },
       ], { anchor: e.currentTarget }),
@@ -3307,6 +3384,100 @@ function viewSettings(host) {
   offs.push(lib.events.on('runs', paintRuns));
   host.appendChild(imports);
 
+  /* --- what you have overridden ---
+   *
+   * L17. A chosen cover and a bound rack are invisible until you walk into the
+   * record that has one, which makes them overrides you cannot find and
+   * therefore cannot undo six months later. Listed, with a way back to each.
+   */
+  const overrides = el('section', { class: 'block' }, sectionHead('Your overrides'));
+  const overRows = el('div', { class: 'rows' });
+  overrides.appendChild(overRows);
+
+  const paintOverrides = async () => {
+    overRows.textContent = '';
+    const covers = lib.chosenCovers();
+    const bindings = rack.allBindings();
+
+    if (!covers.length && !bindings.length) {
+      overRows.appendChild(el('p', { class: 'muted', text: 'None yet. Drop a picture on a record to give it a cover, or bind a rack to an album from the Sound page.' }));
+      return;
+    }
+
+    if (covers.length) {
+      overRows.appendChild(el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-ico', html: ico('image') }),
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: fmtCount(covers.length, 'chosen cover') }),
+          el('div', { class: 'settings-note' },
+            el('span', { class: 'over-list' }, covers.slice(0, 12).map((c) =>
+              el('a', { class: 'over-chip', href: '#/album/' + c.key,
+                text: c.album ? c.album.title : 'a record that has gone' })),
+              covers.length > 12 ? el('span', { class: 'muted', text: ` and ${covers.length - 12} more` }) : null)))));
+    }
+
+    if (bindings.length) {
+      const named = [];
+      for (const b of bindings) {
+        const label = b.scope === 'album' ? (lib.state.albumBy.get(b.key)?.title || 'a record that has gone')
+          : b.scope === 'artist' ? (lib.state.artists.find((a) => a.key === b.key)?.name || 'an artist that has gone')
+          : b.key;
+        named.push({ ...b, label });
+      }
+      overRows.appendChild(el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-ico', html: ico('sliders') }),
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: fmtCount(named.length, 'bound rack') }),
+          el('div', { class: 'settings-note' },
+            el('span', { class: 'over-list' }, named.slice(0, 12).map((b) =>
+              el('a', {
+                class: 'over-chip',
+                href: b.scope === 'album' ? '#/album/' + b.key : '#/artist/' + b.key,
+                text: b.label,
+              })))))));
+    }
+  };
+  paintOverrides();
+  offs.push(lib.events.on('change', paintOverrides));
+  offs.push(rack.events.on('bound', paintOverrides));
+  host.appendChild(overrides);
+
+  /* --- older libraries ---
+   *
+   * L18. `guessed` has only been recorded since 2.6, so a library imported
+   * before that gets silently worse album merging than a fresh import would.
+   * The row only appears when there is something to do.
+   */
+  const backfill = el('section', { class: 'block' }, sectionHead('Older imports'));
+  const bfNote = el('div', { class: 'settings-note' });
+  const bfBtn = el('button', { class: 'btn ghost sm', text: 'Re-read those tags' });
+  backfill.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('refresh') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Tracks imported before Sonora recorded what it guessed' }), bfNote),
+    el('div', { class: 'settings-actions' }, bfBtn)));
+
+  const paintBackfill = () => {
+    const n = lib.needsBackfill();
+    backfill.hidden = n === 0;
+    bfNote.textContent = n
+      ? `${fmtCount(n, 'track')} came in before Sonora kept track of which fields it had to take from the folder name. Until it does, albums merge slightly worse than they should.`
+      : '';
+  };
+  bfBtn.addEventListener('click', async () => {
+    bfBtn.disabled = true;
+    const res = await lib.backfillGuessed((done, total) => {
+      bfBtn.textContent = `${done} of ${total}…`;
+    });
+    bfBtn.disabled = false;
+    bfBtn.textContent = 'Re-read those tags';
+    paintBackfill();
+    toast(res.ok ? `Re-read ${fmtCount(res.done, 'track')}` : 'Already running');
+  });
+  paintBackfill();
+  offs.push(lib.events.on('change', paintBackfill));
+  host.appendChild(backfill);
+
   /* --- connection --- */
   const conn = el('section', { class: 'block' }, sectionHead('Connection'));
   conn.appendChild(el('div', { class: 'settings-row' },
@@ -3741,7 +3912,7 @@ function viewSettings(host) {
     el('p', { class: 'muted small mono', text: lib.serial }));
   host.appendChild(about);
 
-  enter([head, folders, imports, conn, appearance, viz, online, listening, storage, shape, keys, about], { each: 34, y: 12 });
+  enter([head, folders, imports, overrides, backfill, conn, appearance, viz, online, listening, storage, shape, keys, about], { each: 34, y: 12 });
   offs.push(lib.events.on('roots', paintRoots));
   return () => { while (offs.length) offs.pop()(); };
 }

@@ -2145,3 +2145,31 @@
 .replace-arrow { color: var(--text-3); flex: none; }
 .replace-to { color: var(--text); }
 .attn-tools { margin-bottom: 14px; }
+
+
+/* L13/L14: importing playlist files. */
+.m3u-missing { margin-top: 10px; }
+.m3u-missing summary { cursor: pointer; color: var(--text-2); font-size: calc(12.5px * var(--scale)); }
+.found-lists { list-style: none; margin: 10px 0 0; padding: 0; max-height: 40vh; overflow-y: auto; }
+.found-lists li { padding: 4px 0; }
+.found-lists label { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.found-lists span {
+  color: var(--text-2);
+  font-size: calc(12.5px * var(--scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* L17: the overrides you have set, as chips you can walk back to. */
+.over-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; align-items: center; }
+.over-chip {
+  padding: 2px 8px;
+  border: var(--hair) solid var(--line-2);
+  border-radius: 999px;
+  color: var(--text-2);
+  text-decoration: none;
+  font-size: calc(11.5px * var(--scale));
+}
+.over-chip:hover { border-color: var(--accent-line); color: var(--accent); }

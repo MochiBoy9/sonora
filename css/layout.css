@@ -761,3 +761,47 @@ body.is-ready .app { opacity: 1; }
 
 @media (max-width: 1080px) { .vu { display: none; } }
 @media (prefers-reduced-motion: reduce) { .vu { display: none; } }
+
+
+/* ------------------------------------------------------------------ L12
+
+   Playlist folders, one level deep, and an order you chose. */
+.side-folder {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-2);
+  font: inherit;
+  font-size: calc(12.5px * var(--scale));
+  text-align: left;
+  border-radius: calc(var(--radius) * 0.5);
+}
+.side-folder:hover { color: var(--text); background: var(--surface-hi); }
+.side-folder-tw {
+  flex: none;
+  display: flex;
+  color: var(--text-3);
+  transition: transform var(--dur-2) var(--ease);
+}
+.side-folder-tw .ico { width: 13px; height: 13px; }
+.side-folder.is-open .side-folder-tw { transform: rotate(90deg); }
+/* Indented rather than boxed: the sidebar is narrow and a border around four
+   rows costs more width than the nesting is worth saying. */
+.side-folder-body { padding-left: 13px; border-left: var(--hair) solid var(--line-2); margin-left: 15px; }
+.side-folder-body .side-empty { padding: 4px 10px; }
+
+/* Being dragged, and where it would land. */
+.side-playlist.is-dragging { opacity: .4; }
+.side-playlist.is-drop, .side-folder.is-drop {
+  box-shadow: inset 0 2px 0 -1px var(--accent);
+}
+.side-folder.is-drop { background: rgb(var(--accent-rgb) / .12); }
+
+@media (prefers-reduced-motion: reduce) {
+  .side-folder-tw { transition: none; }
+}

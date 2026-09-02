@@ -14,7 +14,8 @@
 
 import * as db from './db.js';
 import * as undo from './undo.js';
-import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle, ext, canDecode } from './util.js';
+import * as cue from './cue.js';
+import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle, ext, canDecode, isPlaylistFile, isCueFile } from './util.js';
 
 export const events = new Emitter();
 
@@ -140,8 +141,21 @@ function absorb(batch) {
     state.tracks.set(track.id, track);
     rows.push(track);
     if (art) pendingArt.push(art);
+
+    /* L15: a file with a cue sheet beside it is a side, not a song.
+     *
+     * Expanded here rather than in the worker, because the last index runs to
+     * the file's own duration and the parser has only just worked that out.
+     * The file itself stays in the index as the thing that actually gets
+     * decoded; it is hidden from the library, because a side listed beside its
+     * own eleven tracks is the same record twice. */
+    const sheetKey = track.id.replace(/\.[^./]+$/, '');
+    if (cueSheets.has(sheetKey) && !track.fromCue) {
+      pendingCues.push({ track, handle: cueSheets.get(sheetKey) });
+    }
   }
   db.putTracks(rows).catch(() => {});
+  if (pendingCues.length) flushCues();
   if (pendingArt.length >= 24) flushArt();
   scheduleReindex();
 }
@@ -579,6 +593,85 @@ export function reindex() {
 /** Albums folded together since the current import began: key -> title. */
 const mergedThisScan = new Map();
 
+/* Files waiting for their cue sheet to be read. Reading one is asynchronous
+   and `absorb` is not, so they queue and are drained after the batch. */
+const pendingCues = [];
+let drainingCues = false;
+
+async function flushCues() {
+  if (drainingCues) return;
+  drainingCues = true;
+  try {
+    const rows = [];
+    while (pendingCues.length) {
+      const { track, handle } = pendingCues.shift();
+      let text = null;
+      try {
+        const file = handle.getFile ? await handle.getFile() : handle;
+        text = await file.text();
+      } catch { /* the sheet went away */ }
+      if (!text) continue;
+      const sheet = cue.parse(text);
+      /* A sheet that names several files is a folder of tracks described in
+         one place, which this library already reads as a folder of tracks.
+         Expanding it would double every one of them. */
+      if (!sheet || sheet.multiFile) continue;
+
+      for (const piece of cue.expand(sheet, track)) {
+        const prior = state.tracks.get(piece.id);
+        // Corrections survive, exactly as they do for a parsed file.
+        if (prior && prior.edits) {
+          piece.edits = prior.edits;
+          const orig = {};
+          for (const k of Object.keys(piece.edits)) orig[k] = piece[k];
+          piece.orig = orig;
+          applyEdits(piece);
+        }
+        if (prior) {
+          piece.playCount = prior.playCount || 0;
+          piece.lastPlayed = prior.lastPlayed || 0;
+        }
+        decorate(piece);
+        state.tracks.set(piece.id, piece);
+        rows.push(piece);
+      }
+
+      /* The side itself is kept — it is the file that gets decoded, and
+         `fileFor` resolves a cue track through it — and marked so the library
+         does not list it beside its own pieces. */
+      track.cueSource = true;
+      rows.push(track);
+    }
+    if (rows.length) {
+      await db.putTracks(rows).catch(() => {});
+      reindex();
+      events.emit('change');
+    }
+  } finally {
+    drainingCues = false;
+    if (pendingCues.length) flushCues();
+  }
+}
+
+/* L15: the cue sheets seen during a scan, by the path they share with their
+   audio file. Kept, not cleared per scan: a sheet found on Monday still
+   indexes the same file on Tuesday, and a rescan that only re-reads changed
+   files would otherwise lose it. */
+const cueSheets = new Map();
+
+/* L14: the .m3u files this scan walked past. Cleared at the start of a scan
+   like `mergedThisScan` is, for the same reason: they are this import's news. */
+let foundPlaylists = [];
+export const playlistFilesFound = () => foundPlaylists.slice();
+
+/** Reads one of them. Returns its text, or null if the file has gone. */
+export async function readPlaylistFile(entry) {
+  try {
+    const file = entry.handle.getFile ? await entry.handle.getFile() : entry.handle;
+    return await file.text();
+  } catch { return null; }
+}
+
 /**
  * Folds albums that are the same album back together.
  *
@@ -772,6 +865,215 @@ function mergeAlbums(albumBy) {
       t.search = norm(t.title + ' ' + al.artist + ' ' + t.album + ' ' + (t.genre || ''));
     }
   }
+}
+
+/* ------------------------------------------------------------------ L18
+ *
+ * Backfilling the guessed marks.
+ *
+ * `guessed` — which fields the tag reader had to take from the folder tree
+ * rather than from the file — has only been recorded since 2.6. A library
+ * imported before that has none, so `namedArtist` defaults to true for every
+ * track in it, and the album merge treats a folder name pressed into service
+ * as a real claim. The result is silently worse merging on exactly the
+ * libraries that have been around longest.
+ *
+ * The fix is to re-read the tags of the files that have no mark, which is a
+ * scan — so it borrows the scan's own discipline: it does only what has not
+ * been done, it can be stopped, and it survives being interrupted, because
+ * each batch is written before the next is asked for.
+ */
+export function needsBackfill() {
+  let n = 0;
+  for (const t of state.tracks.values()) {
+    // `guessed` is a string that is empty when nothing was guessed and absent
+    // when nobody ever asked — and those are different facts. `backfilled`
+    // marks the ones this pass has already answered for.
+    if (t.guessed === undefined && !t.backfilled) n++;
+  }
+  return n;
+}
+
+let backfilling = false;
+
+export async function backfillGuessed(onProgress) {
+  if (backfilling) return { ok: false, reason: 'already running' };
+  backfilling = true;
+  let done = 0;
+  let total = 0;
+  try {
+    const todo = [];
+    for (const t of state.tracks.values()) {
+      if (t.guessed === undefined && !t.backfilled) todo.push(t);
+    }
+    total = todo.length;
+    if (!total) return { ok: true, done: 0, total: 0 };
+
+    const w = ensureWorker();
+    for (let i = 0; i < todo.length; i += 60) {
+      const batch = todo.slice(i, i + 60);
+      const jobs = [];
+      for (const t of batch) {
+        const file = await fileFor(t.id);
+        // A file that cannot be reached is not a failure to record — the
+        // folder is simply not connected, and the next run will find it.
+        if (!file) continue;
+        jobs.push({ id: t.id, path: t.path, name: t.name, size: t.size,
+                    mtime: t.mtime, rootId: t.rootId, file });
+      }
+      if (jobs.length && w) {
+        /* Through the same parser the import uses, so the answer is the same
+           answer — a second implementation of "which of these came from the
+           folder" would drift from the first within a release. */
+        w.postMessage({ type: 'scan', jobs });
+      } else if (jobs.length) {
+        await parseOnMainThread(jobs);
+      }
+      for (const t of batch) t.backfilled = true;
+      await db.putTracks(batch).catch(() => {});
+      done += batch.length;
+      if (onProgress) onProgress(done, total);
+      // A breath between batches, so a library of twenty thousand does not
+      // hold the main thread for a minute.
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    reindex();
+    events.emit('change');
+    return { ok: true, done, total };
+  } finally {
+    backfilling = false;
+  }
+}
+
+/* ------------------------------------------------------------------ L12
+ *
+ * Playlist folders, and an order you chose.
+ *
+ * Playlists were a flat list in creation order. Past about fifteen that is a
+ * pile rather than a structure, and there was no way to move one — a list you
+ * cannot arrange is a list that gets worse every time you add to it.
+ *
+ * Folders one level deep, deliberately: two levels is a file manager, and
+ * nobody has ever wanted a file manager for forty playlists. A folder is a
+ * name and an order, stored beside the playlists themselves.
+ */
+let folders = [];
+export const playlistFolders = () => folders.slice();
+
+const saveFolders = () => db.setKV('playlistFolders', folders).catch(() => {});
+
+export async function createFolder(name) {
+  const folder = { id: 'pf:' + hash32(name + ':' + Date.now()), name: String(name).slice(0, 60) };
+  folders.push(folder);
+  await saveFolders();
+  events.emit('playlists');
+  undo.push({
+    label: `the folder “${folder.name}”`,
+    undo: async () => { folders = folders.filter((f) => f.id !== folder.id); await saveFolders(); events.emit('playlists'); return 1; },
+    redo: async () => { folders.push(folder); await saveFolders(); events.emit('playlists'); return 1; },
+  });
+  return folder;
+}
+
+export async function renameFolder(id, name) {
+  const f = folders.find((x) => x.id === id);
+  if (!f) return false;
+  const was = f.name;
+  f.name = String(name).slice(0, 60);
+  await saveFolders();
+  events.emit('playlists');
+  undo.push({
+    label: `renaming “${was}”`,
+    undo: async () => { f.name = was; await saveFolders(); events.emit('playlists'); return 1; },
+    redo: async () => { f.name = name; await saveFolders(); events.emit('playlists'); return 1; },
+  });
+  return true;
+}
+
+/**
+ * Removes a folder. Its playlists come out of it rather than going with it —
+ * deleting a container should never delete the contents, and a folder here is
+ * a label rather than a place.
+ */
+export async function removeFolder(id) {
+  const f = folders.find((x) => x.id === id);
+  if (!f) return false;
+  const inside = state.playlists.filter((p) => p.folder === id);
+  folders = folders.filter((x) => x.id !== id);
+  for (const p of inside) { delete p.folder; await db.putPlaylist(p).catch(() => {}); }
+  await saveFolders();
+  events.emit('playlists');
+  undo.push({
+    label: `the folder “${f.name}”`,
+    undo: async () => {
+      folders.push(f);
+      for (const p of inside) { p.folder = id; await db.putPlaylist(p).catch(() => {}); }
+      await saveFolders();
+      events.emit('playlists');
+      return 1;
+    },
+    redo: () => removeFolder(id),
+  });
+  return true;
+}
+
+/** Puts a playlist in a folder, or takes it out with `null`. */
+export async function movePlaylist(id, folderId) {
+  const p = state.playlists.find((x) => x.id === id);
+  if (!p) return false;
+  const was = p.folder || null;
+  if (folderId) p.folder = folderId; else delete p.folder;
+  await db.putPlaylist(p).catch(() => {});
+  events.emit('playlists');
+  undo.push({
+    label: `moving “${p.name}”`,
+    undo: () => movePlaylistQuiet(id, was),
+    redo: () => movePlaylistQuiet(id, folderId),
+  });
+  return true;
+}
+
+async function movePlaylistQuiet(id, folderId) {
+  const p = state.playlists.find((x) => x.id === id);
+  if (!p) return 0;
+  if (folderId) p.folder = folderId; else delete p.folder;
+  await db.putPlaylist(p).catch(() => {});
+  events.emit('playlists');
+  return 1;
+}
+
+/**
+ * Reorders the sidebar.
+ *
+ * `order` is a number on each playlist rather than a separate list of ids: a
+ * list would have to be kept in step with every create and delete, and a
+ * playlist that is not in it would have nowhere to sort. Sparse, so moving one
+ * writes one row rather than renumbering forty.
+ */
+export async function reorderPlaylists(ids) {
+  let n = 0;
+  const changed = [];
+  for (const id of ids) {
+    const p = state.playlists.find((x) => x.id === id);
+    if (!p) continue;
+    const next = (n += 10);
+    if (p.order === next) continue;
+    p.order = next;
+    changed.push(p);
+  }
+  for (const p of changed) await db.putPlaylist(p).catch(() => {});
+  sortPlaylists();
+  events.emit('playlists');
+  return changed.length;
+}
+
+/** Creation order until somebody says otherwise, then whatever they said. */
+function sortPlaylists() {
+  state.playlists.sort((a, b) => {
+    const ao = typeof a.order === 'number' ? a.order : Infinity;
+    const bo = typeof b.order === 'number' ? b.order : Infinity;
+    return ao - bo || a.createdAt - b.createdAt;
+  });
 }
 
 /* ------------------------------------------------------------------ L11
@@ -1004,6 +1306,9 @@ function* live() {
   const off = offRoots();
   for (const t of state.tracks.values()) {
     if (off.size && off.has(t.rootId)) continue;
+    // L15: a file that a cue sheet has split into pieces is not itself a
+    // track. It stays in the index because it is what gets decoded.
+    if (t.cueSource) continue;
     yield t;
   }
 }
@@ -1015,7 +1320,10 @@ const offRoots = () => {
 
 export const allTracks = () => [...live()];
 export const getTrack = (id) => state.tracks.get(id);
-export const isAvailable = (id) => handles.has(id);
+export const isAvailable = (id) => {
+  const t = state.tracks.get(id);
+  return handles.has(t && t.sourceId ? t.sourceId : id);
+};
 export const trackCount = () => {
   const off = offRoots();
   if (!off.size) return state.tracks.size;
@@ -1276,6 +1584,14 @@ const ownKey = (key) => key + '#own';
 
 export const hasOwnArt = (key) => ownArt.has(key);
 
+/* L17: the covers you chose, listed.
+ *
+ * An override is invisible until you walk into the record that has one — which
+ * makes it an override you cannot find, and therefore one you cannot undo six
+ * months later when you have forgotten you set it. */
+export const chosenCovers = () =>
+  [...ownArt.keys()].map((key) => ({ key, album: state.albumBy.get(key) || null }));
+
 /** The record `loadArt` should read for this album. */
 const artKeyFor = (key) => (ownArt.has(key) ? ownKey(key) : key);
 
@@ -1401,6 +1717,12 @@ export async function clearArtwork(key) {
 
 /** Resolves a playable File for a track, re-checking permission if needed. */
 export async function fileFor(id) {
+  /* L15: a cue track has no file of its own — it is a range inside the side
+     it came from, and `sourceId` names that. Resolved here rather than at
+     every call site, so playback, the waveform and the analysis all reach the
+     same file without any of them knowing about cue sheets. */
+  const t = state.tracks.get(id);
+  if (t && t.sourceId) id = t.sourceId;
   const h = handles.get(id);
   if (!h) return null;
   if (h instanceof File) return h;
@@ -1426,6 +1748,12 @@ async function* walkDirectory(dir, prefix = '', depth = 0) {
       yield { handle: entry, path: prefix + entry.name, name: entry.name };
     } else if (isLyric(entry.name)) {
       yield { handle: entry, path: prefix + entry.name, name: entry.name, lyric: true };
+    } else if (isPlaylistFile(entry.name)) {
+      // L14: noticed, not imported. See `foundPlaylists` below.
+      yield { handle: entry, path: prefix + entry.name, name: entry.name, playlist: true };
+    } else if (isCueFile(entry.name)) {
+      // L15: an index into the audio file beside it, not a track.
+      yield { handle: entry, path: prefix + entry.name, name: entry.name, cue: true };
     }
   }
 }
@@ -1505,6 +1833,12 @@ export async function addFileList(fileList, label) {
   // one chance to notice `04 Ferry Road.lrc` sitting beside `04 Ferry Road.mp3`
   // is right now, while the browser still has both.
   const lyrics = all.filter((f) => isLyric(f.name));
+  // L14, and for the same reason: a playlist file sitting beside the music is
+  // only reachable while the upload dialog's own list is still in hand.
+  const lists = all.filter((f) => isPlaylistFile(f.name));
+  // L15, and for the same reason again: a cue sheet is only reachable while
+  // the dialog's own list is in hand.
+  const cues = all.filter((f) => isCueFile(f.name));
 
   const first = files[0].webkitRelativePath || '';
   const name = label || first.split('/')[0] || 'Files';
@@ -1524,6 +1858,8 @@ export async function addFileList(fileList, label) {
   };
   const entries = files.map((f) => ({ file: f, path: relative(f), name: f.name }));
   for (const f of lyrics) entries.push({ file: f, path: relative(f), name: f.name, lyric: true });
+  for (const f of lists) entries.push({ file: f, path: relative(f), name: f.name, playlist: true });
+  for (const f of cues) entries.push({ file: f, path: relative(f), name: f.name, cue: true });
   await ingest(root, entries);
   return root;
 }
@@ -1682,6 +2018,26 @@ async function ingest(root, entries) {
       continue;
     }
 
+    /* L14: a playlist file is not a track either. Collected for the import to
+       offer at the end — every collection that has been through another player
+       has these, and the scan used to walk straight past them. Offered rather
+       than imported, because a music folder can also contain a player's own
+       auto-generated "Recently Added.m3u" and creating four playlists nobody
+       asked for is worse than not looking. */
+    if (e.playlist) {
+      foundPlaylists.push({ rootId: root.id, path: e.path, name: e.name, handle: e.handle || e.file });
+      continue;
+    }
+
+    /* L15: a cue sheet indexes the audio file beside it. Filed by the path
+       they share up to the extension, exactly as a lyric sidecar is, and read
+       after the audio has been parsed — the last track's length depends on
+       the file's own duration, which the parser is about to work out. */
+    if (e.cue) {
+      cueSheets.set(root.id + '/' + e.path.replace(/\.[^./]+$/, ''), e.handle || e.file);
+      continue;
+    }
+
     const id = root.id + '/' + e.path;
     seen.add(id);
     let file = e.file;
@@ -1776,6 +2132,7 @@ function startScan() {
   // Folds from before this import — the ones the launch reindex did — are the
   // library's history, not this import's news.
   mergedThisScan.clear();
+  foundPlaylists = [];
   scanFailures = [];
   scanFailCount = 0;
   scanStartedAt = Date.now();
@@ -1801,6 +2158,7 @@ function finishScan() {
     merged,
     failed: scanFailCount,
     failures: scanFailures.slice(),
+    playlistFiles: foundPlaylists.slice(),
   };
   /* I3: kept, not just toasted. "Added 50 tracks · merged Graduation" named
      the merge, which is exactly right, and then it was gone in four seconds
@@ -2132,7 +2490,7 @@ export const favouriteTracks = () =>
 
 /** Paints the stored library first, then reconnects to disk in the background. */
 export async function init() {
-  const [tracks, roots, playlists, recent, faves, sn, own, savedRuns] = await Promise.all([
+  const [tracks, roots, playlists, recent, faves, sn, own, savedRuns, savedFolders] = await Promise.all([
     db.getAllTracks().catch(() => []),
     db.getRoots().catch(() => []),
     db.getPlaylists().catch(() => []),
@@ -2141,6 +2499,7 @@ export async function init() {
     db.getKV('serial').catch(() => null),
     db.getKV('ownArt').catch(() => null),
     db.getKV('importRuns').catch(() => null),
+    db.getKV('playlistFolders').catch(() => null),
   ]);
 
   serial = typeof sn === 'string' && sn ? sn : makeSerial();
@@ -2148,7 +2507,8 @@ export async function init() {
 
   for (const t of tracks) { decorate(t); state.tracks.set(t.id, t); }
   state.roots = roots;
-  state.playlists = playlists.sort((a, b) => a.createdAt - b.createdAt);
+  state.playlists = playlists;
+  sortPlaylists();
   history.recent = Array.isArray(recent) ? recent : [];
   favourites.ids = Array.isArray(faves) ? faves.filter((id) => typeof id === 'string') : [];
   favourites.set = new Set(favourites.ids);
@@ -2164,6 +2524,9 @@ export async function init() {
   }
   // I3: what the last few imports did, across sessions — the question "what
   // did that import do" is usually asked after a reload.
+  if (Array.isArray(savedFolders)) {
+    folders = savedFolders.filter((f) => f && typeof f.id === 'string' && typeof f.name === 'string');
+  }
   if (Array.isArray(savedRuns)) {
     runs = savedRuns.filter((r) => r && typeof r.at === 'number').slice(0, RUN_LIMIT);
   }

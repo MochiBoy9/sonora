@@ -801,9 +801,11 @@ async function load(track, autoplay, { count = true } = {}) {
      is "skip the silence at the start", the other is "you were an hour in",
      and they are not both true at once. */
   const mark = longMarkFor(track.id);
-  const from = mark > 0 ? mark : startOf(track);
+  const cueAt = track.cueStart > 0 ? track.cueStart : 0;
+  // A mark is in the piece's own time, so it is placed inside the piece.
+  const from = mark > 0 ? cueAt + mark : startOf(track);
   if (from > 0) {
-    try { audio.currentTime = from; state.time = from; } catch { /* not seekable */ }
+    try { audio.currentTime = from; state.time = Math.max(0, from - cueAt); } catch { /* not seekable */ }
   }
   if (mark > 0) events.emit('resumed', { track, at: mark });
 
@@ -903,6 +905,10 @@ function cancelHandover() {
  * did.
  */
 export function startOf(track) {
+  /* L15: a cue track begins where its sheet says, and the lead-in trim does
+     not apply — the silence at the top of a side belongs to the first piece
+     and to nothing after it. */
+  if (track && track.cueStart > 0) return track.cueStart;
   if (!state.trimSilence || !track) return 0;
   const rec = peakmap.peek(track);
   const lead = rec && rec.lead;
@@ -1153,11 +1159,20 @@ export function seek(seconds) {
   /* An armed handover was timed against where the playhead used to be. Seeking
      backwards would leave it to fire mid-track and change the record on you. */
   if (handover && handover.armed) cancelHandover();
-  const d = state.duration || audio.duration || 0;
-  audio.currentTime = clamp(seconds, 0, Math.max(0, d - 0.05));
-  state.time = audio.currentTime;
+  // The piece's own length, not the file's: `state.duration` is already the
+  // former for a cue track, and `audio.duration` would be the latter.
+  const d = state.duration || (state.current && state.current.cueStart !== undefined ? 0 : audio.duration) || 0;
+  const want = clamp(seconds, 0, Math.max(0, d - 0.05));
+  // L15: the scrubber and everything reading `state.time` work in the piece's
+  // own time; the element works in the file's. `cueOffset` is the difference,
+  // and it is zero for every track that is a file of its own.
+  audio.currentTime = want + cueOffset();
+  state.time = want;
   events.emit('time', state.time);
 }
+
+/** Where in the file the current piece starts. Zero unless it came from a cue. */
+const cueOffset = () => (state.current && state.current.cueStart > 0 ? state.current.cueStart : 0);
 
 export const seekRatio = (r) => seek(r * (state.duration || 0));
 
@@ -1764,13 +1779,23 @@ for (const d of [deckA, deckB]) {
     // than one that never worked.
     rack.apply();
     if (isFinite(real) && real > 0) {
-      state.duration = real;
       const t = state.current;
-      // Container-derived durations can be estimates; trust the decoder instead.
-      if (t && Math.abs((t.duration || 0) - real) > 1.2) {
-        t.duration = Math.round(real * 10) / 10;
-        db.putTracks([t]).catch(() => {});
-        lib.events.emit('change');
+      /* L15: the decoder is reporting the length of the *file*, and a piece
+         cut out of a cue sheet is not the file. Its length is the distance
+         between two indexes, which the sheet already said exactly — and the
+         last piece's end is the file's own duration, which is the one case
+         where the decoder has something to add. */
+      if (t && t.cueStart !== undefined) {
+        const end = t.cueEnd === null || t.cueEnd === undefined ? real : t.cueEnd;
+        state.duration = Math.max(0, end - (t.cueStart || 0));
+      } else {
+        state.duration = real;
+        // Container-derived durations can be estimates; trust the decoder.
+        if (t && Math.abs((t.duration || 0) - real) > 1.2) {
+          t.duration = Math.round(real * 10) / 10;
+          db.putTracks([t]).catch(() => {});
+          lib.events.emit('change');
+        }
       }
     }
     events.emit('state');
@@ -1778,7 +1803,23 @@ for (const d of [deckA, deckB]) {
 
   d.el.addEventListener('timeupdate', () => {
     if (!mine()) return;
-    state.time = d.el.currentTime;
+    const cur = state.current;
+    /* L15: a piece of a side ends where the next one begins, and the file
+       plays straight through it. Checked on the clock rather than by an
+       `ended` event, because there is no `ended` in the middle of a file —
+       this *is* the end of the track as far as everything above is concerned.
+
+       A quarter-second of slack, because `timeupdate` fires about four times
+       a second and waiting for an exact crossing would overrun. */
+    if (cur && cur.cueEnd > 0 && d.el.currentTime >= cur.cueEnd - 0.02) {
+      state.time = cur.duration || 0;
+      events.emit('time', state.time);
+      next(true);
+      return;
+    }
+    state.time = cur && cur.cueStart > 0
+      ? Math.max(0, d.el.currentTime - cur.cueStart)
+      : d.el.currentTime;
     events.emit('time', state.time);
   });
 
@@ -1839,7 +1880,8 @@ function syncHandoverWatch() {
 events.on('state', syncHandoverWatch);
 
 /** Live playhead. audio's own timeupdate only fires ~4x/second. */
-export const currentTime = () => (state.playing ? audio.currentTime : state.time);
+export const currentTime = () =>
+  (state.playing ? Math.max(0, audio.currentTime - cueOffset()) : state.time);
 export const buffered = () => {
   try {
     const b = audio.buffered;
