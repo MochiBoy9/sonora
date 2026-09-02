@@ -556,6 +556,76 @@ export async function rackPicker(scope, key, label) {
 
 /* ------------------------------------------------------------------ menus */
 
+/**
+ * H4: a long press, where a right-click is the only way in.
+ *
+ * Every row, card and sleeve in the app opens its menu on `contextmenu`. Some
+ * mobile browsers synthesise that from a long press and some do not; Android
+ * Chrome fires it after the text-selection UI has already appeared, and iOS
+ * Safari mostly does not fire it at all. So the app listens for the gesture
+ * itself rather than for a browser's opinion of it.
+ *
+ * Half a second, and the finger has to stay within ten pixels — past that it
+ * is a scroll, and stealing a scroll to open a menu is the single worst thing
+ * a touch interface can do. A vibration where the device has one, because the
+ * whole difficulty with a long press is knowing when it has taken.
+ *
+ * Attached once, at the document, and dispatches the element's own
+ * `contextmenu` — so every menu in the app works on a finger without any of
+ * them knowing this exists.
+ */
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP = 10;
+
+export function watchLongPress() {
+  let timer = 0;
+  let from = null;
+  let fired = false;
+
+  const cancel = () => { clearTimeout(timer); timer = 0; from = null; };
+
+  addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' || !e.isPrimary) return;
+    // Not on things a press already means something on: a button is a tap, a
+    // field wants the caret, and the queue's own drag handles are a drag.
+    if (e.target.closest('input, textarea, select, .seek, .vol, [contenteditable]')) return;
+    const target = e.target.closest('.trow, .card, .qrow, .side-playlist, .crate-card, .floor-card, .sleeve');
+    if (!target) return;
+    fired = false;
+    from = { x: e.clientX, y: e.clientY, target, id: e.pointerId };
+    timer = setTimeout(() => {
+      timer = 0;
+      if (!from) return;
+      fired = true;
+      navigator.vibrate?.(12);
+      target.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true,
+        clientX: from.x, clientY: from.y,
+      }));
+      from = null;
+    }, LONG_PRESS_MS);
+  }, { passive: true });
+
+  addEventListener('pointermove', (e) => {
+    if (!from || e.pointerId !== from.id) return;
+    if (Math.hypot(e.clientX - from.x, e.clientY - from.y) > LONG_PRESS_SLOP) cancel();
+  }, { passive: true });
+
+  addEventListener('pointerup', cancel, { passive: true });
+  addEventListener('pointercancel', cancel, { passive: true });
+
+  /* The click that follows the finger coming up must not also open the record.
+     Captured, so it is stopped before the row's own handler sees it. */
+  addEventListener('click', (e) => {
+    if (!fired) return;
+    fired = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+
+  return cancel;
+}
+
 let openMenu = null;
 
 export function closeMenu() {

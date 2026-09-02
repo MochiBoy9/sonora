@@ -27,6 +27,7 @@ import * as lib from './library.js';
 import * as player from './player.js';
 import * as undoStack from './undo.js';
 import { toast } from './ui.js';
+import * as offline from './offline.js';
 
 /* ------------------------------------------------------------------ commands */
 
@@ -91,6 +92,15 @@ function commands() {
       run: () => { player.setCrossfade(6); toast('Crossfading 6s'); } },
     { label: 'Bypass the rack', icon: 'refresh', keys: 'B',
       run: () => document.dispatchEvent(new CustomEvent('sonora:bypass')) },
+
+    /* H5: the install offer, where somebody looking for it would look. Absent
+       where the browser has not said it is possible. */
+    { label: 'Install Sonora', icon: 'cube', when: offline.canInstall(),
+      hint: 'its own window, no browser furniture',
+      run: async () => {
+        const r = await offline.install();
+        toast(r === 'accepted' ? 'Installed' : r === 'dismissed' ? 'Not installed' : 'Not available here');
+      } },
 
     { label: 'Home', icon: 'home', run: go('#/home') },
     { label: 'Songs', icon: 'music', run: go('#/songs') },

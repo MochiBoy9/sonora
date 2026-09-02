@@ -161,7 +161,7 @@ function comparePNG(a, b, tol = 12) {
 /* ------------------------------------------------------------------ lint */
 
 const LINT = () => {
-  const out = { collapsed: [], clipped: [], tiny: [], stacked: [], buried: [] };
+  const out = { collapsed: [], clipped: [], tiny: [], stacked: [], buried: [], small: [] };
   const name = (e) => {
     const c = String(e.className?.baseVal ?? e.className ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
     return e.tagName.toLowerCase() + (c ? '.' + c : '') + (e.id ? '#' + e.id : '');
@@ -267,7 +267,11 @@ const LINT = () => {
       out.collapsed.push(`${path(e)} h=${r.height.toFixed(1)} needs ${e.scrollHeight}`);
     }
     const hasText = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
-    if (hasText) {
+    /* Text that exists only for a screen reader is not text on the screen.
+       `.sr-only` is a 1×1 clipped box by construction — measuring its font
+       against its height is measuring the wrong thing, and the rule that
+       catches unreadable type would report every live region in the app. */
+    if (hasText && !e.closest('.sr-only')) {
       const m = new DOMMatrixReadOnly(cs.transform);
       const scale = Math.min(Math.hypot(m.a, m.b) || 1, Math.hypot(m.c, m.d) || 1);
       const eff = parseFloat(cs.fontSize) * scale;
@@ -282,10 +286,32 @@ const LINT = () => {
 
   const leaves = all.filter((e) => {
     if (e.closest('.sprite, .menu, .dialog, .toast')) return false;
+    /* A face turned away from the viewer is not text on the screen.
+     *
+     * The back of a sleeve is drawn in the same place as the front and rotated
+     * out of view; its boxes are exactly where the front's are, so every one
+     * of them reads as an overlap. `aria-hidden` is already how the app says
+     * "this face is not currently the one you are looking at", which makes it
+     * the honest test rather than a special case about sleeves. */
+    if (e.closest('[aria-hidden="true"], .sr-only')) return false;
+    /* A control's own label sitting over the content it acts on is what a
+       control does. The flip and zoom buttons are drawn on the sleeve on
+       purpose; reporting them as an overlap is reporting the design. */
+    if (e.closest('button, .btn, .icon-btn')) return false;
     if (!/^(span|h1|h2|h3|h4|p|li|dd|dt|a|strong|em|label|small|time|b)$/.test(e.tagName.toLowerCase())) return false;
     if (e.children.length || !e.textContent.trim()) return false;
     const v = shown(e);
     if (!v || v.cs.position === 'fixed') return false;
+    /* An overlay covering the page is not two things overlapping.
+     *
+     * The stage and the queue pane are fixed layers drawn over whatever route
+     * is behind them, so every line of text on one reads as colliding with a
+     * line on the other. Checking the element's own position was enough while
+     * the overlays had no nested text; walking up for a fixed ancestor is what
+     * it always meant. */
+    for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (getComputedStyle(p).position === 'fixed') return false;
+    }
     return !!visible(e);
   }).map((e) => ({ e, r: visible(e) }));
   for (let i = 0; i < leaves.length; i++) {
@@ -315,6 +341,45 @@ const LINT = () => {
     }
   }
 
+  /* H3: hit targets, on a surface that is actually being touched.
+   *
+   * This suite already walks every interactive element on sixty surfaces and
+   * measures its box. One more rule turns "the phone layout is probably fine"
+   * into something that fails — which is the whole reason the suite exists.
+   *
+   * 44 by 44 is the figure both platform guidelines land on and roughly the
+   * contact patch of an adult fingertip. It is checked only where the pointer
+   * is coarse, because on a mouse a 24px button is not a problem and demanding
+   * 44 everywhere would make the desktop layout worse to satisfy a test.
+   *
+   * A link inside a run of prose is exempt: it is a word in a sentence, its
+   * height is the line height, and the fix for a small one is not to make the
+   * paragraph double-spaced. `data-small-ok` is the deliberate opt-out for the
+   * handful of controls that live inside something already finger-sized.
+   */
+  if (matchMedia('(pointer: coarse)').matches) {
+    const HIT = 44;
+    const TAPPABLE = 'button, a[href], input:not([type=hidden]), select, [role="slider"], [role="switch"], [role="tab"], [tabindex="0"]';
+    for (const e of document.querySelectorAll(TAPPABLE)) {
+      if (e.closest('.sprite, [hidden], .toast')) continue;
+      if (e.hasAttribute('data-small-ok') || e.closest('[data-small-ok]')) continue;
+      // A link in a paragraph is text. Anything laid out inline that is not a
+      // control is being read, not aimed at.
+      const cs = getComputedStyle(e);
+      if (e.tagName === 'A' && cs.display === 'inline') continue;
+      if (!shown(e)) continue;
+      /* On screen at all is checked against the clipped box; the *size* is the
+         element's own. A card half scrolled off the bottom is not a small
+         target, it is a scrolled one, and measuring the clipped rectangle
+         reported "322×12" for a control that is 322×418. */
+      if (!visible(e)) continue;
+      const r = e.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      if (r.width >= HIT && r.height >= HIT) continue;
+      out.small.push(`${name(e)} ${Math.round(r.width)}×${Math.round(r.height)}`);
+    }
+  }
+
   for (const k of Object.keys(out)) out[k] = [...new Set(out[k])].slice(0, 8);
   return out;
 };
@@ -329,10 +394,12 @@ const browser = await chromium.launch({
 const seenGolden = new Set();
 let shotCount = 0;
 
-async function sweep(scheme, width, height) {
+async function sweep(scheme, width, height, { touch = false } = {}) {
   const ctx = await browser.newContext({
     viewport: { width, height }, colorScheme: scheme, deviceScaleFactor: 1,
     reducedMotion: 'reduce',      // entrances mid-flight are not what is being photographed
+    // H3: a coarse pointer, so the hit-target rule has a surface to run on.
+    hasTouch: touch,
   });
   const page = await ctx.newPage();
   const errors = [];
@@ -358,7 +425,13 @@ async function sweep(scheme, width, height) {
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
     (async () => {
-      await page.locator('.side-foot .add-btn').click();
+      /* Whichever Add button this width actually shows. The phone layout hides
+         the one in the side rail and keeps the one in the topbar, so a sweep
+         that only knows about the first cannot import anything below 560px —
+         which is exactly the width the touch pass runs at. */
+      const side = page.locator('.side-foot .add-btn');
+      const top = page.locator('.topbar-add');
+      await (await side.isVisible() ? side : top).click();
       await page.locator('.menu-item', { hasText: 'Add a folder' }).click();
     })(),
   ]);
@@ -550,6 +623,9 @@ async function sweep(scheme, width, height) {
 await sweep('dark', 1440, 900);
 await sweep('light', 1440, 900);
 await sweep('dark', 620, 900);
+// H3: one pass with a finger rather than a pointer. Same surfaces, same
+// goldens, plus the one rule that only means anything here.
+await sweep('dark', 390, 844, { touch: true });
 
 await browser.close();
 

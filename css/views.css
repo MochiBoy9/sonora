@@ -559,6 +559,32 @@
   .back-cat { padding-top: 4px; }
 }
 
+/* On a phone the crate's sleeve is 155px square and the guarantees above were
+   written for 168. They are floors, not contents — "at least two tracks and
+   three rows of spec" — and at this size the sum of the floors is taller than
+   the card. So the floors go: what is printed is whatever fits, running out
+   under the fade the back already has, which is what a real sleeve photographed
+   small looks like anyway. */
+@media (max-width: 560px) {
+  .sleeve-back { gap: 4px; padding: 8px 9px 6px; }
+  .back-head { padding-bottom: 3px; }
+  /* The tracklist is the part that gives: it already runs out under a fade, so
+     it can be asked to take whatever is left. The spec block and the catalogue
+     number keep their content height — a `min-height: 0` on both let the spec
+     collapse to four pixels, which is a row of print squashed to a line rather
+     than a row of print that stopped early. */
+  /* Basis zero, not auto: with `auto` the list claims its content height first
+     and then grows, which pushes the catalogue number off the bottom of the
+     card. At zero it only ever takes what is left over, which is what "the
+     tracklist is the part that gives" actually means. */
+  .back-list { min-height: 0; flex: 1 1 0; overflow: hidden; }
+  /* The spec gives too, after the list has. `flex: none` kept all eight of its
+     rows and pushed the catalogue number off the card; shrinking it prints as
+     many rows as fit and stops, which is what a sleeve photographed small
+     actually looks like. */
+  .back-spec { min-height: 0; flex: 0 1 auto; overflow: hidden; padding-top: 3px; }
+}
+
 .hero-meta { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-bottom: 4px; }
 .hero-title {
   font-size: calc(clamp(28px, 3.6vw, 50px) * var(--scale));
@@ -581,6 +607,27 @@
    can break is after the artist — a wrapping row of dot-separated spans
    otherwise ends a line on a bare separator, which reads as a truncation. */
 .hero-facts { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+
+/* On a phone the facts are five items on one unwrappable line, which at 390px
+   overhangs the window by about 160 pixels. `nowrap` exists so a fact and its
+   separator never break apart — that is still true of each fact, so the wrap
+   moves to the run rather than being switched off: `.dot` keeps its neighbours
+   and the line breaks between pairs. */
+@media (max-width: 560px) {
+  .hero-facts { flex-wrap: wrap; row-gap: 4px; white-space: normal; }
+  .hero-facts > span { white-space: nowrap; }
+
+  /* And the hero itself stacks.
+   *
+   * At 390px a 168px sleeve beside its title leaves about 130 pixels for the
+   * words, and flexbox spends that by shrinking the meta column to its
+   * min-content width — which is one word wide, with the action row hanging
+   * 25 pixels off the side of the page. A phone has one column; the record
+   * goes at the top of it, which is where a phone player puts it anyway. */
+  .hero-show { flex-direction: column; align-items: flex-start; }
+  .hero-show .hero-meta { width: 100%; }
+  .hero-show .sleeve-stage { --sleeve-size: 200px; align-self: center; }
+}
 .hero-link { color: var(--text); font-weight: 500; transition: color var(--dur-1) linear; }
 .hero-link:hover { color: var(--accent); }
 /* D1: a link that sits among facts rather than among names. It has to read as
@@ -601,6 +648,10 @@
 .sort-btn .sort-dir { font-family: var(--mono); opacity: .7; margin-left: -3px; }
 
 .hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+/* The row wraps, so its buttons must not also shrink: a `.btn` with no
+   `flex` basis gives up its padding first and clips its own label rather than
+   moving to the next line. Five actions in 390px is exactly that case. */
+.hero-actions > .btn, .hero-actions > .icon-btn, .hero-actions > .fab { flex: none; }
 
 /* ------------------------------------------------------------------ grids */
 
@@ -923,17 +974,62 @@
 
 .qrow {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 12px;
   height: 56px;
-  padding: 0 14px;
   cursor: pointer;
   contain: layout style;
+  /* H1: the swipe layer slides off the edges, and the labels behind it must
+     not be visible until it does. */
+  overflow: hidden;
   border-bottom: var(--hair) solid rgb(120 200 255 / .06);
   border-left: 2px solid transparent;
   transition: background var(--dur-1) linear, opacity var(--dur-2) linear, border-color var(--dur-1) linear;
 }
+/* Everything that used to be laid out by the row is laid out by the layer that
+   moves; the row itself is now the frame the layer moves inside. */
+.qrow-slide {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 100%;
+  padding: 0 14px;
+  /* Springs back when the finger lifts short of the threshold. Suppressed
+     while the finger is down, so the row tracks it exactly. */
+  transition: transform .22s var(--ease-out);
+}
+/* Transparent at rest, so the row's own state tints — playing, played — show
+   through as they always have; opaque only while it is moving, or the labels
+   behind would read straight through the row that is covering them. */
+.qrow.is-swiping .qrow-slide { transition: none; background: var(--surface); }
+
+/* H1: what the two directions do, printed behind the row.
+ *
+ * Revealed as the row slides off them rather than fading in, so the gesture
+ * teaches itself: you see the word before you have gone far enough to commit,
+ * and the colour comes up as you cross the threshold. */
+.qrow-act {
+  position: absolute;
+  top: 0; bottom: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  pointer-events: none;
+}
+.qrow-act-next { left: 0; }
+.qrow-act-remove { right: 0; }
+.qrow[data-swipe="next"] .qrow-act-next,
+.qrow[data-swipe="remove"] .qrow-act-remove { color: var(--accent); }
+.qrow[data-swipe="remove"] .qrow-act-remove { color: var(--warn); }
+/* Only the direction being swiped is lit; the other stays dim behind the row
+   it has not moved off. */
+.qrow:not(.is-swiping) .qrow-act { opacity: 0; }
+.qrow.is-swiping .qrow-act { opacity: calc(.35 + .65 * var(--swipe, 0)); }
 .qrow:hover { background: rgb(var(--accent-rgb) / .07); border-left-color: var(--line-3); }
 .qrow.is-past { opacity: .4; }
 .qrow.is-current { background: rgb(var(--accent-rgb) / .12); border-left-color: var(--accent); }
@@ -1520,12 +1616,23 @@
   scrollbar-width: thin;
 }
 
+/* How wide a record is, seen edge-on.
+ *
+ * Declared here and read by `mountShelf` through `getComputedStyle`, because
+ * the shelf is virtualised: it computes every spine's x position from these
+ * numbers without measuring anything, so a width the stylesheet changes and
+ * the script does not is a shelf whose records overlap. That is exactly what
+ * happened when the coarse-pointer rule below widened them.
+ *
+ * `--spine-base` plus `--spine-thick` × thickness: 14px for a single, half
+ * again for a double — the same curve the sleeve's edge plane uses, so the two
+ * views agree about how big a record is. */
+.shelf-run { --spine-base: 13px; --spine-thick: 11px; }
+
 .spine {
   position: relative;
   flex: none;
-  /* 14px for a single, half again for a double — the same curve the sleeve's
-     edge plane uses, so the two views agree about how big a record is. */
-  width: calc(13px + 11px * var(--thick, 1));
+  width: calc(var(--spine-base) + var(--spine-thick) * var(--thick, 1));
   height: 268px;
   display: block;
   transform-style: preserve-3d;
@@ -2693,4 +2800,52 @@ body.lb-open { overflow: hidden; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* H3: the last few targets, which live in this file rather than in the
+   component sheet. Same rule, same reason — see the note in components.css. */
+@media (pointer: coarse) {
+  .flip-btn { min-height: 44px; padding-left: 14px; padding-right: 14px; }
+  .file-twist { width: 44px; height: 44px; }
+  .card-fab { width: 44px; height: 44px; }
+  .crate-pile-card { width: 56px; height: 56px; }
+  /* The nav bar along the bottom of a phone scrolls, so its items can afford
+     the width — and 26px each across twelve is not a bar anybody can hit. */
+  .sidebar .nav-item { min-width: 56px; }
+  /* The transport's title and artist are links to the album and the artist. On
+     a phone they sit under `.pb-open`, a 44px target that opens the now
+     playing screen — so they are not the thing being aimed at, and growing
+     them would push the transport apart for no gain. */
+  .pb-title, .pb-artist { pointer-events: none; }
+}
+
+/* H3, the rest of it — the controls that are shaped like the objects they
+   represent, where "make it 44 wide" would stop them being that object. */
+@media (pointer: coarse) {
+  .floor-rail-btn { min-height: 44px; }
+  /* The now-playing panel's links to the artist and the record. Two lines of
+     text one above the other, so the target comes from the space between them
+     rather than from making either line taller. */
+  .np-artist, .np-album { padding: 15px 0; display: block; }
+  /* A record seen edge-on is 14 pixels wide, and that is the whole idea of a
+     shelf. It cannot be widened without becoming a row of cards — so the
+     *spine* keeps its width and gains its target sideways, where the gap
+     between records is space nothing else is using. */
+  /* A record seen edge-on is 14 pixels wide on a desktop, which is a shelf you
+     read rather than one you touch. Widened rather than padded: negative
+     margins made neighbouring spines overlap, so their titles collided — and a
+     shelf where the records stand a little further apart is still a shelf,
+     where one where they intersect is not. */
+  /* A record seen edge-on is 14 pixels wide on a desktop, which is a shelf you
+     read rather than one you touch. Widened rather than padded: negative
+     margins made neighbouring spines overlap, so their titles collided — and a
+     shelf where the records stand a little further apart is still a shelf,
+     where one whose records intersect is not.
+     Set on the run, not on the spine, so the script that lays the shelf out
+     reads the same two numbers the stylesheet does. */
+  .shelf-run { --spine-base: 40px; --spine-thick: 12px; }
+  /* The hero's own links: text in a run of small print, which on a finger has
+     to be reachable without the line becoming double-spaced. Padding rather
+     than height, so the run still reads as one line. */
+  .hero-link { padding: 15px 0; }
 }

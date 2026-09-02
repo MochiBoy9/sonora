@@ -805,3 +805,26 @@ body.is-ready .app { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   .side-folder-tw { transition: none; }
 }
+
+/* H2: the tap target that opens the now playing screen.
+ *
+ * Absent on a desktop, where the transport's own links go to the album and the
+ * artist and a layer over them would take both away. On a phone those links
+ * are the wrong size for a finger anyway, and "the thing that is playing" is
+ * one target rather than two. */
+.pb-open { display: none; }
+@media (max-width: 560px) {
+  .pb-now { position: relative; }
+  .pb-open {
+    display: block;
+    position: absolute;
+    inset: 0;
+    background: none;
+    border: 0;
+    padding: 0;
+    /* Above the titles it covers, below the favourite button beside them —
+       which stays its own target because it is a different thing to do. */
+    z-index: 1;
+  }
+  .pb-now .pb-fav { position: relative; z-index: 2; }
+}

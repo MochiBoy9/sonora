@@ -565,3 +565,15 @@
 .gr.is-idle { opacity: .4; }
 .gr.is-idle .gr-fill { transform: scaleX(0); }
 .gr-val { font-variant-numeric: tabular-nums; }
+
+/* H3: the EQ handles are dragged, which on a finger is the one gesture that
+   most needs the target. The cap stays the size it is drawn; the box around it
+   grows. */
+@media (pointer: coarse) {
+  .eq-handle { width: 44px; height: 44px; margin: -22px 0 0 -22px; }
+  /* The handles at either end now overhang the stage by half their width, so
+     the stage is given the room rather than the handles being clipped —
+     the curve inside keeps its own width because it is drawn to the SVG's
+     viewBox, not to the padding box. */
+  .eq-stage { padding-left: 14px; padding-right: 14px; }
+}

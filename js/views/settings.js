@@ -12,9 +12,13 @@ import * as player from '../player.js';
 import * as session from '../session.js';
 import * as stats from '../stats.js';
 import * as shopWindow from '../idle.js';
-import { dialog, sectionHead, toast } from '../ui.js';
+import { dialog, promptDialog, sectionHead, toast } from '../ui.js';
 import { el, fmtAgo, fmtBytes, fmtCount, fmtTotal, ico } from '../util.js';
-import { MODES, isMode } from '../visualizer.js';
+/* Named rather than a namespace import: `viz` is already a local in
+   `viewSettings` — the section element for the visualiser panel — and a
+   namespace by that name is shadowed inside the one function that needs it.
+   The same trap the note above `countLine` in views/home.js describes. */
+import { MODES, isMode, announce as sayViz, announces as vizAnnounces, setAnnounces as setVizAnnounces } from '../visualizer.js';
 
 export function viewSettings(host) {
   const offs = [];
@@ -345,6 +349,69 @@ export function viewSettings(host) {
         if (!r.ok) toast('No folders to check');
       },
     })));
+
+  /* I2: and the other question, which the scan does not answer.
+   *
+   * "Check for new files" finds what changed and acts on it. This asks whether
+   * everything the index claims to have is still on the disk and readable —
+   * the question after a drive is unplugged, a sync goes wrong, or a folder is
+   * reorganised by something that was not Sonora. Read-only: it opens files,
+   * reports, and changes nothing, which is what makes it safe to run when you
+   * are already worried. */
+  imports.appendChild(el('div', { class: 'toolbar' },
+    el('button', {
+      class: 'btn ghost', html: ico('info') + '<span>Check everything is still there</span>',
+      title: 'Opens every file the library claims to have. Changes nothing.',
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        const label = btn.querySelector('span');
+        btn.disabled = true;
+        const control = new AbortController();
+        label.textContent = 'Checking…';
+        const report = await lib.verifyLibrary({
+          signal: control.signal,
+          onProgress: (n, total) => { label.textContent = `Checking ${n} of ${total}…`; },
+        });
+        btn.disabled = false;
+        label.textContent = 'Check everything is still there';
+        showVerify(report);
+      },
+    })));
+
+  /** Prints what the check found, or says plainly that it found nothing. */
+  function showVerify(r) {
+    const trouble = r.missing.length + r.unreadable.length;
+    const lines = [];
+    if (r.missing.length) lines.push([`${fmtCount(r.missing.length, 'track')} the library has and the disk does not`, r.missing]);
+    if (r.unreadable.length) lines.push([`${fmtCount(r.unreadable.length, 'file')} that would not open`, r.unreadable]);
+    if (r.unseen.length) lines.push([`${fmtCount(r.unseen.length, 'file')} on disk the library has never seen`, r.unseen]);
+
+    const body = el('div', {},
+      el('p', { text: trouble
+        ? `${r.ok} of ${r.checked} checked out. ${fmtCount(trouble, 'thing')} needs a look.`
+        : `All ${r.ok} of them are where they should be and every one of them opened.` }),
+      r.skipped.length
+        ? el('p', { class: 'muted', text: 'Not checked: ' + r.skipped.map((x) => `${x.name} (${x.why})`).join(', ') })
+        : null,
+      ...lines.map(([head, rows]) => el('div', {},
+        el('p', { class: 'rack-pick-head', text: head }),
+        el('ul', { class: 'fail-list' }, rows.slice(0, 20).map((x) =>
+          el('li', {},
+            el('span', { class: 'fail-name', text: x.path }),
+            el('span', { class: 'fail-why', text: x.root })))),
+        rows.length > 20 ? el('p', { class: 'muted', text: `and ${rows.length - 20} more` }) : null)),
+      r.unseen.length
+        ? el('p', { class: 'muted', text: 'Files the library has never seen are usually new music. “Check for new files” brings them in.' })
+        : null,
+      el('p', { class: 'muted', text: 'Nothing was changed. This only looked.' }));
+
+    dialog({
+      title: trouble ? 'Some of it is not where it should be' : 'Everything checked out',
+      width: 560,
+      body,
+      actions: [{ label: 'Close', primary: true }],
+    });
+  }
 
   const paintRuns = () => {
     const runs = lib.importRuns();
@@ -801,6 +868,171 @@ export function viewSettings(host) {
       el('div', { class: 'settings-name', text: 'Backup' }), backupNote),
     el('div', { class: 'settings-actions' }, withArt, saveBackup, restoreBtn, restorePicker)));
 
+  /* I3: more than one library.
+   *
+   * One index, one set of settings and one listening history per browser
+   * profile — fine until two people share a machine, or until somebody wants
+   * their own records kept apart from the ones on the house speakers. A
+   * library is one IndexedDB database; switching is choosing another and
+   * reloading, which is honest about what it costs and is half a second.
+   *
+   * The row says which one you are in first, because a switcher that does not
+   * is a way to lose track of whose library you just edited. */
+  const libNote = el('div', { class: 'settings-note' });
+  const libList = el('div', { class: 'segmented quiet', role: 'group', 'aria-label': 'Library' });
+
+  const paintLibs = () => {
+    const active = db.activeLibrary();
+    libList.textContent = '';
+    for (const l of db.libraries()) {
+      const on = l.id === active;
+      libList.appendChild(el('button', {
+        class: 'seg' + (on ? ' is-on' : ''), text: l.name,
+        'aria-pressed': String(on),
+        title: on ? 'The library you are in' : `Switch to “${l.name}”`,
+        onclick: () => {
+          if (on) return;
+          dialog({
+            title: `Switch to “${l.name}”?`,
+            body: el('div', {},
+              el('p', { text: 'Sonora will reload. Nothing in this library is changed or removed — it is still here when you come back.' }),
+              el('p', { class: 'muted', text: 'Each library has its own index, folders, playlists, racks and listening history. Your Look and keyboard shortcuts are shared.' })),
+            actions: [
+              { label: 'Stay here' },
+              { label: 'Switch', primary: true, onSelect: () => { db.useLibrary(l.id); location.reload(); } },
+            ],
+          });
+        },
+      }));
+    }
+    const active2 = db.libraries().find((l) => l.id === active);
+    libNote.textContent = `You are in “${(active2 && active2.name) || 'Main library'}”. ` +
+      'Each library keeps its own folders, playlists, corrections, racks and listening history.';
+  };
+  paintLibs();
+
+  storage.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('database') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Library' }), libNote),
+    el('div', { class: 'settings-actions' },
+      libList,
+      el('button', {
+        class: 'btn ghost sm', text: 'New…',
+        onclick: () => promptDialog({
+          title: 'A new library', label: 'Name', value: 'Second library', confirm: 'Create',
+          onConfirm: (name) => {
+            if (!name) return;
+            const made = db.addLibrary(name);
+            paintLibs();
+            toast(`“${made.name}” is ready — switch to it when you want to use it`, { duration: 6000 });
+          },
+        }),
+      }),
+      el('button', {
+        class: 'btn ghost sm danger', text: 'Remove…',
+        title: 'Throw away a library you are not in',
+        onclick: () => {
+          const others = db.libraries().filter((l) => l.id && l.id !== db.activeLibrary());
+          if (!others.length) return toast('There is no other library to remove');
+          const pick = el('div', { class: 'rack-pick' }, others.map((l) => el('button', {
+            class: 'rack-pick-row',
+            onclick: async () => {
+              closeIt();
+              const gone = await db.dropLibrary(l.id);
+              paintLibs();
+              toast(gone ? `“${l.name}” is gone` : 'That one could not be removed');
+            },
+          }, el('span', { class: 'rack-pick-name', text: l.name }))));
+          let closeIt = () => {};
+          const d = dialog({
+            title: 'Remove which library?',
+            body: el('div', {},
+              el('p', { text: 'Everything in it goes: the index, the playlists, the corrections, the racks and the listening history. Your music files are not touched.' }),
+              el('p', { class: 'muted', text: 'This cannot be undone. Take a backup of it first if you are unsure — switch to it, save a backup, then come back.' }),
+              pick),
+            width: 480,
+            actions: [{ label: 'Cancel' }],
+          });
+          closeIt = () => d.close();
+        },
+      }))));
+
+  /* I1: and one that happens without being asked.
+   *
+   * A backup you have to remember is a backup you have once. With a directory
+   * handle already granted there is nothing to arrange — the same File System
+   * Access permission the library holds for reading music, used once a week to
+   * write a dated file beside it. No server, no account, nothing uploaded.
+   *
+   * The row states what it will do and when it last did it, because an
+   * automatic thing you cannot verify is an automatic thing you do not trust.
+   */
+  const autoNote = el('div', { class: 'settings-note', text: 'Checking…' });
+  const autoEvery = el('div', { class: 'segmented quiet', role: 'group', 'aria-label': 'How often' });
+  const autoPick = el('button', { class: 'btn ghost sm', text: 'Choose a folder…' });
+  const autoNow = el('button', { class: 'btn ghost sm', text: 'Back up now', hidden: true });
+
+  const EVERY = [[0, 'Off'], [1, 'Daily'], [7, 'Weekly'], [30, 'Monthly']];
+  for (const [days, label] of EVERY) {
+    autoEvery.appendChild(el('button', {
+      class: 'seg', text: label, data: { every: String(days) },
+      onclick: async () => { await backup.setAuto({ every: days }); paintAuto(); },
+    }));
+  }
+
+  autoPick.addEventListener('click', async () => {
+    const dir = await backup.chooseAutoFolder();
+    if (!dir) return;
+    toast(`Backups will be written to “${dir.name}”`);
+    // A folder chosen and then nothing happening for a week is a feature
+    // nobody believes in; the first one goes in now.
+    const r = await backup.writeAuto();
+    if (r.ok) toast(`Wrote ${r.name}`);
+    paintAuto();
+  });
+
+  autoNow.addEventListener('click', async () => {
+    autoNow.disabled = true;
+    const r = await backup.writeAuto();
+    autoNow.disabled = false;
+    toast(r.ok ? `Wrote ${r.name}` : r.reason === 'permission'
+      ? 'The browser needs permission for that folder again — choose it once more'
+      : 'Could not write to that folder');
+    paintAuto();
+  });
+
+  async function paintAuto() {
+    const cfg = await backup.autoSettings();
+    for (const b of autoEvery.children) {
+      const on = +b.dataset.every === cfg.every;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-pressed', String(on));
+    }
+    autoNow.hidden = !cfg.dir;
+    autoPick.textContent = cfg.dir ? 'Change folder…' : 'Choose a folder…';
+    if (!backup.canAutoBackup()) {
+      autoNote.textContent = 'This browser cannot write to a folder you choose. Use “Save a backup” above instead.';
+      autoEvery.hidden = true;
+      autoPick.hidden = true;
+      return;
+    }
+    autoNote.textContent = !cfg.dir
+      ? 'Point Sonora at a folder and it writes a dated copy there on a schedule. Nothing is uploaded — it is a file on your disk.'
+      : cfg.error === 'permission'
+        ? `“${cfg.dir.name}” needs permission again before the next one can be written.`
+        : (cfg.at
+            ? `Last written ${fmtAgo(cfg.at)} as ${cfg.last} · keeping the newest ${cfg.keep} in “${cfg.dir.name}”`
+            : `Ready to write into “${cfg.dir.name}”`);
+  }
+
+  storage.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('refresh') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Back up on its own' }), autoNote),
+    el('div', { class: 'settings-actions' }, autoEvery, autoPick, autoNow)));
+  paintAuto();
+
   /* A5: the listening history, in a shape something else can read.
    *
    * The backup carries it as an opaque blob keyed by track id, which is
@@ -852,6 +1084,31 @@ export function viewSettings(host) {
     el('div', { class: 'settings-text' },
       el('div', { class: 'settings-name', text: 'Listening history' }), csvNote),
     el('div', { class: 'settings-actions' }, csvBtn)));
+
+  /* H6: whether the visualiser says what it is doing.
+   *
+   * One switch rather than two, because "describe the visualiser" and "draw
+   * the visualiser" as separate settings would be an accessibility feature
+   * nobody could find — and the person on a slow machine who wants the drawing
+   * off is asking the same question as the person who cannot see it. */
+  const sayBtn = el('button', {
+    class: 'switch' + (vizAnnounces() ? ' is-on' : ''), role: 'switch',
+    'aria-checked': String(vizAnnounces()),
+    'aria-label': 'Announce the visualiser',
+  }, el('span', { class: 'switch-knob' }));
+  sayBtn.addEventListener('click', () => {
+    const on = !vizAnnounces();
+    setVizAnnounces(on);
+    sayBtn.classList.toggle('is-on', on);
+    sayBtn.setAttribute('aria-checked', String(on));
+    if (on) sayViz('The visualiser will say what it is showing');
+  });
+  storage.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('wave') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Say what the visualiser is showing' }),
+      el('div', { class: 'settings-note', text: 'Announces which of the four is running when it changes, for a screen reader. It never describes the picture frame by frame.' })),
+    el('div', { class: 'settings-actions' }, sayBtn)));
 
   const keepNote = el('div', { class: 'settings-note', text: 'Checking…' });
   const keepBtn = el('button', { class: 'btn ghost sm', text: 'Ask to keep it', hidden: true });
@@ -921,6 +1178,45 @@ export function viewSettings(host) {
     }
   }
   paintOffline();
+
+  /* H5: and the offer to install it.
+   *
+   * Everything a progressive web app needs was already here except this row.
+   * It appears only where the browser has actually said an install is
+   * possible, and says so plainly where the copy you are looking at is already
+   * the installed one — a button that explains why it cannot work is worse
+   * than a button that is not there. */
+  const installNote = el('div', { class: 'settings-note' });
+  const installBtn = el('button', {
+    class: 'btn ghost sm', text: 'Install',
+    onclick: async () => {
+      const r = await offline.install();
+      toast(r === 'accepted' ? 'Installed — look for Sonora with your applications'
+          : r === 'dismissed' ? 'Not installed'
+          : 'This browser did not offer an install');
+      paintInstall();
+    },
+  });
+  const installRow = el('div', { class: 'settings-row', hidden: true },
+    el('div', { class: 'settings-ico', html: ico('cube') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Install Sonora' }), installNote),
+    el('div', { class: 'settings-actions' }, installBtn));
+  storage.appendChild(installRow);
+
+  function paintInstall() {
+    const done = offline.isInstalled();
+    const can = offline.canInstall();
+    installRow.hidden = !done && !can;
+    installBtn.hidden = done;
+    installNote.textContent = done
+      ? 'Already installed. This copy opens in its own window with no browser furniture.'
+      : 'Puts it with your applications and opens it in its own window. It is the same files on the same disk — nothing moves and nothing is uploaded.';
+  }
+  paintInstall();
+  const offInstall = () => document.removeEventListener('sonora:installable', paintInstall);
+  document.addEventListener('sonora:installable', paintInstall);
+  offs.push(offInstall);
 
   host.appendChild(storage);
 

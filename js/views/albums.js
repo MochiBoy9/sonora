@@ -188,11 +188,24 @@ export function mountShelf(host, ordered) {
   const after = el('div', { class: 'shelf-pad', 'aria-hidden': 'true' });
   shelf.append(before, after);
 
-  /* Width of one spine, in px, matching the CSS: 13 + 11 × thickness. Kept in
-     step with `.spine { width: calc(13px + 11px * var(--thick)) }` — if that
-     changes, this has to. */
+  /* Width of one spine, in px — read from the stylesheet rather than repeated
+     here.
+     This used to be two hardcoded numbers with a comment asking whoever
+     changed the CSS to change these too, and the first rule that widened
+     spines for a coarse pointer walked straight past it: the shelf kept
+     spacing them 21px apart while they were drawn 44 wide, so every record
+     overlapped its neighbour. `--spine-base` and `--spine-thick` are declared
+     on `.shelf-run` and read here, so there is one definition and the media
+     query that changes it changes both. */
   const GAP = 2;
-  const widthOf = (album) => 13 + 11 * thicknessOf(album) + GAP;
+  const spineMetrics = () => {
+    const cs = getComputedStyle(shelf);
+    const base = parseFloat(cs.getPropertyValue('--spine-base')) || 13;
+    const thick = parseFloat(cs.getPropertyValue('--spine-thick')) || 11;
+    return { base, thick };
+  };
+  let metrics = { base: 13, thick: 11 };
+  const widthOf = (album) => metrics.base + metrics.thick * thicknessOf(album) + GAP;
 
   let albums = [];
   let offsets = [];          // running x position of each spine
@@ -220,6 +233,9 @@ export function mountShelf(host, ordered) {
   }
 
   function measure() {
+    // Re-read every time: the width changes with the media query, and a shelf
+    // measured once at mount is a shelf that is wrong after a rotation.
+    metrics = spineMetrics();
     albums = ordered ? ordered() : lib.state.albums;
     const sort = (ordered && ordered.sort) || '';
     offsets = new Array(albums.length);

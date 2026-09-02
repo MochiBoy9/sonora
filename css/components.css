@@ -1832,3 +1832,75 @@ html.is-dragging-tracks .side-playlist.is-smart { opacity: .45; }
   transition: transform .18s linear;
 }
 @media (prefers-reduced-motion: reduce) { .progress-fill { transition: none; } }
+
+/* ------------------------------------------------------------------ H3
+ *
+ * Hit targets, where the pointer is a finger.
+ *
+ * 44 by 44 is what both platform guidelines land on and roughly the contact
+ * patch of an adult fingertip, and `tools/looks.mjs` now fails a sweep that
+ * has anything smaller on a coarse-pointer surface. This is the answer to it.
+ *
+ * Only under `(pointer: coarse)`. A 30px button under a mouse is not a
+ * problem, and growing every control to 44 everywhere would make the desktop
+ * layout worse to satisfy a rule that was never about it. The two are
+ * different instruments and this is the only place they need to disagree.
+ *
+ * Where a control is small *by design* — a switch track, a slider — the box
+ * grows and the painted part does not: the target is the finger's business,
+ * the drawing is the eye's, and they were only ever the same thing by
+ * accident.
+ */
+@media (pointer: coarse) {
+  .btn, .btn.sm { min-height: 44px; }
+  .icon-btn { width: 44px; height: 44px; }
+  .icon-btn.sm { width: 44px; height: 44px; }
+  .seg { min-height: 44px; padding-top: 0; padding-bottom: 0; }
+  .segmented.quiet .seg { min-height: 44px; }
+  .chip, .filter-chip { min-height: 44px; }
+  .input, .search-input { min-height: 44px; }
+  .link-btn { min-height: 44px; display: inline-flex; align-items: center; }
+  .preset { min-height: 44px; }
+  .rating-star { width: 30px; height: 44px; }
+
+  /* The switch keeps its 44×22 pill and gains the rest of its target as
+     padding the eye never sees. `background-clip: content-box` is what stops
+     the pill growing with the box. */
+  .switch {
+    height: 44px;
+    padding: 11px 0;
+    background-clip: content-box;
+    box-shadow: none;
+  }
+  .switch::before {
+    content: "";
+    position: absolute;
+    inset: 11px 0;
+    box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+    clip-path: var(--nick-ne);
+    border-radius: var(--radius);
+    pointer-events: none;
+  }
+  .switch.is-on::before { box-shadow: inset 0 0 0 var(--hair) var(--accent); }
+  .switch-knob { top: 14px; }
+
+  /* A range input's track is drawn by the browser inside whatever box it is
+     given and stays centred, so the box can grow without the slider getting
+     visually fatter. */
+  input[type="range"] { min-height: 44px; }
+
+  /* An icon button whose label is hidden at this width is still a button.
+     `.btn` sets a horizontal padding for a label that is no longer there. */
+  .btn { min-width: 44px; }
+  .pb-play { width: 48px; height: 48px; }
+  .trow-play { width: 44px; height: 44px; }
+  .sortable { min-height: 44px; }
+  .pane-tab { min-height: 44px; }
+
+  /* The scrubber is a slider you drag with a thumb, and 20px of it is the
+     hardest target in the application to hit. The bar it paints is drawn by
+     `.seek-track` inside, so the box grows and the hairline does not. */
+  .seek { min-height: 44px; display: flex; align-items: center; }
+  /* A shortcut's key, which is pressed to rebind it. */
+  .keys-edit { min-height: 44px; display: inline-flex; align-items: center; }
+}

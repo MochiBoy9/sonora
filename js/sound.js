@@ -174,7 +174,12 @@ export function mountSound(host) {
 
   /* ---- curve ----------------------------------------------------------- */
 
-  const stage = el('div', { class: 'eq-stage' });
+  /* H3: on a finger the band handles are 44px boxes around a 19px cap, so the
+     two at the ends overhang the stage by half a target. Nothing visible is
+     cut — the cap is centred and well inside — and the alternative is handles
+     too small to drag, which is the thing the rule exists to prevent.
+     `data-clips` is how an element says the cut is deliberate. */
+  const stage = el('div', { class: 'eq-stage', 'data-clips': '' });
 
   /* The path layer is stretched to fill the box — that is what makes a curve
      read as a curve rather than as a thin band in the middle. Stretching it

@@ -2165,6 +2165,87 @@ export async function rescanAll() {
 let lastCheck = 0;
 export const lastChecked = () => lastCheck;
 
+/* ------------------------------------------------------------------ I2
+ *
+ * Checking the library against the disk.
+ *
+ * A scan finds what changed and acts on it. Nothing answered the other
+ * question — "is everything I think I have still there" — which is the one
+ * people ask after a drive is unplugged, a sync goes sideways, or a folder is
+ * reorganised by something that was not Sonora.
+ *
+ * Read-only, and that is the point rather than a limitation. It opens every
+ * file it claims to have, reports what it could not open and what is on disk
+ * that the index has never seen, and changes nothing at all — so it is safe to
+ * run on a library you are worried about, which is exactly when you would want
+ * to run it.
+ */
+export async function verifyLibrary({ onProgress, signal } = {}) {
+  const roots = state.roots.filter((r) => !r.off);
+  const report = {
+    checked: 0, ok: 0,
+    missing: [],        // in the index, not on disk
+    unreadable: [],     // on disk, but the file would not open
+    unseen: [],         // on disk, not in the index
+    skipped: [],        // roots that could not be walked at all
+    total: 0,
+    stopped: false,
+  };
+
+  const mine = new Map();         // rootId -> Set of paths the index holds
+  for (const t of live()) {
+    if (!mine.has(t.rootId)) mine.set(t.rootId, new Set());
+    mine.get(t.rootId).add(t.path);
+  }
+  report.total = [...mine.values()].reduce((n, s) => n + s.size, 0);
+
+  for (const root of roots) {
+    if (!root.handle) { report.skipped.push({ name: root.name, why: 'not connected' }); continue; }
+    if (root.handle.queryPermission) {
+      let perm = 'granted';
+      try { perm = await root.handle.queryPermission({ mode: 'read' }); } catch { perm = 'denied'; }
+      if (perm !== 'granted') { report.skipped.push({ name: root.name, why: 'needs permission' }); continue; }
+    }
+
+    const held = mine.get(root.id) || new Set();
+    const found = new Set();
+    try {
+      for await (const e of walkDirectory(root.handle)) {
+        if (signal && signal.aborted) { report.stopped = true; return report; }
+        if (e.lyric || e.playlist || e.cue) continue;
+        found.add(e.path);
+        if (!held.has(e.path)) { report.unseen.push({ root: root.name, path: e.path }); continue; }
+
+        /* Opened, not just listed. A directory entry survives a drive that has
+           gone away far longer than the bytes behind it do — on a network
+           share the name is cached and the read is what actually fails, which
+           is the case this check exists for. */
+        report.checked++;
+        try {
+          const file = e.handle && e.handle.getFile ? await e.handle.getFile() : e.file;
+          if (!file || !(file.size >= 0)) throw new Error('empty');
+          // One byte is enough to prove the bytes are reachable, and is the
+          // difference between a check that takes a minute and one that reads
+          // the whole collection.
+          await file.slice(0, 1).arrayBuffer();
+          report.ok++;
+        } catch {
+          report.unreadable.push({ root: root.name, path: e.path });
+        }
+        onProgress?.(report.checked, report.total);
+      }
+    } catch {
+      report.skipped.push({ name: root.name, why: 'could not be read' });
+      continue;
+    }
+
+    for (const path of held) {
+      if (!found.has(path)) report.missing.push({ root: root.name, path });
+    }
+  }
+  return report;
+}
+
 /* And automatically, when the window comes back after a while.
  *
  * "A while" rather than every focus: alt-tabbing to a browser and back is not

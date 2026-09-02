@@ -7,7 +7,7 @@ import { renderView, hasLiveSelection } from './views.js';
 import { activeFilter } from './views/shared.js';
 import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
-import { toast, closeMenu, promptDialog, menu, dialog, rulesDialog } from './ui.js';
+import { toast, closeMenu, promptDialog, menu, dialog, rulesDialog, watchLongPress } from './ui.js';
 import * as session from './session.js';
 import * as stats from './stats.js';
 import * as looks from './looks.js';
@@ -20,6 +20,7 @@ import { startRelief } from './relief.js';
 import { startOffline } from './offline.js';
 import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
 import * as db from './db.js';
+import * as backup from './backup.js';
 import * as keys from './keys.js';
 import * as drag from './drag.js';
 import * as radio from './radio.js';
@@ -878,6 +879,54 @@ function buildDropZone() {
   });
 }
 
+/**
+ * I4: warns once, in the app, when the browser is close to evicting the
+ * library — and only when a warning is actionable.
+ *
+ * Two conditions, both required. The storage has to be genuinely full (four
+ * fifths of the quota is where browsers begin evicting), and the origin has to
+ * be *unprotected* — with a persistence grant the browser has promised not to,
+ * and a warning would be a lie. A library of eleven tracks is not worth
+ * warning about either, however full the disk is.
+ */
+const STORAGE_WARNED = 'sonora:storage-warned';
+const WARN_EVERY = 7 * 24 * 3600 * 1000;
+
+async function checkStorage() {
+  if (lib.trackCount() < 50) return;
+  let last = 0;
+  try { last = parseInt(localStorage.getItem(STORAGE_WARNED) || '0', 10) || 0; } catch { /* private */ }
+  if (Date.now() - last < WARN_EVERY) return;
+
+  const [u, kept] = await Promise.all([db.usage(), db.persisted()]);
+  if (kept) return;                       // the browser has promised to keep it
+  if (!u || !u.quota) return;             // this browser does not say
+  if (u.used / u.quota < 0.8) return;
+
+  try { localStorage.setItem(STORAGE_WARNED, String(Date.now())); } catch { /* private */ }
+  const pct = Math.round((u.used / u.quota) * 100);
+  toast(`This browser's storage is ${pct}% full and your library is not protected`, {
+    duration: 14000,
+    action: {
+      label: 'Fix this',
+      onSelect: async () => {
+        const r = await db.requestPersist();
+        if (r.granted) {
+          toast('The browser will keep your library');
+          return;
+        }
+        /* Chromium decides from how the site is used rather than by asking, so
+           a refusal is a "not yet". The honest next move is the copy, which
+           needs nobody's permission. */
+        toast('The browser has not granted it yet — take a backup instead', {
+          duration: 9000,
+          action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
+        });
+      },
+    },
+  });
+}
+
 /* ------------------------------------------------------------------ theme */
 
 /* The theme is one setting inside the look, so it goes through the same door
@@ -1317,6 +1366,9 @@ async function boot() {
   buildSidebar();
   buildTopbar();
   buildDropZone();
+  // H4: every menu in the app opens on a long press as well as a right-click,
+  // without any of them knowing about it.
+  watchLongPress();
   const syncNotice = buildReconnectNotice();
   bindKeys();
 
@@ -1426,6 +1478,33 @@ async function boot() {
       },
     });
   });
+
+  /* I4: the browser is about to throw the library away.
+   *
+   * `usage()` and `persisted()` were read on the Settings page and nowhere
+   * else, which means the one warning that matters lived behind a door nobody
+   * opens until something has already gone wrong. It belongs in the app, once,
+   * at the moment it starts to matter — with the two buttons that actually fix
+   * it: ask the browser to keep it, and take a copy.
+   *
+   * Checked after the library has settled rather than at boot, and only when
+   * there is something to lose. Once a week at most: a warning that appears
+   * every launch is a warning people learn to dismiss. */
+  idle(() => checkStorage(), 4000);
+  /* I1: and the copy that happens without being asked, if one is due. Well
+     after everything else — it decodes the whole index and writes a file, and
+     the launch is not the moment for either. */
+  idle(() => {
+    backup.autoBackupIfDue().then((r) => {
+      if (r && r.ok) toast(`Backed up to ${r.name}`, { duration: 4200 });
+      else if (r && r.reason === 'permission') {
+        toast('Your backup folder needs permission again', {
+          duration: 9000,
+          action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
+        });
+      }
+    }).catch(() => {});
+  }, 9000);
 
   lib.events.on('art', applyAccent);
 

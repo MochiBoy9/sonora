@@ -20,9 +20,19 @@ export function mountPlayerBar(host) {
     <div class="pb-now">
       <div class="art art-3d art-pb"><img class="art-img" alt="" decoding="async"></div>
       <div class="pb-text">
-        <a class="pb-title" href="#"></a>
-        <a class="pb-artist" href="#"></a>
+        <!-- H3: on a coarse pointer these are covered by .pb-open, which is a
+             real 44px target that opens the now playing screen. They stay
+             links for a mouse and for the keyboard; data-small-ok tells the
+             hit-target rule it may skip them, and why. -->
+        <a class="pb-title" href="#" data-small-ok></a>
+        <a class="pb-artist" href="#" data-small-ok></a>
       </div>
+      <!-- H2: on a phone the whole of this opens the full-screen now playing.
+           A transparent button over the art and the title rather than handlers
+           on each: the titles are links to the album and the artist and those
+           must keep working on a desktop, so the phone gets a layer that only
+           exists at phone widths. -->
+      <button class="pb-open" aria-label="Open the now playing screen" tabindex="-1"></button>
       <button class="icon-btn ghost pb-fav" title="Favourite (F)" aria-label="Add to favourites" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>
       <button class="icon-btn ghost pb-more" title="More" aria-label="More">${ico('more')}</button>
     </div>
@@ -175,6 +185,9 @@ export function mountPlayerBar(host) {
 
   q('.pb-queue').addEventListener('click', () => document.dispatchEvent(new CustomEvent('sonora:toggle-queue')));
   q('.pb-stage').addEventListener('click', () => document.dispatchEvent(new CustomEvent('sonora:stage')));
+  q('.pb-open').addEventListener('click', () => {
+    if (player.state.current) document.dispatchEvent(new CustomEvent('sonora:stage'));
+  });
   q('.pb-mute').addEventListener('click', () => player.toggleMute());
   q('.pb-more').addEventListener('click', (e) => {
     const t = player.state.current;

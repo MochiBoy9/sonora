@@ -303,20 +303,31 @@ function buildQueue(host) {
     viewport: scroller,
     rowHeight: ROW_H,
     create: () => {
+      /* The row's own `transform` belongs to the virtual list — it is what puts
+         the row at its position — so the swipe moves an inner layer instead.
+         The two labels sit on the row behind it and are revealed as the layer
+         slides off them. */
       const row = el('div', { class: 'qrow', draggable: 'true' });
       row.innerHTML =
+        '<div class="qrow-act qrow-act-next" aria-hidden="true">Play next</div>' +
+        '<div class="qrow-act qrow-act-remove" aria-hidden="true">Remove</div>' +
+        '<div class="qrow-slide">' +
         `<div class="qrow-grip">${ico('grip')}</div>` +
         '<div class="art art-xs"><img class="art-img" alt="" decoding="async"></div>' +
         '<div class="qrow-text"><div class="qrow-title"></div>' +
         '<div class="qrow-sub"><span class="qrow-artist"></span><span class="qrow-from"></span></div></div>' +
         `<div class="qrow-time"></div>` +
-        `<button class="icon-btn ghost qrow-remove" aria-label="Remove">${ico('close')}</button>`;
+        `<button class="icon-btn ghost qrow-remove" aria-label="Remove">${ico('close')}</button>` +
+        '</div>';
+      const slide = row.querySelector('.qrow-slide');
 
       /* Every handler reads `data-at`, the index in the *queue*, rather than
          the row's index in the list — with the played half folded away those
          two stop being the same number, and acting on the list index would
          remove the wrong track. */
       row.addEventListener('click', (e) => {
+        // A swipe that armed is not a tap, whichever way it ended.
+        if (row.dataset.swiped === '1') { delete row.dataset.swiped; return; }
         const i = +row.dataset.at;
         if (e.target.closest('.qrow-remove')) player.removeAt(i);
         else player.jumpTo(i);
@@ -357,6 +368,74 @@ function buildQueue(host) {
         const t = lib.getTrack(player.state.queue[+row.dataset.at]);
         if (t) menu(trackMenu([t], { onRemove: () => player.removeAt(+row.dataset.at), removeLabel: 'Remove from queue' }), { event: e });
       });
+      /* H1: a swipe, because on a phone there is no right-click and no Delete.
+       *
+       * Left takes the track out, right puts it next — the two things the menu
+       * offers and the two people actually do. The row follows the finger so
+       * the gesture is visible while it is happening; the labels underneath
+       * say which way is which, which is what stops a swipe interface being
+       * something you have to be told about.
+       *
+       * Only a horizontal drag counts, and only after 12px, so the vertical
+       * scroll this list lives inside is never stolen. Below the threshold the
+       * row springs back and the tap that follows still plays the track. */
+      const SWIPE_ARM = 12;
+      const SWIPE_DO = 78;
+      let swipe = null;
+
+      const endSwipe = (commit) => {
+        if (!swipe) return;
+        const dx = swipe.dx;
+        const armed = swipe.armed;
+        row.classList.remove('is-swiping');
+        slide.style.transform = '';
+        row.style.removeProperty('--swipe');
+        const at = +row.dataset.at;
+        swipe = null;
+        if (armed) row.dataset.swiped = '1';
+        if (!commit || Math.abs(dx) < SWIPE_DO) return;
+        if (dx < 0) {
+          const title = row.querySelector('.qrow-title').textContent;
+          player.removeAt(at);
+          toast(`Removed “${title}”`);
+        } else {
+          const id = player.state.queue[at];
+          const t = lib.getTrack(id);
+          if (t) {
+            player.removeAt(at);
+            player.playNext([t]);
+            toast(`“${t.title}” is next`);
+          }
+        }
+      };
+
+      row.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' || !e.isPrimary) return;
+        if (e.target.closest('.qrow-remove, .qrow-grip')) return;
+        swipe = { x: e.clientX, y: e.clientY, dx: 0, id: e.pointerId, armed: false };
+      }, { passive: true });
+
+      row.addEventListener('pointermove', (e) => {
+        if (!swipe || e.pointerId !== swipe.id) return;
+        const dx = e.clientX - swipe.x;
+        const dy = e.clientY - swipe.y;
+        if (!swipe.armed) {
+          // A gesture that is mostly vertical belongs to the scroller, and
+          // once it does it belongs to it for good.
+          if (Math.abs(dy) > Math.abs(dx)) { swipe = null; return; }
+          if (Math.abs(dx) < SWIPE_ARM) return;
+          swipe.armed = true;
+          row.classList.add('is-swiping');
+        }
+        swipe.dx = dx;
+        slide.style.transform = `translate3d(${dx.toFixed(1)}px,0,0)`;
+        row.style.setProperty('--swipe', Math.min(1, Math.abs(dx) / SWIPE_DO).toFixed(3));
+        row.dataset.swipe = dx < 0 ? 'remove' : 'next';
+      }, { passive: true });
+
+      row.addEventListener('pointerup', () => endSwipe(true), { passive: true });
+      row.addEventListener('pointercancel', () => endSwipe(false), { passive: true });
+
       row.addEventListener('dragstart', (e) => {
         dragFrom = +row.dataset.at;
         row.classList.add('is-dragging');

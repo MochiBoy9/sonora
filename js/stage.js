@@ -13,7 +13,7 @@ import { $, el, ico, fmtTime, clamp, formatName } from './util.js';
 import * as player from './player.js';
 import * as lib from './library.js';
 import { paintArt } from './ui.js';
-import { createVisualizer, MODES, isMode } from './visualizer.js';
+import { createVisualizer, MODES, isMode, announce as sayViz } from './visualizer.js';
 import * as lyrics from './lyrics.js';
 import * as peakmap from './peaks.js';
 import { tick, animate, spring, draggable, settled, ease, reduceMotion } from './motion.js';
@@ -276,6 +276,7 @@ export function openStage(backdrop) {
     modeBar.appendChild(el('button', {
       class: 'stage-mode' + (m.id === viz.mode ? ' is-on' : ''),
       role: 'tab', text: m.label, data: { mode: m.id },
+      'aria-selected': String(m.id === viz.mode),
       onclick: () => setMode(m.id),
     }));
   }
@@ -283,7 +284,14 @@ export function openStage(backdrop) {
   function setMode(id) {
     viz.setMode(id);
     try { localStorage.setItem(MODE_KEY, id); } catch { /* private mode */ }
-    for (const b of modeBar.children) b.classList.toggle('is-on', b.dataset.mode === id);
+    for (const b of modeBar.children) {
+      const on = b.dataset.mode === id;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-selected', String(on));
+    }
+    // H6: which of the four is running, for somebody who cannot see it.
+    const m = MODES.find((x) => x.id === id);
+    if (m) sayViz(`Visualiser: ${m.label}, reacting to the music`);
     document.dispatchEvent(new CustomEvent('sonora:viz-mode', { detail: id }));
   }
 
@@ -738,6 +746,13 @@ export function openStage(backdrop) {
 
   paint();
   paintState();
+  /* H6: and once on the way in, because the stage is nearly always opened onto
+     whichever visualiser was running last — a mode that is only announced when
+     it *changes* is a mode nobody who arrives on it ever hears about. */
+  {
+    const m = MODES.find((x) => x.id === viz.mode);
+    if (m) sayViz(`Visualiser: ${m.label}, reacting to the music`);
+  }
   /* Restored, because which face the stage shows is a way of listening rather
      than a novelty to be re-chosen on every visit. */
   try { setDeck(localStorage.getItem(DECK_KEY) === '1'); } catch { setDeck(false); }
@@ -794,7 +809,10 @@ keys.bind({
 });
 keys.bind({
   id: 'stage-deck', group: 'In the visualiser', combo: 'D',
-  label: 'The turntable',
+  /* Not "the turntable": that is now what D does from anywhere, and two rows
+     in the shortcut list with the same key and the same words is two rows
+     nobody can tell apart. In here the key turns the record over. */
+  label: 'Sleeve or turntable',
   /* Not gated on anything, unlike L: the deck is there for every track, and the
      arrow keys the arm answers to are handled on the arm itself so they only
      apply when it has the focus. */
