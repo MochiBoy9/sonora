@@ -24,20 +24,36 @@
 /* ------------------------------------------------------------------ ribbon */
 
 /* The thin spectrum that rides the top edge of the transport bar. It is
-   decoration, so it never takes a pointer event and never affects layout. */
+   decoration, so it never takes a pointer event and never affects layout.
+ *
+ * R15: it used to stand 26px clear above the bar, which at a laptop width
+ * reads as a hairline and at 2400px reads as a row of loose bars floating over
+ * the album grid with nothing under them. The README calls it a hairline, and
+ * this is now what it says: 10px, tucked against the bar's own top edge and
+ * faded upward, so it belongs to the transport at every width instead of
+ * detaching from it as the window grows.
+ *
+ * Inside the bar rather than above it, so the fade has the bar's own surface
+ * behind it and the whole thing reads as one object.  */
 .pb-viz {
   position: absolute;
   left: 0; right: 0;
-  top: -26px;
+  top: 0;
   width: 100%;
-  height: 26px;
+  height: 10px;
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--dur-3) var(--ease);
-  mask-image: linear-gradient(to right, transparent, #000 14%, #000 86%, transparent);
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 14%, #000 86%, transparent);
+  mask-image:
+    linear-gradient(to right, transparent, #000 14%, #000 86%, transparent),
+    linear-gradient(to bottom, #000 42%, transparent);
+  -webkit-mask-image:
+    linear-gradient(to right, transparent, #000 14%, #000 86%, transparent),
+    linear-gradient(to bottom, #000 42%, transparent);
+  mask-composite: intersect;
+  -webkit-mask-composite: source-in;
 }
-.playerbar.is-playing .pb-viz { opacity: .6; }
+.playerbar.is-playing .pb-viz { opacity: .55; }
 
 /* ------------------------------------------------------------------ stage */
 
@@ -510,4 +526,38 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
 @media (prefers-reduced-motion: reduce) {
   .deck.is-spinning .deck-platter { animation: none; }
   .deck-arm { transition: none; }
+}
+
+
+/* R11: the credits, beside the words and the turntable.
+   Set as a definition list, because that is what it is — a label and a name,
+   and a table would be three columns of nothing on most files. */
+.stage-credits {
+  margin-top: 18px;
+  max-width: 44ch;
+  max-height: 34vh;
+  overflow-y: auto;
+  -webkit-mask-image: linear-gradient(to bottom, #000 88%, transparent);
+  mask-image: linear-gradient(to bottom, #000 88%, transparent);
+}
+.stage-credit-list {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 18px;
+  margin: 0;
+}
+.stage-credit-list dt {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding-top: 2px;
+}
+.stage-credit-list dd {
+  margin: 0;
+  color: var(--text-2);
+  font-size: calc(13px * var(--scale));
+  overflow-wrap: anywhere;
 }

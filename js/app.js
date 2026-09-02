@@ -1,6 +1,6 @@
 /* app.js — shell: routing, navigation, search, shortcuts, theming, ingestion. */
 
-import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle } from './util.js';
+import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle, fmtTime, fmtAgo, fmtCount } from './util.js';
 import * as lib from './library.js';
 import * as player from './player.js';
 import { renderView, hasLiveSelection } from './views.js';
@@ -20,6 +20,8 @@ import { startOffline } from './offline.js';
 import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
 import * as db from './db.js';
 import * as keys from './keys.js';
+import * as m3u from './m3u.js';
+import * as shopWindow from './idle.js';
 import * as peakmap from './peaks.js';
 import * as undoStack from './undo.js';
 
@@ -32,8 +34,10 @@ const NAV = [
   { route: 'artists', label: 'Artists', icon: 'artist' },
   { route: 'favourites', label: 'Favourites', icon: 'star' },
   { route: 'recent', label: 'Recently played', icon: 'clock' },
+  { route: 'genres', label: 'Genres', icon: 'circles' },
   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
   { route: 'files', label: 'Files', icon: 'folder' },
+  { route: 'attention', label: 'Needs attention', icon: 'info' },
   { route: 'circles', label: 'Analysis', icon: 'circles' },
   { route: 'sound', label: 'Sound', icon: 'sliders' },
 ];
@@ -43,6 +47,8 @@ function routeLabel(route) {
   if (route.name === 'album') return 'Album';
   if (route.name === 'artist') return 'Artist';
   if (route.name === 'playlist') return 'Playlist';
+  if (route.name === 'genre') return 'Genre';
+  if (route.name === 'attention') return 'Attention';
   if (route.name === 'search') return 'Search';
   if (route.name === 'settings') return 'Settings';
   if (route.name === 'circles') return 'Analysis';
@@ -243,25 +249,152 @@ function buildSidebar() {
 
   side.append(brand, nav, playlistHead, playlists, footer);
 
+  /* L12: folders one level deep, and an order you chose.
+   *
+   * A flat list in creation order is a pile past about fifteen, and there was
+   * no way to move one. Two levels of folder would be a file manager, which
+   * nobody has ever wanted for forty playlists.
+   *
+   * Which folders are open is remembered in this browser rather than in the
+   * index: it is a fact about the window, not about the library, and syncing
+   * it into a backup would carry one machine's idea of tidy onto another. */
+  const OPEN_KEY = 'sonora:folders-open';
+  const openFolders = new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]'));
+  const saveOpen = () => {
+    try { localStorage.setItem(OPEN_KEY, JSON.stringify([...openFolders])); } catch { /* private */ }
+  };
+
+  let dragId = null;
+
+  const playlistRow = (p) => {
+    /* A smart shelf counts what it currently describes rather than what it
+       was storing, and says which kind it is — finding out that a list
+       rewrites itself by watching it change is worse than a small mark. */
+    const count = p.smart ? lib.playlistTracks(p).length : p.tracks.length;
+    const row = el('a', {
+      class: 'side-playlist' + (p.smart ? ' is-smart' : ''),
+      href: '#/playlist/' + p.id, data: { route: 'playlist:' + p.id },
+      title: p.smart ? `${p.name} — describes itself` : p.name,
+      draggable: 'true',
+    },
+      el('span', { class: 'side-playlist-name', text: p.name }),
+      el('span', { class: 'side-playlist-count', text: String(count) }));
+
+    row.addEventListener('dragstart', (e) => {
+      dragId = p.id;
+      row.classList.add('is-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', p.id); } catch { /* Safari */ }
+    });
+    row.addEventListener('dragend', () => { row.classList.remove('is-dragging'); dragId = null; });
+    row.addEventListener('dragover', (e) => {
+      if (!dragId || dragId === p.id) return;
+      e.preventDefault();
+      row.classList.add('is-drop');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('is-drop'));
+    row.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      row.classList.remove('is-drop');
+      if (!dragId || dragId === p.id) return;
+      /* Dropped on a row: land in that row's folder, in that row's place. The
+         order is rebuilt from what is on screen rather than computed, because
+         what is on screen is what the person was aiming at. */
+      const moving = lib.state.playlists.find((x) => x.id === dragId);
+      if (moving && (moving.folder || null) !== (p.folder || null)) {
+        await lib.movePlaylist(dragId, p.folder || null);
+      }
+      const ids = lib.state.playlists.map((x) => x.id).filter((id) => id !== dragId);
+      ids.splice(ids.indexOf(p.id), 0, dragId);
+      await lib.reorderPlaylists(ids);
+    });
+
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const fs = lib.playlistFolders();
+      menu([
+        ...(fs.length ? fs.filter((f) => f.id !== p.folder).map((f) => ({
+          label: `Move to “${f.name}”`, icon: 'folder',
+          onSelect: () => lib.movePlaylist(p.id, f.id),
+        })) : []),
+        p.folder ? { label: 'Take out of the folder', icon: 'chev-left', onSelect: () => lib.movePlaylist(p.id, null) } : null,
+        { label: 'New folder…', icon: 'plus', onSelect: () => promptDialog({
+          title: 'New folder', label: 'Name', value: 'Folder', confirm: 'Create',
+          onConfirm: async (name) => {
+            if (!name) return;
+            const f = await lib.createFolder(name);
+            openFolders.add(f.id);
+            saveOpen();
+            // Opened before the move, because the move is what repaints — a
+            // new folder that swallows the playlist you just filed into it and
+            // then sits shut looks like the move failed.
+            await lib.movePlaylist(p.id, f.id);
+          },
+        }) },
+      ].filter(Boolean), { event: e });
+    });
+    return row;
+  };
+
+  const folderRow = (f, contents) => {
+    const open = openFolders.has(f.id);
+    const head = el('button', {
+      class: 'side-folder' + (open ? ' is-open' : ''),
+      'aria-expanded': String(open),
+    },
+      el('span', { class: 'side-folder-tw', html: ico('chev-right') }),
+      el('span', { class: 'side-playlist-name', text: f.name }),
+      el('span', { class: 'side-playlist-count', text: String(contents.length) }));
+
+    head.addEventListener('click', () => {
+      if (openFolders.has(f.id)) openFolders.delete(f.id); else openFolders.add(f.id);
+      saveOpen();
+      paintPlaylists();
+    });
+    head.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      menu([
+        { label: 'Rename', icon: 'edit', onSelect: () => promptDialog({
+          title: 'Rename folder', label: 'Name', value: f.name,
+          onConfirm: (n) => n && lib.renameFolder(f.id, n),
+        }) },
+        { label: 'Remove the folder', icon: 'trash', danger: true,
+          hint: 'the playlists stay',
+          onSelect: () => lib.removeFolder(f.id) },
+      ], { event: e });
+    });
+    // Dropping onto the folder head files a playlist into it.
+    head.addEventListener('dragover', (e) => { if (dragId) { e.preventDefault(); head.classList.add('is-drop'); } });
+    head.addEventListener('dragleave', () => head.classList.remove('is-drop'));
+    head.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      head.classList.remove('is-drop');
+      if (dragId) await lib.movePlaylist(dragId, f.id);
+    });
+    return head;
+  };
+
   const paintPlaylists = () => {
     playlists.textContent = '';
-    if (!lib.state.playlists.length) {
+    const all = lib.state.playlists;
+    const fs = lib.playlistFolders();
+    if (!all.length && !fs.length) {
       playlists.appendChild(el('p', { class: 'side-empty', text: 'No playlists yet' }));
       return;
     }
-    for (const p of lib.state.playlists) {
-      /* A smart shelf counts what it currently describes rather than what it
-         was storing, and says which kind it is — finding out that a list
-         rewrites itself by watching it change is worse than a small mark. */
-      const count = p.smart ? lib.playlistTracks(p).length : p.tracks.length;
-      playlists.appendChild(el('a', {
-        class: 'side-playlist' + (p.smart ? ' is-smart' : ''),
-        href: '#/playlist/' + p.id, data: { route: 'playlist:' + p.id },
-        title: p.smart ? `${p.name} — describes itself` : p.name,
-      },
-        el('span', { class: 'side-playlist-name', text: p.name }),
-        el('span', { class: 'side-playlist-count', text: String(count) })));
+
+    for (const f of fs) {
+      const inside = all.filter((p) => p.folder === f.id);
+      playlists.appendChild(folderRow(f, inside));
+      if (!openFolders.has(f.id)) continue;
+      const box = el('div', { class: 'side-folder-body' });
+      for (const p of inside) box.appendChild(playlistRow(p));
+      if (!inside.length) box.appendChild(el('p', { class: 'side-empty', text: 'Empty — drag one in' }));
+      playlists.appendChild(box);
     }
+
+    const loose = all.filter((p) => !p.folder || !fs.some((f) => f.id === p.folder));
+    for (const p of loose) playlists.appendChild(playlistRow(p));
     paintNav(parseHash());
   };
   paintPlaylists();
@@ -401,10 +534,19 @@ function buildTopbar() {
     }
   });
 
-  lib.events.on('progress', ({ done, total }) => {
+  lib.events.on('progress', ({ done, total, file }) => {
     progress.hidden = false;
     progress.querySelector('.scan-text').textContent =
       total ? `Reading ${done.toLocaleString()} of ${total.toLocaleString()}` : 'Scanning…';
+    /* I2: which file. On a large import the bar alone is twenty minutes of a
+       bar, and it is the one that is taking a long time that you want named. */
+    let now = progress.querySelector('.scan-file');
+    if (!now) {
+      now = el('div', { class: 'scan-file' });
+      progress.appendChild(now);
+    }
+    now.textContent = file || '';
+    now.hidden = !file;
   });
   lib.events.on('scan', (on, report) => {
     if (on) { progress.hidden = false; progress.querySelector('.scan-text').textContent = 'Scanning…'; }
@@ -451,6 +593,76 @@ function announceImport(report) {
   } else {
     toast(`Added ${report.added.toLocaleString()} ${report.added === 1 ? 'track' : 'tracks'}`);
   }
+
+  /* I2: and what it could not read. A separate toast rather than a clause,
+     because the two are different news and the second one is the one somebody
+     may want to act on — it carries a way to see the list rather than a
+     number they can do nothing with. */
+  /* L14: the playlists that were already in the folder.
+   *
+   * Offered once, at the end of the import, and never imported on their own —
+   * a music folder can also hold another player's auto-generated "Recently
+   * Added.m3u", and creating four playlists nobody asked for is worse than not
+   * looking at all. */
+  const lists = report.playlistFiles || [];
+  if (lists.length) {
+    toast(`Found ${lists.length} ${lists.length === 1 ? 'playlist file' : 'playlist files'} in that folder`, {
+      duration: 9000,
+      action: {
+        label: lists.length === 1 ? 'Add it' : 'See them',
+        onSelect: () => offerFoundPlaylists(lists),
+      },
+    });
+  }
+
+  if (report.failed) {
+    toast(`${report.failed} ${report.failed === 1 ? 'file' : 'files'} had nothing in ${report.failed === 1 ? 'it' : 'them'} to read`, {
+      duration: 7000,
+      action: { label: 'Which?', onSelect: () => { location.hash = '#/settings'; } },
+    });
+  }
+}
+
+/** L14: which of the found playlist files to import, if any. */
+async function offerFoundPlaylists(lists) {
+  const picked = new Set(lists.map((l) => l.path));
+  const body = el('div', {},
+    el('p', { text: 'These were sitting in the folder. Sonora will match their paths against your library and tell you what it could not find.' }),
+    el('ul', { class: 'found-lists' }, lists.slice(0, 30).map((l) => {
+      const box = el('input', { type: 'checkbox', checked: true, 'aria-label': l.name });
+      box.addEventListener('change', () => {
+        if (box.checked) picked.add(l.path); else picked.delete(l.path);
+      });
+      return el('li', {}, el('label', {}, box, el('span', { text: l.path })));
+    })));
+
+  dialog({
+    title: `${lists.length} playlist ${lists.length === 1 ? 'file' : 'files'} found`,
+    body,
+    width: 520,
+    actions: [
+      { label: 'Not now' },
+      { label: 'Import the ticked ones', primary: true, onSelect: async () => {
+        let made = 0;
+        let missed = 0;
+        for (const entry of lists) {
+          if (!picked.has(entry.path)) continue;
+          const text = await lib.readPlaylistFile(entry);
+          if (!text) continue;
+          const parsed = m3u.parse(text);
+          const { found, missing } = m3u.resolve(parsed.entries);
+          if (!found.length) { missed++; continue; }
+          const name = parsed.name || entry.name.replace(/\.[^.]+$/, '');
+          await lib.createPlaylist(name, found.map((t) => t.id));
+          made++;
+          missed += missing.length ? 0 : 0;
+        }
+        toast(made
+          ? `Imported ${fmtCount(made, 'playlist')}${missed ? ` · ${missed} matched nothing` : ''}`
+          : 'None of them matched anything in the library');
+      } },
+    ],
+  });
 }
 
 function syncSearchInput(route) {
@@ -709,6 +921,17 @@ function registerKeys() {
       alt: 'Mod+Y', run: () => { runUndo(true); } });
   K({ id: 'undo', group: 'The library', combo: 'Mod+Z', label: 'Undo the last change',
       run: () => { runUndo(false); } });
+  K({ id: 'history', group: 'The library', combo: 'H', label: 'Everything you have changed',
+      run: () => { showHistory(); } });
+
+  /* Before the plain B below it, for the reason the Redo pair gives: a
+     single-letter binding matches with Shift held, so ⇧B would otherwise be
+     taken by the bypass and the swap would never fire. */
+  K({ id: 'swap-rack', group: 'Sound', combo: 'Shift+B', label: 'Swap with the other rack',
+      run: () => {
+        if (!rack.hasSlotB()) { rack.copyToOther(); toast('Copied into B — change the rack, then swap'); }
+        else toast('Now on rack ' + rack.swapSlots());
+      } });
 
   // A/B the whole rack from anywhere: the only way to hear what an equaliser is
   // actually doing is to take it out and put it back.
@@ -717,6 +940,16 @@ function registerKeys() {
         rack.set({ on: !rack.state.on });
         toast(rack.state.on ? 'Rack in' : 'Rack bypassed');
       } });
+
+  /* S3: mono compatibility is checked by holding a button, hearing the sum and
+     letting go. The width control already reaches mono at zero, so the
+     capability was there — as a setting you had to set and then remember to
+     put back, which is not how anybody checks anything. Held, it is a
+     measurement; latched, it is a mistake waiting to be noticed three records
+     later. */
+  K({ id: 'mono', group: 'Sound', combo: 'O', label: 'Hold to hear it in mono',
+      run: () => { rack.holdMono(true); },
+      release: () => { rack.holdMono(false); } });
 }
 
 let shortcutSheet = null;
@@ -727,10 +960,77 @@ function showShortcuts() {
   /* Rendered from the same table the handler dispatches from, so a shortcut
      cannot exist without appearing here and cannot appear here without
      existing. */
+  /* A4: the table is data, so rebinding is editing the table.
+   *
+   * Twenty-odd single-letter shortcuts, all fixed, is the first thing that
+   * collides with a keyboard layout that is not the one they were chosen on —
+   * and there was no way out of it. Pressing a keycap here arms it; the next
+   * keystroke becomes the binding.
+   *
+   * Only one at a time, and Escape cancels: a capture left armed swallows the
+   * next thing typed anywhere in the application. */
+  let capturing = null;
+
+  const stopCapture = () => {
+    if (!capturing) return;
+    capturing.dt.classList.remove('is-capturing');
+    capturing.dt.textContent = '';
+    for (const k of keys.caps(capturing.b.combo)) capturing.dt.appendChild(el('kbd', { text: k }));
+    capturing = null;
+  };
+
+  const onCapture = (e) => {
+    if (!capturing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { stopCapture(); return; }
+    const combo = keys.comboFor(e);
+    if (!combo) return;                              // a modifier on its own
+    const clash = keys.conflicts(capturing.b.id, combo);
+    if (clash.length) {
+      toast(`${keys.caps(combo).join(' ')} is taken — it is “${clash[0].label}”`);
+      return;
+    }
+    keys.remap(capturing.b.id, combo);
+    const dt = capturing.dt;
+    capturing = null;
+    dt.classList.remove('is-capturing');
+    dt.classList.add('is-custom');
+    dt.textContent = '';
+    for (const k of keys.caps(combo)) dt.appendChild(el('kbd', { text: k }));
+  };
+  /* Capture phase, so an armed keycap is served before the application's own
+     handler — otherwise pressing "N" to rebind something would also skip the
+     track. */
+  addEventListener('keydown', onCapture, true);
+
   for (const [group, rows] of keys.groups()) {
     const table = el('dl', { class: 'keys-list' });
     for (const b of rows) {
-      table.appendChild(el('dt', {}, (b.display || keys.caps(b.combo)).map((k) => el('kbd', { text: k }))));
+      const dt = el('dt', {}, (b.display || keys.caps(b.combo)).map((k) => el('kbd', { text: k })));
+      /* Only a binding with one plain combo is offered. The pairs — "?" and
+         Shift+/ for the same key, ⌘⇧Z and ⌘Y for redo — are two spellings of
+         one shortcut rather than a choice, and a remapping UI that let you
+         replace half of a pair would leave the other half behind. */
+      if (!b.display && !Array.isArray(b.combo)) {
+        dt.classList.add('keys-edit');
+        dt.tabIndex = 0;
+        dt.setAttribute('role', 'button');
+        dt.setAttribute('title', 'Press to change this shortcut');
+        dt.classList.toggle('is-custom', b.custom);
+        const arm = () => {
+          stopCapture();
+          capturing = { b, dt };
+          dt.classList.add('is-capturing');
+          dt.textContent = 'Press a key…';
+        };
+        dt.addEventListener('click', arm);
+        dt.addEventListener('keydown', (e) => {
+          if (capturing) return;                     // the capture handler has it
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); arm(); }
+        });
+      }
+      table.appendChild(dt);
       table.appendChild(el('dd', { text: b.label }));
       if (b.alt) {
         table.appendChild(el('dt', {}, keys.caps(b.alt).map((k) => el('kbd', { text: k }))));
@@ -744,12 +1044,22 @@ function showShortcuts() {
     body.appendChild(el('section', { class: 'keys-col' },
       el('h3', { class: 'keys-group', text: group }), table));
   }
+  body.appendChild(el('p', { class: 'keys-foot muted',
+    text: 'Press any shortcut above to change it. Escape cancels.' }));
+
   shortcutSheet = dialog({
     title: 'Keyboard',
     body,
     width: 640,
-    actions: [{ label: 'Close', primary: true }],
-    onClose: () => { shortcutSheet = null; },
+    actions: [
+      { label: 'Put them all back', onSelect: () => { keys.resetAll(); toast('Shortcuts reset'); } },
+      { label: 'Close', primary: true },
+    ],
+    onClose: () => {
+      stopCapture();
+      removeEventListener('keydown', onCapture, true);
+      shortcutSheet = null;
+    },
   });
 }
 
@@ -763,6 +1073,79 @@ function showShortcuts() {
  * reports the miss instead. The entry still moves to the redo side, because a
  * stack you cannot walk past is worse than one with a dud step in it.
  */
+/* D5: the stack, visible.
+ *
+ * Undo reaches every change the index holds and its whole interface was ⌘Z, so
+ * you could not see what you had done, could not tell what a run of edits
+ * amounted to, and could not step back past one thing to reach another. */
+let historySheet = null;
+
+function showHistory() {
+  if (historySheet) { historySheet.close(); historySheet = null; return; }
+
+  const body = el('div', { class: 'undo-history' });
+
+  const paint = () => {
+    const h = undoStack.history();
+    body.textContent = '';
+
+    if (!h.past.length && !h.future.length) {
+      body.appendChild(el('p', { class: 'muted', text: 'Nothing to take back yet. Corrections, playlists, favourites and imports all land here.' }));
+      return;
+    }
+
+    /* Newest first, which is the order they will be undone in — a list that
+       reads top to bottom and undoes bottom to top would be a list nobody can
+       aim with. Anything already undone sits above the line, greyed, because
+       it is still reachable by redo and pretending otherwise loses it. */
+    if (h.future.length) {
+      const ul = el('ul', { class: 'undo-list is-future' });
+      for (const e of [...h.future].reverse()) {
+        ul.appendChild(el('li', {},
+          el('span', { class: 'undo-label', text: e.label }),
+          el('span', { class: 'undo-when', text: 'undone' })));
+      }
+      body.appendChild(el('h4', { class: 'undo-head', text: 'Taken back' }));
+      body.appendChild(ul);
+    }
+
+    const ul = el('ul', { class: 'undo-list' });
+    for (const e of [...h.past].reverse()) {
+      const row = el('li', {},
+        el('span', { class: 'undo-label', text: e.label }),
+        el('span', { class: 'undo-when', text: e.at ? fmtAgo(e.at) : '' }),
+        el('button', {
+          class: 'btn sm ghost',
+          /* What the button does is what the list is for: not "undo this one"
+             — the stack is ordered and a hole in it is not a thing that can
+             exist — but "put everything back to here", which is the question
+             somebody scrolling a history is actually asking. */
+          text: e.depth === 1 ? 'Undo' : `Back to here (${e.depth})`,
+          title: `Takes back ${e.depth === 1 ? 'this change' : `these ${e.depth} changes`}`,
+          onclick: async () => {
+            const n = await undoStack.undoTo(e.depth);
+            toast(n === e.depth ? `Took back ${fmtCount(n, 'change')}` : `Took back ${n} of ${e.depth} — the rest could not be undone`);
+            paint();
+          },
+        }));
+      ul.appendChild(row);
+    }
+    if (h.future.length) body.appendChild(el('h4', { class: 'undo-head', text: 'Done' }));
+    body.appendChild(ul);
+  };
+
+  paint();
+  const off = undoStack.events.on('change', paint);
+
+  historySheet = dialog({
+    title: 'What you have changed',
+    body,
+    width: 520,
+    actions: [{ label: 'Close', primary: true }],
+    onClose: () => { off(); historySheet = null; },
+  });
+}
+
 async function runUndo(redo) {
   const label = redo ? undoStack.nextRedo() : undoStack.nextUndo();
   if (!label) { toast(redo ? 'Nothing to redo' : 'Nothing to undo'); return; }
@@ -785,6 +1168,11 @@ function bindKeys() {
        application that it should not also mean in the page. */
     if (keys.dispatch(e, { typing })) e.preventDefault();
   });
+  addEventListener('keyup', (e) => { keys.dispatchUp(e); });
+  /* A hold whose key comes up while the window is not looking never delivers a
+     keyup — alt-tab away mid-check and the rack would have stayed folded to
+     mono until the next press. */
+  addEventListener('blur', () => keys.releaseAll());
 }
 
 /* ------------------------------------------------------------------ right pane */
@@ -882,6 +1270,17 @@ async function boot() {
     if (did?.applied) toast(`Rack for “${did.label}”`);
     else if (did?.released) toast('Back to your rack');
   });
+  /* Q10: a long recording picks up where it was left, and says so. Silently
+     starting an hour in would look like a bug to anybody who wanted the top,
+     so the resume is announced and is undone by one press. */
+  player.events.on('resumed', ({ track, at }) => toast(`Picked up at ${fmtTime(at)}`, {
+    duration: 6000,
+    action: {
+      label: 'Start over',
+      onSelect: () => { player.clearLongMark(track.id); player.seek(0); },
+    },
+  }));
+
   player.events.on('unavailable', (t) => toast(`Can't reach “${t.title}” — reconnect its folder`, {
     action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
   }));
@@ -901,6 +1300,17 @@ async function boot() {
     ? `${lib.trackCount().toLocaleString()} TRACKS · ${lib.state.albums.length.toLocaleString()} ALBUMS`
     : 'NO LIBRARY YET');
   await stats.init();
+  /* I1: notice files added while the application was open. Not a watcher —
+     there is no filesystem event to subscribe to here — but a check when the
+     window comes back after a couple of minutes away, which is when somebody
+     has been off doing exactly that. */
+  lib.watchForChanges();
+  /* R10: the shop window, after a while of nothing. Off unless the Look asks
+     for it; watched from here rather than from the view layer because it
+     outlives every route. */
+  shopWindow.watch();
+  shopWindow.configure({ minutes: looks.state.idle || 0 });
+  looks.events.on('change', (s) => shopWindow.configure({ minutes: s.idle || 0 }));
   intro.report(lib.serial);
 
   navigate();

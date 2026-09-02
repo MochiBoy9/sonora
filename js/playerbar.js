@@ -52,7 +52,12 @@ export function mountPlayerBar(host) {
     </div>
 
     <div class="pb-right">
-      <div class="vu" aria-hidden="true"><i class="vu-peak"></i><i class="vu-needle"></i></div>
+      <div class="vu-stack">
+        <div class="vu" aria-hidden="true"><i class="vu-peak"></i><i class="vu-needle"></i></div>
+        <div class="corr" role="meter" aria-label="Phase correlation" aria-valuemin="-1" aria-valuemax="1">
+          <i class="corr-fill"></i><i class="corr-mid" aria-hidden="true"></i>
+        </div>
+      </div>
       <button class="icon-btn pb-sleep" title="Sleep timer" aria-label="Sleep timer"><span class="pb-sleep-left"></span>${ico('clock')}</button>
       <button class="icon-btn pb-stage" title="Visualiser (V)" aria-label="Open visualiser">${ico('expand')}</button>
       <button class="icon-btn pb-queue" title="Queue (Q)" aria-label="Queue">${ico('queue')}</button>
@@ -367,6 +372,57 @@ export function mountPlayerBar(host) {
     vuNeedle.style.transform = `rotate(${(-42 + vu * 84).toFixed(2)}deg)`;
     vuPeak.style.transform = `rotate(${(-42 + vuHold * 84).toFixed(2)}deg)`;
     host.classList.toggle('vu-hot', vuHold > 0.86);
+    paintCorr();
+  }
+
+  /* S4: the thing you cannot hear.
+   *
+   * Level is the one quantity a listener can already judge, and the transport
+   * spends a real needle on it. Phase correlation is what tells you a record
+   * will collapse on a phone speaker, or that a widener has been pushed past
+   * what mono can survive, and nothing in the app said a word about it.
+   *
+   * A bar from the middle rather than a second needle: it is a signed quantity
+   * with a meaningful zero, and the question people actually ask of it is
+   * "which side of the middle, and how far" — which a bar answers at a glance
+   * and a rotating needle does not.
+   */
+  const corr = q('.corr');
+  const corrFill = q('.corr-fill');
+  let corrShown;                      // undefined until the first paint
+
+  function paintCorr() {
+    const v = player.state.correlation;
+    if (v === null || v === undefined) {
+      if (corrShown !== null) {
+        corr.classList.add('is-idle');
+        corr.removeAttribute('aria-valuenow');
+        corrShown = null;
+      }
+      return;
+    }
+    // A hundredth of the scale is under half a pixel on a 60px bar; below that
+    // this is a style write per frame for something nobody can see.
+    if (corrShown !== null && Math.abs(v - corrShown) < 0.01) return;
+    corrShown = v;
+    corr.classList.remove('is-idle');
+    /* Anchored at the centre and grown outward, so the two directions are the
+       same gesture mirrored rather than two different animations. */
+    corrFill.style.transform = `scaleX(${Math.abs(v).toFixed(3)})`;
+    corrFill.style.transformOrigin = v < 0 ? 'right center' : 'left center';
+    /* Two different questions, so two classes. Which side of the middle is a
+       direction and is true of any negative reading; whether it is *wrong* is
+       a judgement, and −0.02 on wide material is not wrong — a bar that turned
+       amber every time a stereo mix wandered a hundredth below zero would be
+       an alarm nobody could learn to read. */
+    corr.classList.toggle('is-left', v < 0);
+    corr.classList.toggle('is-out', v < -0.2);
+    corr.classList.toggle('is-narrow', v > 0.92);
+    corr.setAttribute('aria-valuenow', v.toFixed(2));
+    corr.setAttribute('title',
+      v < -0.2 ? `Out of phase (${v.toFixed(2)}) — this will thin out in mono`
+      : v > 0.92 ? `Nearly mono (${v.toFixed(2)})`
+      : `Phase correlation ${v.toFixed(2)}`);
   }
 
   let bufferedAt = 0;

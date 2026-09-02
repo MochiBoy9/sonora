@@ -622,6 +622,65 @@ body.is-ready .app { opacity: 1; }
  * behind it. Both are rotated by the transport's ticker, so the whole meter is
  * two transforms a frame and no layout.
  */
+/* The meter and the bar under it are one instrument, so they share a width and
+   a column rather than being two things that happen to sit near each other. */
+.vu-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: none;
+}
+
+/* S4: phase correlation, −1 to +1, growing from the middle.
+ *
+ * A bar rather than a second needle: it is signed with a meaningful zero, and
+ * the question asked of it — which side of the middle, and how far — is one a
+ * bar answers at a glance. Two colours, because the two ends mean opposite
+ * things: to the right is mono-safe and eventually just mono, to the left is
+ * cancellation, which is the one that has to be noticed. */
+.corr {
+  position: relative;
+  width: 46px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgb(var(--surface-3-rgb) / .5);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  transition: opacity var(--dur-3) var(--ease);
+}
+/* Nothing to report — silence, or a mono file. Dimmed rather than emptied, so
+   the instrument is still visibly there. */
+.corr.is-idle { opacity: .35; }
+.corr.is-idle .corr-fill { transform: scaleX(0); }
+
+.corr-fill {
+  position: absolute;
+  left: 50%;
+  top: 0; bottom: 0;
+  width: 50%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: rgb(var(--accent-rgb) / .8);
+  transition: background var(--dur-3) var(--ease);
+}
+/* Which way it leans — true of any negative reading, and only a direction. */
+.corr.is-left .corr-fill { left: 0; }
+/* Far enough out to matter. The one state worth a colour of its own, because
+   it is the one that costs you the record on a phone speaker. */
+.corr.is-out .corr-fill { background: var(--warn); }
+/* Correlated to the point of being mono. Not a fault, so not a warning — but
+   worth saying, because a stereo record reading +0.98 usually is not one. */
+.corr.is-narrow .corr-fill { background: var(--text-3); }
+
+.corr-mid {
+  position: absolute;
+  left: 50%;
+  top: 1px; bottom: 1px;
+  width: var(--hair);
+  background: var(--line-2);
+  transform: translateX(-50%);
+}
+
 .vu {
   position: relative;
   width: 46px;
@@ -702,3 +761,47 @@ body.is-ready .app { opacity: 1; }
 
 @media (max-width: 1080px) { .vu { display: none; } }
 @media (prefers-reduced-motion: reduce) { .vu { display: none; } }
+
+
+/* ------------------------------------------------------------------ L12
+
+   Playlist folders, one level deep, and an order you chose. */
+.side-folder {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-2);
+  font: inherit;
+  font-size: calc(12.5px * var(--scale));
+  text-align: left;
+  border-radius: calc(var(--radius) * 0.5);
+}
+.side-folder:hover { color: var(--text); background: var(--surface-hi); }
+.side-folder-tw {
+  flex: none;
+  display: flex;
+  color: var(--text-3);
+  transition: transform var(--dur-2) var(--ease);
+}
+.side-folder-tw .ico { width: 13px; height: 13px; }
+.side-folder.is-open .side-folder-tw { transform: rotate(90deg); }
+/* Indented rather than boxed: the sidebar is narrow and a border around four
+   rows costs more width than the nesting is worth saying. */
+.side-folder-body { padding-left: 13px; border-left: var(--hair) solid var(--line-2); margin-left: 15px; }
+.side-folder-body .side-empty { padding: 4px 10px; }
+
+/* Being dragged, and where it would land. */
+.side-playlist.is-dragging { opacity: .4; }
+.side-playlist.is-drop, .side-folder.is-drop {
+  box-shadow: inset 0 2px 0 -1px var(--accent);
+}
+.side-folder.is-drop { background: rgb(var(--accent-rgb) / .12); }
+
+@media (prefers-reduced-motion: reduce) {
+  .side-folder-tw { transition: none; }
+}

@@ -123,6 +123,71 @@ export function openStage(backdrop) {
     onclick: () => setDeck(!deckOn),
   });
 
+  /* R11: the credits.
+   *
+   * The tag reader pulls composer, lyricist, conductor, publisher, copyright
+   * and ISRC out of every container it handles, and until now the worker threw
+   * all of it away before the track was written — so a whole panel of real
+   * information was being parsed and dropped. On the immersive view, where
+   * there is nothing on screen but space, that is the obvious third thing to
+   * put beside the words and the turntable.
+   *
+   * It shows what the file carries and nothing where it carries nothing: an
+   * empty credits panel is worse than no button, so the button hides itself. */
+  const creditBox = el('div', { class: 'stage-credits', hidden: true });
+  const creditBtn = el('button', {
+    class: 'icon-btn stage-credit-btn', title: 'Credits (C)', 'aria-label': 'Show the credits',
+    'aria-pressed': 'false', html: ico('info'), hidden: true,
+  });
+
+  const CREDITS = [
+    ['composer', 'Written by'],
+    ['lyricist', 'Words by'],
+    ['conductor', 'Conducted by'],
+    ['remixer', 'Remixed by'],
+    ['publisher', 'Published by'],
+    ['copyright', 'Copyright'],
+    ['isrc', 'ISRC'],
+    ['encodedBy', 'Encoded by'],
+    ['encoder', 'Encoder'],
+  ];
+
+  let wantCredits = false;
+
+  function renderCredits() {
+    const t = player.state.current;
+    const rows = t ? CREDITS.filter(([k]) => t[k]) : [];
+    /* The album artist is worth a line where it differs from the track's own
+       artist — on a compilation that is the whole point, and the stage
+       otherwise only ever shows one of the two. */
+    const extra = [];
+    if (t && t.albumArtist && t.albumArtist !== t.artist) extra.push(['On a record by', t.albumArtist]);
+    if (t && t.album) extra.push(['From', t.album]);
+
+    creditBtn.hidden = !rows.length && !extra.length;
+    if (creditBtn.hidden) wantCredits = false;
+    creditBox.hidden = !(wantCredits && !creditBtn.hidden);
+    creditBtn.setAttribute('aria-pressed', wantCredits ? 'true' : 'false');
+    creditBtn.setAttribute('aria-label', wantCredits ? 'Hide the credits' : 'Show the credits');
+    if (creditBox.hidden) return;
+
+    creditBox.textContent = '';
+    const dl = el('dl', { class: 'stage-credit-list' });
+    for (const [label, value] of extra) {
+      dl.append(el('dt', { text: label }), el('dd', { text: value }));
+    }
+    for (const [key, label] of rows) {
+      dl.append(el('dt', { text: label }), el('dd', { text: String(t[key]) }));
+    }
+    creditBox.appendChild(dl);
+  }
+
+  creditBtn.addEventListener('click', () => {
+    wantCredits = !wantCredits;
+    if (wantCredits) { wantLyrics = false; syncLyricUI(); }
+    renderCredits();
+  });
+
   const elapsed = el('span', { class: 'stage-time', text: '0:00' });
   const total = el('span', { class: 'stage-time', text: '0:00' });
   const fill = el('div', { class: 'seek-fill' });
@@ -146,9 +211,9 @@ export function openStage(backdrop) {
   host.append(
     canvas,
     el('div', { class: 'stage-veil' }),
-    el('div', { class: 'stage-top' }, modeBar, deckBtn, lyricBtn, closeBtn),
+    el('div', { class: 'stage-top' }, modeBar, deckBtn, lyricBtn, creditBtn, closeBtn),
     el('div', { class: 'stage-body' }, artWrap,
-      el('div', { class: 'stage-meta' }, title, artist, tags, lyricBox)),
+      el('div', { class: 'stage-meta' }, title, artist, tags, lyricBox, creditBox)),
     el('div', { class: 'stage-foot' },
       el('div', { class: 'stage-scrub' }, elapsed, seek, total),
       transport));
@@ -470,6 +535,9 @@ export function openStage(backdrop) {
   }
 
   lyricBtn.addEventListener('click', () => {
+    // One panel at a time: the stage is one column, and two of these stacked
+    // is a page rather than a view.
+    if (!wantLyrics) { wantCredits = false; renderCredits(); }
     wantLyrics = !wantLyrics;
     syncLyricUI();
     if (wantLyrics) { shown = -1; followLyric(player.currentTime()); }
@@ -598,6 +666,11 @@ export function openStage(backdrop) {
   /* ---------------------------------------------------------------- wiring */
 
   const offTrack = player.events.on('track', paint);
+  const offCredits = player.events.on('track', renderCredits);
+  /* Drawn once at open as well as on every track change: the stage is nearly
+     always opened while something is already playing, and a panel that only
+     appears at the *next* track is a panel most people never see. */
+  renderCredits();
   const offLyrics = player.events.on('track', loadLyrics);
   const offSpec = player.events.on('track', loadSpec);
   loadSpec();
@@ -623,6 +696,7 @@ export function openStage(backdrop) {
     // Only while there is something to show: a key that does nothing on most
     // tracks is a key nobody learns.
     lyrics: () => (words ? (lyricBtn.click(), true) : false),
+    credits: () => (creditBtn.hidden ? false : (creditBtn.click(), true)),
     deck: () => { setDeck(!deckOn); return true; },
   };
 
@@ -644,7 +718,7 @@ export function openStage(backdrop) {
     stopTick();
     sx.stop(); sy.stop();
     viz.destroy();
-    offTrack(); offState(); offArt(); offLyrics(); offSpec();
+    offTrack(); offCredits(); offState(); offArt(); offLyrics(); offSpec();
     offPeaks();
     document.removeEventListener('keydown', onKey, true);
     handlers = null;
@@ -675,6 +749,12 @@ keys.bind({
   label: 'Lyrics, when there are any',
   active: () => !!handlers,
   run: () => handlers.lyrics(),
+});
+keys.bind({
+  id: 'stage-credits', group: 'In the visualiser', combo: 'C',
+  label: 'Credits, where the file has them',
+  active: () => !!handlers,
+  run: () => handlers.credits(),
 });
 keys.bind({
   id: 'stage-deck', group: 'In the visualiser', combo: 'D',

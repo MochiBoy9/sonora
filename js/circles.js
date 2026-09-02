@@ -96,6 +96,31 @@ function fit(placed) {
  * Radius comes from the square root of the seconds, which is what makes area
  * proportional; a floor keeps the long tail clickable.
  */
+/* A7: how many circles a drawing can hold.
+ *
+ * Past a few dozen the picture stops being readable long before it stops being
+ * computable: the smallest circles are at the 9px floor, their labels do not
+ * fit inside them, and a hundred discs of nearly the same size is a texture
+ * rather than a comparison. The tail is therefore drawn as one circle that
+ * says how many it stands for — which is more honest than the alternative,
+ * because a chart that silently drops its long tail claims the total it is
+ * showing is the whole total. */
+const MAX_CIRCLES = 32;
+export const TAIL_KEY = '\u0000tail';
+
+function withTail(rows) {
+  if (rows.length <= MAX_CIRCLES) return rows;
+  const head = rows.slice(0, MAX_CIRCLES - 1);
+  const tail = rows.slice(MAX_CIRCLES - 1);
+  const seconds = tail.reduce((n, r) => n + (r.seconds || 0), 0);
+  return head.concat([{
+    key: TAIL_KEY,
+    label: `and ${tail.length} more`,
+    seconds,
+    tail: tail.length,
+  }]);
+}
+
 function layout(rows) {
   if (!rows.length) return [];
   const top = rows[0].seconds || 1;
@@ -161,7 +186,85 @@ export function mountCircles(host) {
     el('h3', { text: 'Nothing measured yet' }),
     el('p', { text: 'Listening time is counted while audio is actually playing. Play something for a few seconds and it will appear here.' }));
 
-  host.append(head, bar, stage, pins, empty);
+  /* A3: the same figures, as figures.
+   *
+   * The drawing is a hand-packed SVG — which is to say it is a picture of
+   * numbers, and a screen reader is handed a `role="img"` with a one-line
+   * label. That is the whole of what it can know about months of listening.
+   *
+   * So the numbers are also a table. Not a visually-hidden one: a table is
+   * frequently the faster way to read this even with the picture in front of
+   * you — "how much more is the first than the fourth" is a question a sorted
+   * column answers and a packed circle does not — so it is offered to
+   * everybody, and it is the tail circle's own destination.
+   *
+   * It is built from `rows`, the same array the circles are laid out from, so
+   * the two cannot disagree. */
+  const tableBtn = el('button', {
+    class: 'btn ghost sm', 'aria-expanded': 'false', 'aria-controls': 'circle-table',
+    text: 'As a table',
+    onclick: () => showTable(),
+  });
+  bar.appendChild(tableBtn);
+
+  const find = el('input', {
+    type: 'search', class: 'circle-find', placeholder: 'Find…',
+    'aria-label': 'Find in the table',
+  });
+  const tbody = el('tbody');
+  const table = el('div', { class: 'circle-table', id: 'circle-table', hidden: true },
+    el('div', { class: 'circle-table-head' }, find),
+    el('table', {},
+      el('caption', { class: 'sr-only', text: 'Listening time, longest first' }),
+      el('thead', {}, el('tr', {},
+        el('th', { scope: 'col', text: 'Name' }),
+        el('th', { scope: 'col', class: 'num', text: 'Time' }),
+        el('th', { scope: 'col', class: 'num', text: 'Share' }),
+        el('th', { scope: 'col', class: 'num', text: 'Tracks' }))),
+      tbody));
+
+  find.addEventListener('input', () => paintTable());
+
+  /** Opens or closes the table. `force` opens it without toggling. */
+  function showTable(force) {
+    const open = force ? true : table.hidden;
+    table.hidden = !open;
+    tableBtn.setAttribute('aria-expanded', String(open));
+    tableBtn.textContent = open ? 'Hide the table' : 'As a table';
+    if (open) { paintTable(); find.focus(); }
+  }
+
+  function paintTable() {
+    if (table.hidden) return;
+    const q = find.value.trim().toLowerCase();
+    const shown = q ? rows.filter((r) => r.label.toLowerCase().includes(q)) : rows;
+    tbody.textContent = '';
+    if (!shown.length) {
+      tbody.appendChild(el('tr', {}, el('td', { colSpan: '4', class: 'muted', text: 'Nothing matches.' })));
+      return;
+    }
+    for (const r of shown) {
+      const tr = el('tr', {},
+        el('th', { scope: 'row' },
+          el('button', {
+            class: 'linkish', text: r.label,
+            /* A7's other half: finding one in a hundred. Choosing a row pins
+               its circle and scrolls the drawing back into view, so the table
+               is a way *into* the picture rather than a replacement for it. */
+            onclick: () => {
+              if (!pinned.has(r.key)) togglePin(r.key);
+              stage.scrollIntoView({ behavior: reduceMotion.matches ? 'instant' : 'smooth', block: 'nearest' });
+            },
+          })),
+        el('td', { class: 'num', text: secondsLabel(r.seconds) }),
+        el('td', { class: 'num', text: (r.share * 100).toFixed(1) + '%' }),
+        el('td', { class: 'num', text: String(r.plays) }));
+      tr.classList.toggle('is-pinned', pinned.has(r.key));
+      tbody.appendChild(tr);
+    }
+  }
+
+  host.append(head, bar, stage, pins, table, empty);
 
   /* ---------------------------------------------------------------- state */
 
@@ -201,9 +304,11 @@ export function mountCircles(host) {
     stage.hidden = !show;
     bar.hidden = !show;
     pins.hidden = !show || pinned.size === 0;
-    if (!show) return;
+    // Nothing measured, nothing to tabulate — and the button that opens the
+    // table should not be there to be pressed either.
+    if (!show) { table.hidden = true; tableBtn.setAttribute('aria-expanded', 'false'); return; }
 
-    const laid = layout(rows);
+    const laid = layout(withTail(rows));
     const seen = new Set();
 
     for (const item of laid) {
@@ -217,6 +322,7 @@ export function mountCircles(host) {
         node.cur = { x: VIEW / 2, y: VIEW / 2, r: 0, o: 0 };
       }
       node.data = item;
+      node.g.classList.toggle('is-tail', item.key === TAIL_KEY);
       // A circle the listener has dragged keeps where they put it. The layout
       // is recomputed every time the totals move — every twenty seconds while
       // music plays — and an arrangement that dissolves under you is worse
@@ -238,6 +344,7 @@ export function mountCircles(host) {
     }
 
     paintPins();
+    paintTable();
     clearBtn.hidden = !arranged();
     run();
   }
@@ -259,7 +366,9 @@ export function mountCircles(host) {
       tip.append(
         el('strong', { text: node.data.label }),
         el('span', { class: 'circle-tip-value', text: secondsLabel(node.data.seconds) }),
-        el('span', { class: 'circle-tip-share', text: `${(node.data.share * 100).toFixed(1)}% of all listening · ${node.data.plays} tracks` }));
+        el('span', { class: 'circle-tip-share', text: node.data.tail
+          ? 'Everything below the biggest few, added up. Open the table to read them.'
+          : `${(node.data.share * 100).toFixed(1)}% of all listening · ${node.data.plays} tracks` }));
       moveTip(e);
     };
     g.addEventListener('pointerenter', show);
@@ -268,15 +377,28 @@ export function mountCircles(host) {
     g.addEventListener('focus', () => show({ clientX: 0, clientY: 0 }));
     g.addEventListener('blur', () => { tip.hidden = true; });
 
+    /* The tail circle stands for many things at once, so it is not one of
+       them: it cannot be pinned, and there is nothing to play. It opens the
+       table instead, which is where the things it stands for are listed. */
+    const isTail = () => node.data.key === TAIL_KEY;
+
     g.addEventListener('click', (e) => {
       if (node.moved) { node.moved = false; return; }   // that was a drag
+      if (isTail()) return showTable(true);
       if (e.shiftKey || e.altKey) return playFor(node.data);
       togglePin(node.data.key);
     });
-    g.addEventListener('dblclick', (e) => { e.preventDefault(); playFor(node.data); });
+    g.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (isTail()) return showTable(true);
+      playFor(node.data);
+    });
     g.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePin(node.data.key); }
-      if (e.key === 'p' || e.key === 'P') playFor(node.data);
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        if (isTail()) showTable(true); else togglePin(node.data.key);
+      }
+      if ((e.key === 'p' || e.key === 'P') && !isTail()) playFor(node.data);
     });
 
     // Dragging: the arrangement is yours to rearrange.

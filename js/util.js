@@ -239,3 +239,12 @@ export function fmtBytes(n) {
  */
 const LYRIC_EXT = new Set(['lrc', 'txt']);
 export const isLyric = (name) => LYRIC_EXT.has(ext(name));
+
+/* A playlist file. Here rather than in `m3u.js` so that `library.js` can ask
+   the question without importing the module that answers it — the two would
+   otherwise import each other, and a cycle that works only because nobody
+   calls across it during evaluation is a cycle waiting to break. */
+export const isPlaylistFile = (name) => /\.m3u8?$/i.test(String(name || ''));
+
+/* A cue sheet: an index into an audio file rather than a track of its own. */
+export const isCueFile = (name) => /\.cue$/i.test(String(name || ''));

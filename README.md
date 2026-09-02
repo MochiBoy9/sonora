@@ -231,6 +231,95 @@ the first release and the only thing that read them was one button on Home,
 which makes "what was that?" a question the app could not answer. Newest first
 and deliberately not sortable: it is a log, and the order is the information.
 
+## Genres, compilations, and the pile that needs a human
+
+**Genre is somewhere you can go.** Every container the tag reader handles gives
+up a genre and nothing ever displayed one — so the only way to ask for
+everything ambient was to type it into search and hope. There is a wall of them
+now, weighted by how much of the library each one holds. Weighted by the fourth
+root of the share rather than the share itself: a collection that is nine
+tenths one genre would otherwise be one enormous tile and forty slivers, and
+what is wanted is a ranking, not a treemap. Genre in the wild is free text and
+frequently a list — "Rock; Alternative", "Electronic/Ambient" — so it splits on
+the three separators everybody uses and keeps the best-looking spelling.
+
+**A compilation is one record, not twenty artists.** The album merge is careful
+and correct: a guessed artist counts as no artist, and two records that both
+name themselves never merge. But a Various Artists compilation is the one case
+where the album artist and the track artists are *supposed* to disagree, and
+nothing in the model said so. A twenty-track compilation with no ALBUMARTIST
+frame did not merely read as twenty artists — it read as twenty *albums* of one
+track each, because the album key is a hash of album artist plus title.
+
+The evidence the merge does not use is the folder. Files sitting in one
+directory under one album title are one album whatever their artist tags say,
+and that is not what two different records sharing a title look like. So a
+compilation folds by title and directory, then is marked either by what it says
+— "Various Artists" is believed — or by its shape: several artists, no
+consistent album artist, and enough of them that this is the record rather than
+one guest verse on it. The distinct artists have to cover two fifths of the
+tracks, which is what keeps a record with two features from being filed under
+Various.
+
+**Needs attention** gathers six findings the app already had and kept in six
+different places: files with nothing in them, records with no cover, probable
+duplicates, files this browser cannot decode, suspected transcodes, and
+partly-guessed tags. One walk computes all of them, and each is a count, the
+list behind it, and one thing to do about it.
+
+**Find and replace** across a field, previewed before it writes anything. Text
+rather than a regular expression — a find-and-replace that accepts `.*` is one
+that can empty a library by accident, and nobody typing "feat." wants a
+character class. Case-insensitive matching leaves the surrounding text's own
+case alone, and the whole run is one undo.
+
+## Playlists that are files
+
+Sonora's whole premise is that the library is a folder on your disk and nothing
+is locked away — and then playlists, the one thing you actually author here,
+lived only in IndexedDB, reachable by nothing else and lost with a Clear
+library. That is the same objection this app makes to every other player,
+turned inward.
+
+They write out as Extended M3U with paths relative to your music folder, and
+read back the same way. Matching on the way in is by the tail of the path,
+longest first: a path from another player is a path from another machine, and
+the part two spellings of the same file share is the end. A bare filename is
+accepted only when it names exactly one track, because every rip has an
+`01 Intro.mp3`. Whatever does not match is listed rather than dropped — "6 of
+60 not found, here they are" is a usable answer and a silent 54-track playlist
+is not.
+
+The `.m3u` files already sitting in your folder are noticed during the scan and
+offered at the end of an import. Offered, not imported: a music folder can also
+hold another player's auto-generated "Recently Added.m3u".
+
+**Folders, one level deep**, and drag to reorder — two levels is a file manager
+and nobody has ever wanted one for forty playlists. Removing a folder does not
+remove what is in it.
+
+## One file, several tracks
+
+A large part of the world's carefully ripped music is one FLAC per side with a
+`.cue` beside it: live sets, DJ mixes, anything from before the CD. Sonora saw
+one forty-five-minute track with no title.
+
+A cue sheet is now parsed into pieces over the one decoded file. Each piece has
+a stable id, its own title and artist, its own length and its own place in the
+album, so a favourite or a correction stays attached to the right piece of
+music rather than to the whole side. The side itself stays in the index because
+it is what actually gets decoded, and is hidden from the library, because a
+side listed beside its own eleven tracks is the same record twice.
+
+Three things in the playback layer make that work, and each is small: the start
+offset is the cue index rather than the lead-in trim; the position readout and
+the scrubber work in the piece's own time while the element works in the file's;
+and a piece ends on the clock at the next index rather than waiting for an
+`ended` event that never comes in the middle of a file.
+
+Multi-`FILE` sheets are deliberately not expanded — those are already a folder
+of tracks, and Sonora reads them as one.
+
 ## Shelves that describe themselves
 
 `+` beside Playlists → **Smart shelf…**
@@ -247,6 +336,28 @@ time you open it.
 A track with nothing measured never matches a numeric rule. A library where
 half the records have not been analysed yet must not have those quietly counted
 as zero and swept into *dynamic range below 8*.
+
+## The queue, and what it remembers
+
+The played half of the queue is folded away behind a count and can be shown
+again. Rows carry their queue index rather than their position in the visible
+list — folding makes those two different numbers, and acting on the wrong one
+removes the wrong track. Rows take focus: Enter plays, Delete removes and moves
+focus to whatever took its place, Alt+Up/Down reorders and says so to a screen
+reader. Where a track came from is printed beside the artist, and only where it
+differs from what the queue as a whole says.
+
+**A recording over twenty minutes remembers where it was left.** It resumes
+there, says so, and offers to start over — silently beginning an hour in looks
+like a bug to anybody who wanted the top. The mark is written on pause as well
+as on `pagehide`, because a write started as the page is being torn down is not
+guaranteed to land.
+
+**The crossfade has a shape**, equal-power or straight lines, and the control
+appears with the slider rather than sitting greyed out. **Output can be routed**
+to a device other than the system default — asked for only when wanted, because
+naming the outputs costs a microphone grant everywhere but Firefox. **Position,
+duration and rate** are pushed to the OS media controls, throttled.
 
 ## Tracks running into each other
 
@@ -317,7 +428,27 @@ An arm you can only drag would be a transport some people cannot use, and "it
 looks like a record player" is not a reason to make the only control on screen
 unreachable.
 
-## Walking the years
+## Walking the years, and the room it is in
+
+The Floor knows what is playing. `P` walks to that record — both axes, so you
+arrive standing in front of it rather than merely in the right decade — and a
+quiet lamp stays on it while it plays. A decade rail down the right edge says
+which decade you are in and takes you to another. The run starts at a gutter
+instead of the horizontal centre, so the left forty per cent of the room is no
+longer empty floor.
+
+The Crate says where you are in it, and the records you have already passed
+lean the other way instead of standing in the same fan as the ones still to
+come — real crate-digging is mostly about what you have pushed past, and eleven
+records all leaning the same way is a carousel. `F` turns the front record
+over.
+
+The Shelf grows dividers between groups, keyed to whatever it is sorted by:
+initials for artist or title, decades for year, and none at all for a sort no
+divider could label. What makes a real shelf navigable is not the spines, it is
+the cards standing proud between them.
+
+
 
 `Albums → Floor`.
 
@@ -409,6 +540,56 @@ pass. So it tints its own page, catches the light under the pointer and stands
 off the card just as an embedded cover does, and nothing in the app has to know
 where it came from. A twelve-megapixel photo becomes a few kilobytes in about
 forty milliseconds.
+
+## Comparing, and hearing what you cannot hear
+
+**A level-matched A/B.** Bypass is a true bypass — the whole rack out of the
+path — and that is exactly what makes it misleading: louder wins every blind
+comparison ever run, so a rack with make-up gain always sounds better and you
+never hear what it is actually doing. The match measures the difference and
+applies it to the quieter leg, beside the honest hard bypass rather than
+instead of it, because the two answer different questions.
+
+What it measures took two goes. Comparing the signal entering the rack with the
+signal leaving it is wrong: a bypass is not the dry input, it is the same chain
+with its settings neutralised, and the width matrix, the wet/dry sum and the
+limiter all have a gain of their own. Measured, the rack made a record 1.1 dB
+*quieter* than its own bypass while the first correction moved it 2.8 dB the
+other way. It now measures the rack's transfer function with the rack in, then
+again with it out, and takes the difference of the two ratios — which divides
+the music out, so two readings a second apart can be compared at all.
+
+**Two racks, A and B**, and one key to swap them. Bypass answers "is the rack
+doing anything?"; it cannot answer "is this curve better than that one?", which
+is the question you actually have once you are past flat.
+
+**A momentary mono check**, held rather than set. The width control already
+reached mono, but as a setting you had to remember to put back — which is not
+how anybody checks anything.
+
+**A correlation meter under the VU.** Level is the one thing a listener can
+already judge and the transport spends a real needle on it. Phase is what tells
+you a record will collapse on a phone speaker, or that a widener has gone past
+what mono survives. It costs three more sums over the 128 floats the meter
+worklet had already walked — no second tap on the signal.
+
+**Numbers on the spectrum.** A live plot behind the curve, a dBFS scale, a peak
+hold and a readout under the pointer. It reads a new plain `spectrum()` rather
+than the visualiser's `analysis()`, whose bands are tilted, curved and
+normalised for the eye — a dB scale printed against those would be a ruler
+beside a lie.
+
+**A rack as a file**, written out and read back, with everything in the file
+bounded on the way in and what it would change shown before it changes
+anything.
+
+**And a phase vocoder**, behind a quality setting that says what it costs: 50 ms
+of latency and two FFTs a hop, against a delay line that costs neither and
+warbles past about seven semitones. The overlap-add normalisation is a function
+of the synthesis hop rather than the constant it looks like — fixed at unity it
+cost 3 dB at +7 semitones and gained about as much going down, which would have
+made the two shifters impossible to compare for exactly the reason the level
+match exists.
 
 ## The Rack
 
@@ -554,6 +735,57 @@ second you left it, without being asked twice.
 
 Auto-connect and an explicit **Disconnect** both live in **Settings →
 Connection**. A disconnect is remembered; nothing reconnects behind your back.
+
+## What a record measures
+
+DR was a column in the Songs table and a row in the back cover's spec block —
+which is the block that gives way when the card runs out of room — and on the
+album page itself, where you are looking at one record, it was nowhere. It is
+there now, per track beside the tracklist and averaged in a panel underneath,
+along with the tempo, the spectral centroid and the encoder shelf that catches
+a lossless container made from a lossy source.
+
+Every figure comes off the index; nothing is decoded to draw it. And every one
+of them says how much of the record it has actually seen: a figure is only
+known for a track that has been listened to, so "DR11 · 4 of 9 measured" is a
+partial reading said out loud rather than a claim about the other five.
+
+## The gatefold, the credits, and the shop window
+
+**A double album opens.** Thickness already followed track count, a multi-disc
+release already drew as more than one sleeve, and the back already turned — a
+gatefold is the obvious next member of that family. The inner spread is two
+panels on one hinge with the tracklist running across both, broken at the disc,
+which is how a real one sets it. Where there is no room to open sideways the
+spread stacks instead.
+
+**The credits are on the stage.** The tag reader pulls composer, lyricist,
+conductor, publisher, copyright and ISRC out of every container it handles, and
+until now the parser threw all of it away before the track was written — a
+whole panel of real information parsed and dropped. It is the third panel
+beside the words and the turntable, on `C`, and it shows what the file carries
+and nothing where it carries nothing.
+
+**A cover can be looked at.** Artwork is imported at about 448px and drawn at
+232, and clicking one navigated — so there was no way to simply see the
+picture, which for a lot of records is half of why you own them. The lightbox
+shows the largest thing Sonora holds and says how big that actually is, because
+a 300px cover shown full-screen should admit to being a 300px cover.
+
+**Wear**, off by default and the one piece of pure decoration here that earns
+its place: the sleeve model already lights and shades itself from the artwork's
+own luminance, and `playCount` has been kept since the first release. A record
+you have played four hundred times gets ring wear and a little more sheen — the
+same fact the library already holds, said in the material rather than in a
+number. Bounded so a favourite record is always still readable.
+
+**A shop window.** There is a full 3D world here, four visualisers and a wall
+of artwork, and after a few minutes of nobody touching anything it simply sat
+there — while a player left running on a second screen is one of the main ways
+people use one. Set a drift time in the Look and Sonora walks slowly through
+your covers with whatever is playing held in front. Any input cancels it,
+including the one that would have started it; it never runs while an import
+does; and with reduced motion asked for, the covers cut rather than glide.
 
 ## The Circle Analysis Center
 
@@ -940,6 +1172,99 @@ album library costs the same as a forty-album one.
 A cover you drop is downscaled, encoded and sampled in about 45 ms — a 16 KB
 PNG becomes a 3 KB WebP — on the worker, not the main thread.
 
+## Backing it up
+
+Sonora has no account and no server: the library is a folder on your disk, and
+everything the app knows *about* it lives in one browser's IndexedDB. That is
+the design, and it had a corollary nobody had drawn — there was no other copy
+of months of corrections anywhere, and "Clear library" was honest about
+destroying them with no way to take a copy first.
+
+A backup is one JSON file: playlists, favourites, corrections with what each
+one replaced, chosen covers, saved racks and bindings, listening totals, the
+Look and the settings. Not the audio, and not the artwork thumbnails unless you
+ask — they are the only large thing here and they rebuild from your files in
+seconds. Not the folder handles either: a File System Access handle means
+nothing outside the profile that granted it, so a restore names the folders it
+expects and asks you to point at them again.
+
+It comes back **merged, never replaced**, and previewed first. The common case
+is a new browser on the same machine where the tracks have just been rescanned
+and only the overlays are missing, so replacing would throw away everything
+done since. The preview says how many of the corrections match tracks this
+library actually has, which is the difference between a restore and a hope.
+Settings are off by default and asked for separately: what you want back is the
+work, not another machine's crossfade.
+
+**The undo stack is visible.** Undo reaches every change the index holds and
+its entire interface was ⌘Z, so you could not see what you had done, could not
+tell what a run of edits amounted to, and could not step back past one thing to
+reach another. `H` opens the list, newest first, which is the order they undo
+in. What has already been taken back stays listed and greyed, because an entry
+you cannot see is one you will not think to put back.
+
+## Importing
+
+**Check for new files.** The library rescanned at launch and never again — add
+an album to the folder while the app is open and nothing happened, with no way
+to ask short of reloading. There is a button, and an automatic check when the
+window comes back after two minutes away. Two minutes rather than every focus:
+alt-tabbing to a browser and back is not a reason to walk twenty thousand
+files.
+
+**What it is doing, and what it learned nothing from.** The bar names the file
+it is on, which on a large import is the one taking a long time. And it lists
+the files it read nothing out of.
+
+That last one took a wrong turn first. The plan was to report files the reader
+could not parse — and the reader turns out to be genuinely forgiving: a
+truncated FLAC, an empty MP3, a file of pure noise and a broken ID3 header were
+all tried and it threw on none of them. What it does instead is fall back to
+the folder tree, so a file with nothing in it arrives with an artist and an
+album that were never in it. `guessed` already records which fields came from
+the path, and a track where that covers both artist and album is a track the
+reader learned nothing from. That is the list, and it is the one to look at
+when a library has come out wrong.
+
+**The last five runs are kept**, across reloads. "Added 50 tracks · merged
+Graduation" named the merge, which is exactly right, and then it was gone in
+four seconds and the merge was unreviewable.
+
+**A folder can be switched off instead of removed.** The only two options were
+keep and remove, and removing empties everything that came from the folder —
+corrections and favourites included — which makes an unplugged drive a choice
+between clutter and loss. Off means out of the library and still in the index.
+
+## Reach
+
+The two muted ink tokens measured 3.83:1 and 3.54:1 against this app's own
+background, where AA asks 4.5:1 for anything under 18.66px — and essentially
+every use of them is 9 to 12.5px: sidebar labels, the breadcrumb, every page
+subtitle, the EQ axis, the fader labels, the rack readouts, the duration in the
+transport. They are 10.2:1 and 7.0:1 now, mirrored in light.
+
+There is a skip link, because every route puts ten navigation items before the
+content. There is one focus-ring floor for everything interactive, as an
+outline rather than a shadow: half the controls here are cut with `clip-path`
+chamfers, and a shadow is clipped away with the corner it was drawn on.
+
+**Shortcuts can be remapped** by pressing them, which the keyboard table made
+nearly free.
+
+**The Floor has a keyboard route.** Its own note said it was a fourth mode and
+never the only one precisely because a transformed layout stops matching the
+tab order — which is honest, and is also the reason to close it. Enter steps
+into the room, the arrows then move between records rather than walking the
+camera, and the camera follows so the focused record is never behind you.
+
+**The Circle Analysis Center is also a table.** It is a hand-packed SVG: a
+picture of numbers handed to a screen reader as one line of alt text. The same
+figures are a table now, with a search, offered to everybody — "how much more
+is the first than the fourth" is a question a sorted column answers at a glance
+and a packed circle does not. Past thirty-two circles the tail is drawn as one
+that says how many it stands for and opens the table, because a chart that
+silently drops its long tail claims the total it shows is the whole total.
+
 ## Testing
 
 The tools generate a synthetic library with real containers and real tags — the
@@ -1016,23 +1341,45 @@ the cache.
 
 ### What the newest work was checked with, and what it was not
 
-The suites above need Node, and the machine this pass was built on has neither
-Node nor Python. So everything in it was verified by driving the running
-application directly — importing its own modules, calling into them, and
-measuring the DOM and computed styles that came back.
+The pass before this one was built on a machine with neither Node nor Python,
+so its verification was numeric: modules imported into the running application,
+called into, and the DOM and computed styles measured. It found five defects
+nothing else had — including one where a whole feature had never rendered once
+— and it said plainly that the preview surface had collapsed to a few dozen
+pixels, so none of it had been verified by looking at it.
 
-That found five defects nothing else had, including one that meant a whole
-feature had never rendered once. It is also narrower than the suites in one way
-worth stating plainly: **the preview surface available collapsed to a few dozen
-pixels, so none of this pass was verified by looking at it.** Geometry, timing
-and state were asserted numerically instead — the tonearm sits at −17.6° four
-seconds into a forty-second side, the proud layer moves 1.44px toward a pointer
-at the bottom right and stops growing past seven tenths of the way to the edge,
-the mask leaves 74% of a typographic cover fully transparent. Whether it *looks*
-right is the one thing that has not been established.
+This pass had Node. All five suites run and pass — `smoke`, `interactions`,
+`audio`, `layout` and `looks` — and the work in it was verified the same way it
+was built: by driving the real application in a real browser and measuring what
+came back. Some of what that turned up:
 
-Run the suites on a machine with Node before release, and put the sleeve
-displacement and the turntable in front of somebody who can see them.
+- The **level match** was measuring the wrong two things and correcting 2.8 dB
+  in the wrong direction. Only a transfer-function measurement under both
+  settings showed it; comparing levels a second apart cannot, because the music
+  changes between the readings.
+- The **phase vocoder** normalised its overlap-add by the constant that is only
+  correct at unity, costing 3 dB at +7 semitones. Caught by measuring both
+  shifters against a 440 Hz tone: +12 gives 894 Hz, −12 gives 226 Hz, and the
+  two now agree on level to within a fifth of a decibel.
+- **Recycled rows came back from the virtualiser's pool in reverse order.**
+  Nothing looked wrong, because rows are placed by transform — but Tab, screen
+  readers and anything else that walks the document read that order, and the
+  queue's new keyboard reordering would have tabbed backwards.
+- **A restore could not clear a field.** `Object.assign` writes what a row has
+  and leaves what it does not, so putting a track back from before a correction
+  left the correction in place.
+- **The shelf's dividers filed every record under "A"**, because `formatName()`
+  is a file-format helper and not a name one.
+- **`looks.mjs` took `--accept` as its golden directory**, blessed every surface
+  into a folder called `--accept`, and reported a clean run.
+
+What is still not established: this was verified through a browser under
+automation, not by a person looking at it on a screen they can see. Geometry,
+colour, timing and state were asserted numerically and the goldens compare
+every surface pixel for pixel against the last accepted photograph — which
+catches change, and cannot tell you that the change was an improvement. The
+gatefold, the wear, the shop window and the correlation meter are all things
+somebody should look at before release.
 
 ## Notes
 
@@ -1053,7 +1400,9 @@ displacement and the turntable in front of somebody who can see them.
   index, your playlists, favourites, corrections, chosen covers and every hour of
   listening live in IndexedDB — and without a persistence grant that is
   *best-effort* storage a browser short of room may evict without asking, with no
-  server copy to come back from because there is no server. Sonora asks for that
+  server copy to come back from because there is no server. **Settings →
+  Storage → Backup** writes all of it out as one JSON file and reads it back
+  merged, which is the answer to that risk; Sonora also asks for a persistence
   grant once there is something to lose, rather than at boot, and
   **Settings → Storage** reports the answer it got instead of assuming one. The
   same section says how much of the browser's allowance the library is using, and

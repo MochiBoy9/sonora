@@ -11,10 +11,10 @@ import * as player from './player.js';
 import * as db from './db.js';
 import { VirtualList, VirtualGrid } from './virtual.js';
 import {
-  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, rulesDialog, Selection,
+  artBox, sleeve, paintArt, trackRowFactory, trackMenu, menu, toast, dialog, promptDialog, rulesDialog, lightbox, Selection,
   sectionHead, emptyState, playFab, placeholderStyle,
 } from './ui.js';
-import { enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunning, requestDeviceTilt, stopDeviceTilt, startDeviceTilt } from './motion.js';
+import { reduceMotion, enter, reveal, scramble, countTo, tilt3d, canDeviceTilt, deviceTiltRunning, requestDeviceTilt, stopDeviceTilt, startDeviceTilt } from './motion.js';
 import { MODES, isMode } from './visualizer.js';
 import { mountCircles } from './circles.js';
 import { mountSound } from './sound.js';
@@ -25,6 +25,8 @@ import * as rack from './audio.js';
 import * as band from './band.js';
 import * as session from './session.js';
 import * as looks from './looks.js';
+import * as backup from './backup.js';
+import * as m3u from './m3u.js';
 
 const ROW_H = 56;
 
@@ -374,6 +376,16 @@ function sortControl({ store, keys, fallback, onChange }) {
  */
 const RAIL_LETTERS = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
 
+/* A leading digit, a leading symbol and a leading article all belong under "#"
+   rather than under whatever character happens to be first. Shared, because
+   the A–Z rail and the shelf's dividers have to agree about which letter a
+   record files under — and both have to agree with the sort, which uses the
+   same `norm`. */
+function letterOf(v) {
+  const c = norm(v).trim().charAt(0).toUpperCase();
+  return c >= 'A' && c <= 'Z' ? c : '#';
+}
+
 function letterRail({ getItems, keyOf, onJump }) {
   const node = el('div', { class: 'az-rail', role: 'navigation', 'aria-label': 'Jump to a letter' });
   const buttons = new Map();
@@ -387,13 +399,7 @@ function letterRail({ getItems, keyOf, onJump }) {
     node.appendChild(b);
   }
 
-  // A leading digit, a leading symbol and a leading article all belong under
-  // "#" rather than under whatever character happens to be first: the list is
-  // sorted by the same normalised key, so this has to agree with it.
-  const bucket = (v) => {
-    const c = norm(v).trim().charAt(0).toUpperCase();
-    return c >= 'A' && c <= 'Z' ? c : '#';
-  };
+  const bucket = letterOf;
 
   let first = new Map();
   function indexOf(ch) { return first.has(ch) ? first.get(ch) : -1; }
@@ -473,6 +479,15 @@ const thicknessOf = (album) =>
 
 export function renderAlbumCard(card, album) {
   card.dataset.key = album.key;
+  /* R9: how played this record is, 0..1, for the stylesheet to wear it in.
+   *
+   * A logarithm, not a ratio: the difference between never and twice is the
+   * interesting one, and between three hundred and four hundred there is
+   * nothing to see. `log(1 + plays) / log(1 + 120)` reaches full wear at about
+   * a hundred and twenty plays, which is a record somebody has genuinely
+   * lived with, and is already halfway there at eleven. */
+  const plays = album.plays || 0;
+  card.style.setProperty('--played', plays ? Math.min(1, Math.log1p(plays) / Math.log1p(120)).toFixed(3) : '0');
   paintArt(card.querySelector('.art-img'), album.key);
   card.querySelector('.sleeve')?.style.setProperty('--thick', thicknessOf(album).toFixed(3));
   // Two extra plates behind a record that came on more than one disc. Drawn by
@@ -881,6 +896,11 @@ function viewAlbums(host) {
   host.appendChild(bar);
 
   const ordered = () => lib.sortAlbums(lib.state.albums, sorter.state.key, sorter.state.dir);
+  /* Which key the wall is sorted by, hung off the function itself so a view
+     that wants to group by it — the shelf's dividers — can read it without
+     being handed a second argument it would have to thread through four
+     mounts. */
+  Object.defineProperty(ordered, 'sort', { get: () => sorter.state.key });
 
   const slot = el('div', { class: 'album-slot' });
   host.appendChild(slot);
@@ -975,14 +995,42 @@ function mountShelf(host, ordered) {
 
   let albums = [];
   let offsets = [];          // running x position of each spine
+  let tabs = [];             // { at, x, label } dividers between groups
   let total = 0;
   const live = new Map();    // album key -> element, for what is on screen now
+  const liveTabs = new Map();
+
+  /* R3: the dividers.
+   *
+   * What makes a real shelf navigable is not the spines — a hundred of them
+   * read as one undifferentiated run — it is the cards standing proud between
+   * the groups. Which groups is not this function's decision to make: it is
+   * whatever the shelf is currently sorted by, so an artist sort gets initials
+   * and a year sort gets decades. Sorted by anything else, a divider would be
+   * a card with nothing written on it, so there are none. */
+  const TAB_W = 26;
+
+  function tabFor(album, sort) {
+    if (sort === 'artist' || sort === 'title') {
+      return letterOf(sort === 'artist' ? album.artist : album.title);
+    }
+    if (sort === 'year') return album.year > 0 ? String(Math.floor(album.year / 10) * 10) + 's' : 'No year';
+    return null;
+  }
 
   function measure() {
     albums = ordered ? ordered() : lib.state.albums;
+    const sort = (ordered && ordered.sort) || '';
     offsets = new Array(albums.length);
+    tabs = [];
     let x = 0;
-    for (let i = 0; i < albums.length; i++) { offsets[i] = x; x += widthOf(albums[i]); }
+    let last = null;
+    for (let i = 0; i < albums.length; i++) {
+      const t = tabFor(albums[i], sort);
+      if (t && t !== last) { tabs.push({ at: i, x, label: t }); x += TAB_W; last = t; }
+      offsets[i] = x;
+      x += widthOf(albums[i]);
+    }
     total = x;
   }
 
@@ -1032,12 +1080,33 @@ function mountShelf(host, ordered) {
       shelf.appendChild(node);
       live.set(album.key, node);
     }
+    /* The dividers, windowed the same way the spines are. There are far fewer
+       of them than there are records, but a library sorted by title has
+       twenty-seven and a shelf shows six — building all of them would be the
+       one un-virtualised thing in a view whose whole point is that it is
+       virtualised. */
+    const wantTabs = new Set();
+    for (const t of tabs) if (t.x > left - pad && t.x < right + pad) wantTabs.add(t.label + '@' + t.at);
+    for (const [id, node] of liveTabs) {
+      if (!wantTabs.has(id)) { node.remove(); liveTabs.delete(id); }
+    }
+    for (const t of tabs) {
+      const id = t.label + '@' + t.at;
+      if (!wantTabs.has(id) || liveTabs.has(id)) continue;
+      const node = el('span', { class: 'shelf-tab', 'aria-hidden': 'true', text: t.label });
+      node.style.left = t.x + 'px';
+      shelf.appendChild(node);
+      liveTabs.set(id, node);
+    }
+
     before.style.width = total + 'px';
   }
 
   function rebuild() {
     for (const node of live.values()) node.remove();
+    for (const node of liveTabs.values()) node.remove();
     live.clear();
+    liveTabs.clear();
     measure();
     place();
   }
@@ -1111,10 +1180,70 @@ function mountFloor(host, viewport) {
 
   const stage = el('div', {
     class: 'floor', tabindex: '0', role: 'group',
-    'aria-label': 'Albums by year. Scroll to walk through the years, left and right arrows to walk sideways.',
+    'aria-label': 'Albums by year. Scroll to walk through the years, left and right arrows to walk sideways, ' +
+      'Enter to step into the room, P to walk to what is playing.',
   });
+  /* Everything that is not the room itself lives on one layer above it.
+   *
+   * It has to be a layer rather than two sticky siblings: a sticky element
+   * pins where its *flow* position reaches the top, so a rail placed after the
+   * camera would only pin after 78vh of scrolling, which is to say never at
+   * the top of the page where it is wanted. The HUD takes no height at all,
+   * so the camera still begins at the top of the scroll range, and everything
+   * on it is placed against the frame rather than against the floor. */
+  const hud = el('div', { class: 'floor-hud' });
+  stage.appendChild(hud);
+  hud.appendChild(el('p', {
+    class: 'floor-hint label',
+    text: 'Scroll to walk · ← → sideways · Enter to step in · P for what is playing',
+  }));
   const camera = el('div', { class: 'floor-camera' });
   stage.appendChild(camera);
+
+  /* R2: the decades, down the right edge.
+   *
+   * The Floor is walked by scrolling and by nothing else, and over forty years
+   * that is a long walk with the decade markings on the ground as the only
+   * indication of where you are. The rail is the same information standing up:
+   * which decades this library actually has, which one you are in, and a way
+   * to arrive at one without walking past everything in between.
+   *
+   * `lanesFor()` already works the decades out to place the markers, so this
+   * reads them off `rows` rather than computing anything of its own. */
+  const rail = el('nav', { class: 'floor-rail', 'aria-label': 'Decades' });
+  hud.appendChild(rail);
+  let railBtns = [];
+
+  function buildRail() {
+    rail.textContent = '';
+    railBtns = [];
+    const seen = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const lane = rows[i];
+      const key = lane.undated ? 'undated' : Math.floor(lane.year / 10) * 10;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const btn = el('button', {
+        class: 'floor-rail-btn',
+        text: lane.undated ? 'No year' : String(key).slice(2) + 's',
+        title: lane.undated ? 'Records with no year' : String(key) + 's',
+      });
+      btn.dataset.row = i;
+      btn.addEventListener('click', () => walkTo(i));
+      rail.appendChild(btn);
+      railBtns.push(btn);
+    }
+    rail.hidden = railBtns.length < 2;
+  }
+
+  /** Puts the camera in front of row `r`, scrolling rather than jumping. */
+  function walkTo(r, { x = null, smooth = true } = {}) {
+    const lane = rows[r];
+    if (!lane) return;
+    if (x !== null) camX = Math.max(0, Math.min(maxX, x));
+    viewport.scrollTo({ top: lane.at * ROW_DEPTH, behavior: smooth && !reduceMotion.matches ? 'smooth' : 'instant' });
+    if (!raf) raf = requestAnimationFrame(place);
+  }
 
   let rowCount = 0;
   let items = [];
@@ -1162,6 +1291,12 @@ function mountFloor(host, viewport) {
           el('b', { text: album.title }),
           el('span', { text: album.artist })));
       paintArt(card.querySelector('.art-img'), album.key);
+      card.dataset.key = album.key;
+      /* A2: one tab stop for the whole room, moved by the arrow keys. Ten
+         thousand covers in the tab order would be the same mistake the grid
+         made, and a floor whose focus order runs left-to-right through rows
+         you cannot see is worse than no focus order at all. */
+      card.tabIndex = -1;
       row.appendChild(card);
     }
     camera.appendChild(row);
@@ -1285,12 +1420,70 @@ function mountFloor(host, viewport) {
          itself. A centred row would put 1974's four records and 1991's twenty
          over different ground, so walking right would arrive somewhere
          different in each year and the sideways axis would mean nothing.
-         Left-aligned, one step sideways is the same step in every year. */
-      row.style.transform = `translate3d(${(-SLOT / 2).toFixed(1)}px, 0, ${z.toFixed(1)}px)`;
+         Left-aligned, one step sideways is the same step in every year.
+
+         Where that left edge sits is the stylesheet's business — see
+         `--floor-gutter` — so the room can be given a different margin at a
+         different width without this having to know about it. */
+      row.style.transform = `translate3d(0, 0, ${z.toFixed(1)}px)`;
       // Depth fade, so the far end goes into the room rather than stopping.
       row.style.opacity = String(Math.max(0, Math.min(1, 1 - Math.max(0, d) / (FAR + 2.5))).toFixed(3));
       row.classList.toggle('is-near', d < NEAR_ROWS);
     }
+    paintPlaying();
+    paintRail(advance);
+  }
+
+  /* R1: a quiet lamp on the record that is playing.
+   *
+   * The Floor is a room the library is standing in and it had no idea what was
+   * on the turntable — which is the first thing you would ask a room like
+   * this. The lamp is a class, so the light itself is the stylesheet's; this
+   * only says which record it belongs to. */
+  let litKey = '';
+  function paintPlaying() {
+    const key = player.state.current?.albumKey || '';
+    for (const row of liveRows.values()) {
+      for (const card of row.children) {
+        if (!card.dataset.key) continue;
+        card.classList.toggle('is-playing', !!key && card.dataset.key === key);
+      }
+    }
+    litKey = key;
+  }
+
+  /** Lights the decade the camera is standing in. */
+  function paintRail(advance) {
+    if (!railBtns.length) return;
+    let cur = 0;
+    for (let i = 0; i < rows.length; i++) if (rows[i].at <= advance + 0.5) cur = i;
+    let best = railBtns[0];
+    for (const b of railBtns) if (+b.dataset.row <= cur) best = b;
+    for (const b of railBtns) b.classList.toggle('is-on', b === best);
+  }
+
+  /**
+   * Walks to the record that is playing.
+   *
+   * Both axes: the row is its year and the X is where it sits along that year,
+   * so arriving means standing in front of it rather than merely in the right
+   * decade.
+   */
+  function walkToPlaying() {
+    const key = player.state.current?.albumKey;
+    if (!key) { toast('Nothing is playing'); return false; }
+    for (let r = 0; r < rows.length; r++) {
+      const i = rows[r].albums.findIndex((a) => a.key === key);
+      if (i < 0) continue;
+      /* Centred rather than flush left: the record you asked for should be in
+         front of you, and the gutter is where a row *starts*, not where you
+         are made to stand. */
+      const mid = Math.max(0, viewport.clientWidth / 2 - SLOT);
+      walkTo(r, { x: i * SLOT - mid });
+      return true;
+    }
+    toast('That record is not on the floor');
+    return false;
   }
 
   /** Steps sideways, clamped to the floor's own width. */
@@ -1318,12 +1511,77 @@ function mountFloor(host, viewport) {
   };
   stage.addEventListener('wheel', onWheel, { passive: false });
 
+  /* A2: a keyboard route through the room.
+   *
+   * The comment at the top of this function says the Floor is a fourth mode
+   * and never the only one, precisely because a transformed layout stops
+   * matching the tab order. That is honest and it is also the reason to close
+   * it: a roving focus that follows the *visual* arrangement — left and right
+   * along a year, up and down between years — walks the same room the eye
+   * does, and the camera follows so the focused record is never behind you.
+   *
+   * `cursor` is a position in the room, not an index into a list: a row and a
+   * column, both clamped to what that year actually holds. */
+  let cursor = null;                  // { r, c }
+
+  function focusCell(r, c, { walkX = true } = {}) {
+    const lane = rows[r];
+    if (!lane || !lane.albums.length) return;
+    c = Math.max(0, Math.min(lane.albums.length - 1, c));
+    cursor = { r, c };
+    /* Bring the record into the frame before asking for focus. `.focus()` on
+       something outside the viewport would make the browser scroll to it, and
+       the Floor's scroll position *is* its depth — a browser-initiated scroll
+       here walks the camera somewhere nobody asked to go. */
+    const mid = Math.max(0, viewport.clientWidth / 2 - SLOT);
+    if (walkX) camX = Math.max(0, Math.min(maxX, c * SLOT - mid));
+    viewport.scrollTo({ top: lane.at * ROW_DEPTH, behavior: 'instant' });
+    place();
+    const card = liveRows.get(r)?.children[lane.mark ? c + 1 : c];
+    if (card) card.focus({ preventScroll: true });
+  }
+
   const onKey = (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     const step = e.shiftKey ? SLOT * 3 : SLOT;
-    if (e.key === 'ArrowLeft') { if (walk(-step)) e.preventDefault(); }
-    else if (e.key === 'ArrowRight') { if (walk(step)) e.preventDefault(); }
-    else if (e.key === 'Home') { camX = 0; e.preventDefault(); place(); }
-    else if (e.key === 'End') { camX = maxX; e.preventDefault(); place(); }
+
+    /* Two keyboards in one view, and the difference is where focus is. On the
+       room itself the arrows walk the camera, which is what somebody who has
+       just tabbed in expects. On a record they move between records. */
+    const onCard = e.target.classList?.contains('floor-card');
+
+    if (e.key === 'ArrowLeft') {
+      if (onCard && cursor) { focusCell(cursor.r, cursor.c - 1); e.preventDefault(); }
+      else if (walk(-step)) e.preventDefault();
+    } else if (e.key === 'ArrowRight') {
+      if (onCard && cursor) { focusCell(cursor.r, cursor.c + 1); e.preventDefault(); }
+      else if (walk(step)) e.preventDefault();
+    } else if (e.key === 'ArrowUp' && onCard && cursor && cursor.r > 0) {
+      focusCell(cursor.r - 1, cursor.c); e.preventDefault();
+    } else if (e.key === 'ArrowDown' && onCard && cursor && cursor.r < rowCount - 1) {
+      focusCell(cursor.r + 1, cursor.c); e.preventDefault();
+    } else if (e.key === 'Home') {
+      if (onCard && cursor) focusCell(cursor.r, 0);
+      else { camX = 0; place(); }
+      e.preventDefault();
+    } else if (e.key === 'End') {
+      if (onCard && cursor) focusCell(cursor.r, rows[cursor.r].albums.length - 1);
+      else { camX = maxX; place(); }
+      e.preventDefault();
+    } else if (e.key === 'Enter' && !onCard) {
+      /* Entering the room from its own tab stop: the first record in front of
+         you, rather than the first in the collection. */
+      const advance = viewport.scrollTop / ROW_DEPTH;
+      let r = 0;
+      for (let i = 0; i < rows.length; i++) if (rows[i].at <= advance + 0.5) r = i;
+      focusCell(r, Math.round(camX / SLOT), { walkX: false });
+      e.preventDefault();
+    } else if (e.key === 'p' || e.key === 'P') {
+      /* R1. A key rather than a button, because the Floor has no chrome and
+         should not grow any: it is a room, and the affordances that belong in
+         it are the ones you can walk to. The hint above the rail says so. */
+      if (walkToPlaying()) e.preventDefault();
+    }
   };
   stage.addEventListener('keydown', onKey);
 
@@ -1347,6 +1605,11 @@ function mountFloor(host, viewport) {
 
   const onDown = (e) => {
     if (e.button !== 0) return;
+    /* Not on the controls. `setPointerCapture` below redirects the rest of the
+       gesture — the click included — to the stage, so a press that began on a
+       decade button would be captured away from it and the button would never
+       hear about it. The room is dragged; the things standing on it are not. */
+    if (e.target.closest?.('.floor-hud')) return;
     swallowClick = false;
     drag = { x: e.clientX, from: camX, moved: 0 };
     stage.setPointerCapture?.(e.pointerId);
@@ -1384,11 +1647,18 @@ function mountFloor(host, viewport) {
   ro.observe(viewport);
 
   build();
+  buildRail();
   resize();
   host.appendChild(stage);
   place();
 
-  const off = lib.events.on('change', () => { build(); resize(); });
+  const off = lib.events.on('change', () => { build(); buildRail(); resize(); });
+  /* The lamp follows the turntable, and only repaints when the record changes
+     — a repaint per second of playback would be a style write per second for
+     something that changes once a track. */
+  const offTrack = player.events.on('track', () => {
+    if ((player.state.current?.albumKey || '') !== litKey) place();
+  });
   // Only the rows that exist, which is only the ones you can see.
   const offArt = lib.events.on('art', () => {
     for (const row of liveRows.values()) {
@@ -1399,7 +1669,7 @@ function mountFloor(host, viewport) {
   });
 
   return () => {
-    off(); offArt(); ro.disconnect();
+    off(); offArt(); offTrack(); ro.disconnect();
     viewport.removeEventListener('scroll', onScroll);
     stage.removeEventListener('wheel', onWheel);
     stage.removeEventListener('keydown', onKey);
@@ -1439,10 +1709,23 @@ function mountCrate(host, ordered) {
     'data-clips': '',
   });
   const rail = el('div', { class: 'crate-rail' });
+  const count = el('p', { class: 'crate-count label' });
   const meta = el('div', { class: 'crate-meta' },
     el('h2', { class: 'crate-title' }),
-    el('p', { class: 'crate-sub' }));
-  const hint = el('p', { class: 'crate-hint label', text: 'Arrow keys to flip · Enter to open' });
+    el('p', { class: 'crate-sub' }),
+    /* Inside the block rather than positioned under it. Absolutely placed at
+       its own `bottom`, it sat in the space the two lines above it need — and
+       at 620px, where the subtitle wraps, it printed straight through them. */
+    count);
+  const hint = el('p', { class: 'crate-hint label', text: 'Arrow keys to flip · F to turn it over · Enter to open' });
+  /* R4: where you are in the crate.
+   *
+   * Eleven records exist at once and every one of them stood behind the front
+   * one, so a crate of fifty thousand looked exactly like a crate of eleven
+   * and flipping gave no sense of travel at all. Real crate-digging is mostly
+   * about what you have already pushed past, so the near half now leans the
+   * other way — the same eleven nodes, redistributed, which costs nothing —
+   * and the count says the rest. */
   box.append(rail, meta, hint);
   host.appendChild(box);
 
@@ -1474,18 +1757,30 @@ function mountCrate(host, ordered) {
       // forward of the rest, because it is the one being looked at. Folding it
       // into the same formula as its neighbours turns it 42 degrees and pushes
       // it sideways, which is a crate with nothing at the front of it.
+      /* R4. The records behind the front one are what is still to come and
+         they recede; the ones in front of it are what you have already pushed
+         past, and they lean the other way, toward you, the way a stack does
+         when you have tipped half of it forward. The two halves therefore read
+         as different piles rather than as one symmetrical fan, which is the
+         whole difference between flipping through a crate and looking at a
+         carousel. */
       const s = o < 0 ? -1 : 1;
       const d = Math.abs(o);
-      const x = d === 0 ? 0 : s * (58 + (d - 1) * 30);
-      const z = d === 0 ? 70 : -d * 120;
-      const ry = d === 0 ? 0 : -s * 44;
+      const passed = o < 0;
+      const x = d === 0 ? 0 : s * (passed ? 44 + (d - 1) * 22 : 58 + (d - 1) * 30);
+      const z = d === 0 ? 70 : (passed ? 40 - d * 26 : -d * 120);
+      const ry = d === 0 ? 0 : (passed ? 62 : -44) * -s;
       // The -50% pair is the centring the stylesheet asked for and cannot
       // apply itself, because this line replaces the whole transform.
       node.style.transform =
         `translate(-50%, -50%) translate3d(${x.toFixed(1)}px, 0, ${z.toFixed(0)}px)` +
         ` rotateY(${ry.toFixed(0)}deg)`;
-      node.style.opacity = d === 0 ? '1' : String(Math.max(0.15, 1 - d * 0.22));
-      node.style.zIndex = String(20 - d);
+      node.style.opacity = d === 0 ? '1' : String(Math.max(0.15, 1 - d * (passed ? 0.16 : 0.22)));
+      /* A passed record is nearer the eye than the front one, so it has to be
+         drawn over it, or the near half sinks into the record it is in front
+         of and the lean means nothing. */
+      node.style.zIndex = String(passed ? 30 + d : 20 - d);
+      node.classList.toggle('is-passed', passed);
       node.classList.toggle('is-front', o === 0);
       node.setAttribute('aria-selected', o === 0 ? 'true' : 'false');
       // Only the record at the front is a target. Clicking one behind it and
@@ -1498,16 +1793,57 @@ function mountCrate(host, ordered) {
     meta.querySelector('.crate-title').textContent = cur.title;
     meta.querySelector('.crate-sub').textContent =
       [cur.artist, cur.year || null, fmtCount(cur.tracks.length, 'track')].filter(Boolean).join(' · ');
+    count.textContent = `${at + 1} of ${albums.length}`;
     box.setAttribute('aria-activedescendant', '');
+    paintBack();
   }
 
-  const move = (by) => { at += by; paint(); };
+  /* R5: turn the record over.
+   *
+   * The back cover is typeset, real and legible, and exactly one of the four
+   * album views could reach it — which is odd, because holding a record up to
+   * look at it is precisely the moment you turn it over. Only the front record
+   * gets a back: the other ten are edge-on and would be ten back covers nobody
+   * can see, built and thrown away on every keypress.
+   */
+  let flipped = false;
+  let backKey = '';
+
+  function paintBack() {
+    const node = cards.get(0);
+    const album = albums[at];
+    if (!node || !album) return;
+    const inner = node.querySelector('.sleeve');
+    if (!inner) return;
+
+    if (backKey !== album.key) {
+      backKey = album.key;
+      inner.querySelector('.sleeve-flip')?.replaceWith(...inner.querySelector('.sleeve-flip').childNodes);
+      inner.querySelector('.sleeve-back')?.remove();
+      /* The same two-element arrangement `sleeve()` builds, for the same
+         reason: the pointer tilt is written inline on `.sleeve`, so the flip
+         needs an element of its own or one would overwrite the other. */
+      const face = [...inner.children];
+      const flip = el('div', { class: 'sleeve-flip' }, ...face, backCover(album));
+      inner.appendChild(flip);
+      inner.classList.add('has-back');
+    }
+    inner.classList.toggle('is-flipped', flipped);
+    inner.querySelector('.sleeve-back')?.setAttribute('aria-hidden', flipped ? 'false' : 'true');
+    node.setAttribute('aria-label', `${album.title} by ${album.artist}${flipped ? ', back cover' : ''}`);
+  }
+
+  /* Flipping to the next record puts the new one face out. Carrying the turn
+     across would mean arriving at a record you have never seen from the back,
+     which is not what turning one over means. */
+  const move = (by) => { at += by; flipped = false; paint(); };
 
   box.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowRight') { move(1); e.preventDefault(); }
     else if (e.key === 'ArrowLeft') { move(-1); e.preventDefault(); }
     else if (e.key === 'Home') { at = 0; paint(); e.preventDefault(); }
     else if (e.key === 'End') { at = albums.length - 1; paint(); e.preventDefault(); }
+    else if (e.key === 'f' || e.key === 'F') { flipped = !flipped; paintBack(); e.preventDefault(); }
     else if (e.key === 'Enter' && albums[at]) {
       markTransition(cards.get(0)?.querySelector('.sleeve'));
       location.hash = '#/album/' + albums[at].key;
@@ -1596,16 +1932,23 @@ function viewAlbum(host, key) {
    * traded discoverability for a trick. The button says what it does, takes
    * focus, and answers Enter and Space for free. */
   const flip = art.querySelector('.sleeve');
+  const gate = isGatefold(album);
   const flipBtn = el('button', {
     class: 'flip-btn', 'aria-pressed': 'false',
-    title: 'Turn the sleeve over', 'aria-label': 'Show the back of the sleeve',
-    html: ico('refresh') + '<span>Back</span>',
+    title: gate ? 'Open the gatefold' : 'Turn the sleeve over',
+    'aria-label': gate ? 'Open the gatefold' : 'Show the back of the sleeve',
+    html: ico('refresh') + `<span>${gate ? 'Open' : 'Back'}</span>`,
     onclick: () => {
       const on = !flip.classList.contains('is-flipped');
       flip.classList.toggle('is-flipped', on);
       flipBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
       flipBtn.setAttribute('aria-label', on ? 'Show the front of the sleeve' : 'Show the back of the sleeve');
-      flipBtn.querySelector('span').textContent = on ? 'Front' : 'Back';
+      flipBtn.querySelector('span').textContent = on
+        ? (gate ? 'Close' : 'Front')
+        : (gate ? 'Open' : 'Back');
+      // A gatefold opens rather than turning over, so the hero widens to make
+      // room for the spread and puts itself back when it closes.
+      hero.classList.toggle('is-open', gate && on);
       // The back is real content, not decoration, so it stops being hidden
       // from a screen reader the moment it is the side facing out.
       art.querySelector('.sleeve-back').setAttribute('aria-hidden', on ? 'false' : 'true');
@@ -1613,7 +1956,34 @@ function viewAlbum(host, key) {
   });
   art.appendChild(flipBtn);
 
-  const columns = ['index', 'title', 'duration'];
+  /* R6: a button to look at the picture, beside the one that turns it over.
+   *
+   * A button rather than a click on the sleeve, for the same reason the flip
+   * is a button: the largest element on the page doing something unguessable
+   * is a page that has traded discoverability for a trick — and the sleeve
+   * already tilts, turns and accepts a dropped cover. */
+  const zoomBtn = el('button', {
+    class: 'flip-btn zoom-btn', title: 'Look at the cover',
+    'aria-label': 'Look at the cover, full size',
+    html: ico('expand') + '<span>Look</span>',
+    onclick: () => lightbox(key, { title: album.title, artist: album.artist }),
+  });
+  art.appendChild(zoomBtn);
+
+  /* T2: dynamic range where you are looking at one record.
+   *
+   * DR is a column in the Songs table and a row in the back cover's spec
+   * block — which is the block that gives way when the card runs out of room —
+   * and on the album page itself it was nowhere. It costs no new analysis:
+   * every figure here is already on the track.
+   *
+   * Honest about coverage: a figure is only ever known for a track that has
+   * actually been listened to, so "DR11 · 4 of 9 measured" is a partial
+   * reading said out loud, and a bare "DR11" over nine tracks would be a
+   * claim about five of them nobody has made. */
+  const columns = isGatefold(album) || album.tracks.some((t) => t.dr > 0)
+    ? ['index', 'title', 'dr', 'duration']
+    : ['index', 'title', 'duration'];
   const oneArtist = album.tracks.every((t) => t.artist === album.artist);
   const list = el('div', { class: 'plain-list' + (oneArtist ? ' no-sub' : '') });
   const factory = trackRowFactory({
@@ -1638,6 +2008,21 @@ function viewAlbum(host, key) {
   });
 
   host.appendChild(list);
+
+  /* T3: what the analysis found, where the record is.
+   *
+   * Tempo with a confidence figure, spectral centroid, and the encoder shelf
+   * that catches a lossless container made from a lossy source — all of it
+   * measured on first listen, all of it kept, and the only door to any of it
+   * was the artist overview. This is a panel about *this* record, which is
+   * where somebody who has just noticed something wants to look.
+   *
+   * Everything here is read from the tracks; nothing is decoded to draw it.
+   * Where nothing has been measured the panel does not appear, because an
+   * empty analysis panel teaches somebody that the feature is broken. */
+  const analysis = analysisPanel(album);
+  if (analysis) host.appendChild(analysis);
+
   enter([hero], { y: 16, z: -90, wipe: true });
   enter(list.children, { each: 13, y: 8, delay: 80 });
 
@@ -1869,15 +2254,172 @@ function acceptCover(art, key) {
  * block prints what is known and says nothing about what is not, which is the
  * only honest thing to do with a record that predates the question.
  */
+/* R7: a gatefold.
+ *
+ * Thickness already follows track count, a multi-disc release already draws as
+ * more than one sleeve, and the back already turns — a double album that opens
+ * is the obvious next member of that family and the most characteristic object
+ * in the whole subject.
+ *
+ * The inner spread is two panels on one hinge: the tracklist runs across both,
+ * broken at the disc, which is exactly how a real gatefold sets it. It appears
+ * in place of the plain back cover, so a record has either one or the other
+ * and never both — the back of a gatefold sleeve is its own outer panel, and
+ * that is what the single-sleeve back already is.
+ */
+/** T2 and T3: what has been measured about this record, or null. */
+function analysisPanel(album) {
+  const drs = album.tracks.filter((t) => t.dr > 0);
+  const bpms = album.tracks.filter((t) => t.bpm > 0 && (t.bpmConfidence || 0) >= 0.4);
+  const cents = album.tracks.filter((t) => t.centroid > 0);
+  const suspect = album.tracks.filter((t) => t.truncated === true);
+  const shelves = album.tracks.filter((t) => t.shelfHz > 0);
+  if (!drs.length && !bpms.length && !cents.length) return null;
+
+  const mean = (list, get) => list.reduce((n, t) => n + get(t), 0) / list.length;
+  const n = album.tracks.length;
+  const facts = [];
+
+  if (drs.length) {
+    const avg = mean(drs, (t) => t.dr);
+    const lo = Math.min(...drs.map((t) => t.dr));
+    const hi = Math.max(...drs.map((t) => t.dr));
+    facts.push({
+      label: 'Dynamic range',
+      value: 'DR' + avg.toFixed(1),
+      note: (lo === hi ? '' : `${lo.toFixed(0)} to ${hi.toFixed(0)} across the record · `) +
+        (drs.length < n ? `${drs.length} of ${n} measured` : 'every track measured'),
+      /* The number people argue about, so it says what it means rather than
+         leaving somebody to guess whether more is better. */
+      hint: 'Peak against average level, in decibels. Above about 12 is a record that breathes; below 8 has been squashed in mastering.',
+    });
+  }
+
+  if (bpms.length) {
+    const avg = mean(bpms, (t) => t.bpm);
+    const spread = Math.max(...bpms.map((t) => t.bpm)) - Math.min(...bpms.map((t) => t.bpm));
+    facts.push({
+      label: 'Tempo',
+      value: Math.round(avg) + ' bpm',
+      note: (spread > 8 ? `${Math.round(spread)} bpm apart at the extremes · ` : 'consistent across the record · ') +
+        `${bpms.length} of ${n} confident`,
+      hint: 'Only tracks the analysis was sure about are counted. An unsure reading is left out rather than averaged in.',
+    });
+  }
+
+  if (cents.length) {
+    const avg = mean(cents, (t) => t.centroid);
+    facts.push({
+      label: 'Brightness',
+      value: (avg / 1000).toFixed(1) + ' kHz',
+      note: `spectral centroid · ${cents.length} of ${n} measured`,
+      hint: 'Where the weight of the sound sits. A dark record is around 1 kHz; anything above 4 is bright, and above 6 is usually a mastering choice.',
+    });
+  }
+
+  if (suspect.length) {
+    const hz = shelves.length ? Math.round(mean(shelves, (t) => t.shelfHz) / 100) / 10 : 0;
+    facts.push({
+      label: 'Encoder shelf',
+      value: hz ? hz.toFixed(1) + ' kHz' : 'found',
+      note: `${suspect.length} of ${n} look like transcodes`,
+      warn: true,
+      hint: 'A lossless container with nothing above a sharp cut-off — the signature of a file that was lossy before it was made lossless.',
+    });
+  }
+
+  const grid = el('div', { class: 'analysis-grid' });
+  for (const f of facts) {
+    grid.appendChild(el('div', { class: 'analysis-cell' + (f.warn ? ' is-warn' : ''), title: f.hint },
+      el('div', { class: 'analysis-label', text: f.label }),
+      el('div', { class: 'analysis-value', text: f.value }),
+      el('div', { class: 'analysis-note', text: f.note })));
+  }
+
+  return el('section', { class: 'block analysis' },
+    sectionHead('What this record measures'),
+    grid,
+    el('p', { class: 'analysis-foot muted',
+      text: 'Measured on first listen and kept. Tracks you have not played yet are not counted.' }));
+}
+
+function isGatefold(album) {
+  return new Set(album.tracks.map((t) => t.disc || 1)).size > 1;
+}
+
+function gatefold(album) {
+  const spread = el('div', { class: 'sleeve-back is-gate', 'aria-hidden': 'true' });
+  const discs = [...new Set(album.tracks.map((t) => t.disc || 1))].sort((a, b) => a - b);
+
+  const left = el('div', { class: 'gate-panel gate-left' });
+  const right = el('div', { class: 'gate-panel gate-right' });
+
+  left.appendChild(el('div', { class: 'back-head' },
+    el('span', { class: 'back-artist', text: album.compilation ? 'Various Artists' : album.artist }),
+    el('span', { class: 'back-title', text: album.title })));
+
+  /* Split by disc rather than by track count: a gatefold that put side one's
+     last two tracks on the right-hand page would be a gatefold nobody has ever
+     seen. With more than two discs the break is at the halfway disc, which is
+     what a triple in a gatefold does. */
+  const half = Math.ceil(discs.length / 2);
+  const leftDiscs = new Set(discs.slice(0, half));
+
+  const listFor = (which) => {
+    const list = el('ol', { class: 'back-list gate-list' });
+    let printed = 0;
+    for (const t of album.tracks) {
+      const d = t.disc || 1;
+      if (leftDiscs.has(d) !== which) continue;
+      if (d !== printed) {
+        printed = d;
+        list.appendChild(el('li', { class: 'back-disc' },
+          el('span', { class: 'back-t', text: 'Disc ' + d })));
+      }
+      list.appendChild(el('li', {},
+        el('span', { class: 'back-n', text: String(t.track || '') }),
+        el('span', { class: 'back-t', text: t.title }),
+        el('span', { class: 'back-d', text: t.duration ? fmtTime(t.duration) : '' })));
+    }
+    return list;
+  };
+
+  left.appendChild(listFor(true));
+  right.appendChild(listFor(false));
+
+  // The catalogue number sits at the foot of the right-hand page, where a
+  // pressing plant puts it.
+  right.appendChild(el('div', { class: 'back-cat' },
+    el('span', { text: 'SNR-' + String(album.key).toUpperCase() }),
+    album.year ? el('span', { text: String(album.year) }) : null));
+
+  spread.append(left, right);
+  return spread;
+}
+
 function backCover(album) {
+  if (isGatefold(album)) return gatefold(album);
   const back = el('div', { class: 'sleeve-back', 'aria-hidden': 'true' });
 
   back.appendChild(el('div', { class: 'back-head' },
-    el('span', { class: 'back-artist', text: album.artist }),
+    el('span', { class: 'back-artist', text: album.compilation ? 'Various Artists' : album.artist }),
     el('span', { class: 'back-title', text: album.title })));
 
+  /* R8: a set is printed as a set.
+   *
+   * A multi-disc release already draws as more than one sleeve on the shelf
+   * and already gets disc headings in the page's own tracklist, and then the
+   * back cover flattened it into one numbered run where track 1 appeared
+   * twice. Real sleeves put a rule and a side. */
+  const discs = [...new Set(album.tracks.map((t) => t.disc || 1))].sort((a, b) => a - b);
   const list = el('ol', { class: 'back-list' });
+  let printed = 0;
   for (const t of album.tracks) {
+    if (discs.length > 1 && (t.disc || 1) !== printed) {
+      printed = t.disc || 1;
+      list.appendChild(el('li', { class: 'back-disc' },
+        el('span', { class: 'back-t', text: 'Disc ' + printed })));
+    }
     list.appendChild(el('li', {},
       el('span', { class: 'back-n', text: String(t.track || '') }),
       el('span', { class: 'back-t', text: t.title }),
@@ -1912,6 +2454,7 @@ function backCover(album) {
     ? 'DR' + Math.round(drs.reduce((a, b) => a + b, 0) / drs.length) +
       (drs.length < album.tracks.length ? ` · ${drs.length} of ${album.tracks.length}` : '')
     : '');
+  row('Discs', discs.length > 1 ? String(discs.length) : '');
   row('On disk', bytes ? fmtBytes(bytes) : '');
   row('Runtime', album.duration ? fmtTotal(album.duration) : '');
   if (spec.children.length) back.appendChild(spec);
@@ -2127,6 +2670,15 @@ function viewPlaylists(host) {
     el('p', { class: 'page-sub', text: fmtCount(lib.state.playlists.length, 'playlist') }));
   host.appendChild(head);
 
+  const m3uPicker = el('input', {
+    type: 'file', accept: '.m3u,.m3u8,audio/x-mpegurl', hidden: true,
+    onchange: async () => {
+      const f = m3uPicker.files && m3uPicker.files[0];
+      m3uPicker.value = '';
+      if (f) offerM3U(await f.text(), f.name.replace(/\.[^.]+$/, ''));
+    },
+  });
+
   const bar = el('div', { class: 'toolbar' },
     el('button', {
       class: 'btn primary', html: ico('plus') + '<span>New playlist</span>',
@@ -2134,6 +2686,13 @@ function viewPlaylists(host) {
         title: 'New playlist', label: 'Name', value: 'My playlist', confirm: 'Create',
         onConfirm: async (name) => { if (name) { const p = await lib.createPlaylist(name); location.hash = '#/playlist/' + p.id; } },
       }),
+    }),
+    m3uPicker,
+    el('button', {
+      /* L13: read one in. A file input as well as the drop target, because
+         "open a playlist" is a thing people go looking for. */
+      class: 'btn ghost', html: ico('folder') + '<span>Open an .m3u</span>',
+      onclick: () => m3uPicker.click(),
     }));
   host.appendChild(bar);
 
@@ -2271,6 +2830,62 @@ function viewFavourites(host) {
   return () => { off(); offChange(); table.destroy(); };
 }
 
+/** L13: writes one playlist out as Extended M3U. */
+function saveM3U(p) {
+  const tracks = lib.playlistTracks(p);
+  if (!tracks.length) { toast('Nothing in it to save'); return; }
+  const blob = new Blob([m3u.write(p.name, tracks)], { type: 'audio/x-mpegurl;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = el('a', { href: url, download: m3u.fileName(p.name) });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  toast(`Saved ${fmtCount(tracks.length, 'track')}`);
+}
+
+/**
+ * L13/L14: reads M3U text in, and says plainly what it could not find.
+ *
+ * A path from another player is a path from another machine, so a playlist
+ * that arrives 90% matched is the normal case rather than a failure — and the
+ * missing tenth is worth naming, because it is usually one album that has been
+ * moved rather than ten files that are gone.
+ */
+function offerM3U(text, fallbackName) {
+  const parsed = m3u.parse(text);
+  if (!parsed.entries.length) { toast('That playlist file is empty'); return; }
+  const { found, missing } = m3u.resolve(parsed.entries);
+  const name = parsed.name || fallbackName || 'Imported playlist';
+
+  const body = el('div', {},
+    el('p', { text: `“${name}” lists ${fmtCount(parsed.entries.length, 'track')}. ${found.length} of them are in your library.` }),
+    missing.length
+      ? el('details', { class: 'm3u-missing' },
+        el('summary', { text: `${missing.length} not found` }),
+        el('ul', { class: 'fail-list' }, missing.slice(0, 40).map((e) =>
+          el('li', {}, el('span', { class: 'fail-name', text: e.label || e.path })))),
+        missing.length > 40 ? el('p', { class: 'muted', text: `and ${missing.length - 40} more` }) : null)
+      : null,
+    !found.length
+      ? el('p', { class: 'muted', text: 'None of these paths match anything here. If the music is in a folder Sonora has not been given, add it first.' })
+      : null);
+
+  dialog({
+    title: 'Import this playlist?',
+    body,
+    width: 520,
+    actions: [
+      { label: 'Cancel' },
+      { label: 'Import', primary: true, onSelect: async () => {
+        if (!found.length) { toast('Nothing to import'); return; }
+        await lib.createPlaylist(name, found.map((t) => t.id));
+        toast(`Imported “${name}” — ${fmtCount(found.length, 'track')}`);
+      } },
+    ],
+  });
+}
+
 function viewPlaylist(host, id) {
   const p = lib.state.playlists.find((x) => x.id === id);
   if (!p) return notFound(host, 'Playlist not found');
@@ -2303,6 +2918,10 @@ function viewPlaylist(host, id) {
           }),
         },
         { label: 'Add to queue', icon: 'queue', onSelect: () => { player.enqueue(lib.playlistTracks(p)); toast('Added to queue'); } },
+        { separator: true },
+        /* L13: out of the box. A playlist that exists only inside IndexedDB is
+           the same lock-in this application objects to everywhere else. */
+        { label: 'Save as .m3u8', icon: 'file', onSelect: () => saveM3U(p) },
         { separator: true },
         { label: 'Delete playlist', icon: 'trash', danger: true, onSelect: () => { lib.removePlaylist(p.id); location.hash = '#/playlists'; } },
       ], { anchor: e.currentTarget }),
@@ -2596,6 +3215,7 @@ function bandOverview(artistName) {
 /* ------------------------------------------------------------------ SETTINGS */
 
 function viewSettings(host) {
+  const offs = [];
   const head = el('header', { class: 'page-head' },
     el('p', { class: 'eyebrow', text: 'System' }),
     el('h1', { class: 'page-title', text: 'Settings' }),
@@ -2655,6 +3275,49 @@ function viewSettings(host) {
       el('div', { class: 'settings-name', text: 'Crossfade' }),
       el('div', { class: 'settings-note', text: 'How long the two overlap. At zero the next track starts the instant the last one ends — what a live album needs.' })),
     el('div', { class: 'settings-actions settings-slider' }, fadeSlider, fadeValue)));
+
+  /* Q7: which shape the overlap takes. Two ramps that each run 0..1 sum to 1
+     in amplitude, which is a dip of about 3dB in the middle where the two
+     tracks are uncorrelated — audible on anything with a steady bed under it.
+     The equal-power pair sums to 1 in *power* instead and holds the level, at
+     the cost of a bump where the two do correlate. Neither is right for every
+     pair of records, so it is a choice rather than a constant. */
+  const curvePick = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Crossfade shape' });
+  for (const [mode, label, hint] of [
+    ['equal', 'Hold the level', 'Equal power: the overlap stays as loud as either track alone'],
+    ['linear', 'Straight lines', 'Equal amplitude: dips slightly in the middle, and never bumps'],
+  ]) {
+    const b = el('button', {
+      class: 'seg' + (player.state.fadeCurve === mode ? ' is-on' : ''),
+      role: 'radio', 'aria-checked': String(player.state.fadeCurve === mode),
+      text: label, title: hint,
+    });
+    b.addEventListener('click', () => {
+      player.setFadeCurve(mode);
+      for (const x of curvePick.children) {
+        const on = x === b;
+        x.classList.toggle('is-on', on);
+        x.setAttribute('aria-checked', String(on));
+      }
+    });
+    curvePick.appendChild(b);
+  }
+
+  const curveRow = el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('sliders') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Crossfade shape' }),
+      el('div', { class: 'settings-note', text: 'Holding the level suits most records. Straight lines are the safer choice where two tracks share a drone or a room \u2014 there, holding the level can bump.' })),
+    el('div', { class: 'settings-actions' }, curvePick));
+  curveRow.hidden = player.state.crossfade === 0;
+  pbRows.appendChild(curveRow);
+
+  /* The shape only exists while there is an overlap to shape, so the row
+     appears with the slider rather than sitting there greyed out. */
+  const paintCurveRow = () => { curveRow.hidden = !player.state.seamless || player.state.crossfade === 0; };
+  fadeSlider.addEventListener('input', paintCurveRow);
+  seamlessSwitch.addEventListener('click', paintCurveRow);
+  paintCurveRow();
 
   const levelPick = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Loudness levelling' });
   for (const [mode, label, hint] of [
@@ -2741,6 +3404,60 @@ function viewSettings(host) {
     'Where both tracks have a clear tempo and the two are close, the overlap starts on a beat rather than on a stopwatch.',
     () => player.state.beatMatch, (v) => player.setBeatMatch(v)));
 
+  /* Q8: which output the sound leaves by. The browser will only name devices
+     once it has been given permission to look at them, and asking for that
+     permission means asking for a microphone \u2014 too steep a price to pay on
+     the chance somebody owns two sets of speakers. So the list stays a button
+     until it is wanted. */
+  if (player.canRouteOutput()) {
+    const pick = el('select', { class: 'settings-select', 'aria-label': 'Output device' });
+    const note = el('div', { class: 'settings-note', text: 'Sonora plays through whatever the system is using. Choose a different output to send it somewhere else.' });
+    let loaded = false;
+
+    const fill = async () => {
+      const devices = await player.outputs();
+      pick.textContent = '';
+      pick.appendChild(el('option', { value: '', text: 'System default' }));
+      for (const d of devices) pick.appendChild(el('option', { value: d.deviceId, text: d.label }));
+      pick.value = player.state.sink || '';
+      loaded = true;
+    };
+
+    const reveal = el('button', { class: 'btn sm', text: 'Choose\u2026' });
+    reveal.addEventListener('click', async () => {
+      reveal.disabled = true;
+      const ok = await player.askForOutputs();
+      reveal.disabled = false;
+      if (!ok) { note.textContent = 'The browser would not list the outputs. Sonora keeps using the system default.'; return; }
+      reveal.hidden = true;
+      pick.hidden = false;
+      await fill();
+    });
+    pick.hidden = true;
+    pick.addEventListener('change', async () => {
+      const res = await player.setSink(pick.value);
+      if (!res.ok && pick.value) {
+        pick.value = '';
+        toast('That output is no longer there');
+      }
+    });
+    /* Where permission has already been granted the list can be built without
+       asking again, so the button never appears. */
+    player.outputsNamed().then((named) => {
+      if (!named) return;
+      reveal.hidden = true;
+      pick.hidden = false;
+      if (!loaded) fill();
+    });
+    navigator.mediaDevices?.addEventListener?.('devicechange', () => { if (loaded) fill(); });
+
+    pbRows.appendChild(el('div', { class: 'settings-row' },
+      el('div', { class: 'settings-ico', html: ico('volume') }),
+      el('div', { class: 'settings-text' },
+        el('div', { class: 'settings-name', text: 'Play through' }), note),
+      el('div', { class: 'settings-actions' }, reveal, pick)));
+  }
+
   playback.appendChild(pbRows);
   host.appendChild(playback);
 
@@ -2748,24 +3465,44 @@ function viewSettings(host) {
   const folders = el('section', { class: 'block' }, sectionHead('Music folders'));
   const list = el('div', { class: 'rows' });
 
+  const onOff = (root) => {
+    const btn = el('button', {
+      class: 'switch' + (root.off ? '' : ' is-on'),
+      role: 'switch', 'aria-checked': String(!root.off),
+      title: root.off ? 'Bring this folder back into the library' : 'Hide this folder without forgetting anything about it',
+    }, el('span', { class: 'switch-knob' }));
+    btn.addEventListener('click', async () => {
+      await lib.setRootOff(root.id, !root.off);
+      paintRoots();
+      toast(root.off ? `“${root.name}” is back` : `“${root.name}” hidden — nothing was forgotten`);
+    });
+    return btn;
+  };
+
   const paintRoots = () => {
     list.textContent = '';
     if (!lib.state.roots.length) {
       list.appendChild(el('p', { class: 'muted', text: 'No folders added yet.' }));
     }
     for (const root of lib.state.roots) {
-      const row = el('div', { class: 'settings-row' },
+      const row = el('div', { class: 'settings-row' + (root.off ? ' is-off' : '') },
         el('div', { class: 'settings-ico', html: ico('folder') }),
         el('div', { class: 'settings-text' },
           el('div', { class: 'settings-name', text: root.name }),
           el('div', { class: 'settings-note', text:
-            root.needsPermission ? 'Permission needed — click Reconnect'
+            root.off ? 'Off — its tracks are out of the library, and everything you have told Sonora about them is kept'
+            : root.needsPermission ? 'Permission needed — click Reconnect'
             : root.needsReconnect ? 'Re-add this folder to play its files this session'
             : `${fmtCount(root.count || 0, 'file')} · ${root.kind === 'handle' ? 'linked folder' : 'session only'}` })),
         el('div', { class: 'settings-actions' },
+          /* I4: off, not gone. The only two options were keep and remove, and
+             removing empties everything that came from the folder —
+             corrections and favourites included. A drive that is not plugged
+             in today is not a folder you want to forget. */
+          onOff(root),
           (root.needsPermission || root.needsReconnect)
             ? el('button', { class: 'btn ghost sm', text: 'Reconnect', onclick: () => document.dispatchEvent(new CustomEvent('sonora:add')) })
-            : el('button', { class: 'btn ghost sm', text: 'Rescan', onclick: () => lib.scanRoot(root) }),
+            : el('button', { class: 'btn ghost sm', text: 'Rescan', disabled: !!root.off, onclick: () => lib.scanRoot(root) }),
           el('button', {
             class: 'icon-btn', html: ico('trash'), title: 'Remove',
             onclick: () => dialog({
@@ -2783,6 +3520,169 @@ function viewSettings(host) {
     el('button', { class: 'btn primary', html: ico('plus') + '<span>Add folder</span>', onclick: () => document.dispatchEvent(new CustomEvent('sonora:add')) }),
     el('button', { class: 'btn ghost', html: ico('refresh') + '<span>Rescan all</span>', onclick: () => lib.rescanAll() })));
   host.appendChild(folders);
+
+  /* --- what the imports did ---
+   *
+   * I3. "Added 50 tracks · merged Graduation" was a toast: it named the merge,
+   * which is exactly right, and then it was gone in four seconds and the merge
+   * was unreviewable. I2's failures had nowhere to be read at all. The last few
+   * runs are kept and both live here.
+   */
+  const imports = el('section', { class: 'block' }, sectionHead('Recent imports'));
+  const runList = el('div', { class: 'rows' });
+  imports.appendChild(runList);
+  imports.appendChild(el('div', { class: 'toolbar' },
+    el('button', {
+      class: 'btn ghost', html: ico('refresh') + '<span>Check for new files</span>',
+      title: 'Walk the folders again. Only files that changed are re-read.',
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        const r = await lib.rescanAll();
+        btn.disabled = false;
+        if (!r.ok) toast('No folders to check');
+      },
+    })));
+
+  const paintRuns = () => {
+    const runs = lib.importRuns();
+    runList.textContent = '';
+    if (!runs.length) {
+      runList.appendChild(el('p', { class: 'muted', text: 'Nothing imported yet this library. Runs that add, merge or fail on something are listed here.' }));
+      return;
+    }
+    for (const run of runs) {
+      const bits = [];
+      if (run.added) bits.push(fmtCount(run.added, 'track') + ' added');
+      if (run.merged.length) bits.push('merged ' + run.merged.slice(0, 3).map((t) => `“${t}”`).join(', ') +
+        (run.merged.length > 3 ? ` and ${run.merged.length - 3} more` : ''));
+      if (run.failed) bits.push(`${run.failed} read from the folder name`);
+
+      const row = el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-ico', html: ico(run.failed ? 'info' : 'database') }),
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: fmtAgo(run.at) + (run.ms > 1500 ? ` · ${(run.ms / 1000).toFixed(0)}s` : '') }),
+          el('div', { class: 'settings-note', text: bits.join(' · ') || 'Nothing changed' })),
+        el('div', { class: 'settings-actions' },
+          run.failures.length
+            ? el('button', {
+              class: 'btn ghost sm', text: 'Which ones',
+              onclick: () => dialog({
+                title: `${fmtCount(run.failed, 'file')} Sonora learned nothing from`,
+                width: 520,
+                body: el('div', {},
+                  el('p', { class: 'muted', text: 'Everything about these came from the folder they are in rather than from the files themselves. They were imported all the same, and they play — but the artist and album are a guess, and this is the list to check when the library has come out wrong. Sonora never writes to your files.' }),
+                  el('ul', { class: 'fail-list' }, run.failures.map((f) =>
+                    el('li', {},
+                      el('span', { class: 'fail-name', text: f.name }),
+                      el('span', { class: 'fail-why', text: f.reason })))),
+                  run.failed > run.failures.length
+                    ? el('p', { class: 'muted', text: `and ${run.failed - run.failures.length} more` })
+                    : null),
+                actions: [{ label: 'Close', primary: true }],
+              }),
+            })
+            : null));
+      runList.appendChild(row);
+    }
+  };
+  paintRuns();
+  offs.push(lib.events.on('runs', paintRuns));
+  host.appendChild(imports);
+
+  /* --- what you have overridden ---
+   *
+   * L17. A chosen cover and a bound rack are invisible until you walk into the
+   * record that has one, which makes them overrides you cannot find and
+   * therefore cannot undo six months later. Listed, with a way back to each.
+   */
+  const overrides = el('section', { class: 'block' }, sectionHead('Your overrides'));
+  const overRows = el('div', { class: 'rows' });
+  overrides.appendChild(overRows);
+
+  const paintOverrides = async () => {
+    overRows.textContent = '';
+    const covers = lib.chosenCovers();
+    const bindings = rack.allBindings();
+
+    if (!covers.length && !bindings.length) {
+      overRows.appendChild(el('p', { class: 'muted', text: 'None yet. Drop a picture on a record to give it a cover, or bind a rack to an album from the Sound page.' }));
+      return;
+    }
+
+    if (covers.length) {
+      overRows.appendChild(el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-ico', html: ico('image') }),
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: fmtCount(covers.length, 'chosen cover') }),
+          el('div', { class: 'settings-note' },
+            el('span', { class: 'over-list' }, covers.slice(0, 12).map((c) =>
+              el('a', { class: 'over-chip', href: '#/album/' + c.key,
+                text: c.album ? c.album.title : 'a record that has gone' })),
+              covers.length > 12 ? el('span', { class: 'muted', text: ` and ${covers.length - 12} more` }) : null)))));
+    }
+
+    if (bindings.length) {
+      const named = [];
+      for (const b of bindings) {
+        const label = b.scope === 'album' ? (lib.state.albumBy.get(b.key)?.title || 'a record that has gone')
+          : b.scope === 'artist' ? (lib.state.artists.find((a) => a.key === b.key)?.name || 'an artist that has gone')
+          : b.key;
+        named.push({ ...b, label });
+      }
+      overRows.appendChild(el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-ico', html: ico('sliders') }),
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: fmtCount(named.length, 'bound rack') }),
+          el('div', { class: 'settings-note' },
+            el('span', { class: 'over-list' }, named.slice(0, 12).map((b) =>
+              el('a', {
+                class: 'over-chip',
+                href: b.scope === 'album' ? '#/album/' + b.key : '#/artist/' + b.key,
+                text: b.label,
+              })))))));
+    }
+  };
+  paintOverrides();
+  offs.push(lib.events.on('change', paintOverrides));
+  offs.push(rack.events.on('bound', paintOverrides));
+  host.appendChild(overrides);
+
+  /* --- older libraries ---
+   *
+   * L18. `guessed` has only been recorded since 2.6, so a library imported
+   * before that gets silently worse album merging than a fresh import would.
+   * The row only appears when there is something to do.
+   */
+  const backfill = el('section', { class: 'block' }, sectionHead('Older imports'));
+  const bfNote = el('div', { class: 'settings-note' });
+  const bfBtn = el('button', { class: 'btn ghost sm', text: 'Re-read those tags' });
+  backfill.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('refresh') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Tracks imported before Sonora recorded what it guessed' }), bfNote),
+    el('div', { class: 'settings-actions' }, bfBtn)));
+
+  const paintBackfill = () => {
+    const n = lib.needsBackfill();
+    backfill.hidden = n === 0;
+    bfNote.textContent = n
+      ? `${fmtCount(n, 'track')} came in before Sonora kept track of which fields it had to take from the folder name. Until it does, albums merge slightly worse than they should.`
+      : '';
+  };
+  bfBtn.addEventListener('click', async () => {
+    bfBtn.disabled = true;
+    const res = await lib.backfillGuessed((done, total) => {
+      bfBtn.textContent = `${done} of ${total}…`;
+    });
+    bfBtn.disabled = false;
+    bfBtn.textContent = 'Re-read those tags';
+    paintBackfill();
+    toast(res.ok ? `Re-read ${fmtCount(res.done, 'track')}` : 'Already running');
+  });
+  paintBackfill();
+  offs.push(lib.events.on('change', paintBackfill));
+  host.appendChild(backfill);
 
   /* --- connection --- */
   const conn = el('section', { class: 'block' }, sectionHead('Connection'));
@@ -2958,6 +3858,122 @@ function viewSettings(host) {
    * storage, which a browser short of room may evict without asking, and there
    * is no server copy to come back from, because there is no server.
    */
+  /* D3 and D4: the copy that lives somewhere else.
+   *
+   * The row above is honest about destroying the overlays and there was no way
+   * to take a copy first — which, in an application with no account and no
+   * server, means there was no other copy of months of corrections anywhere.
+   * Written and read as one JSON file. */
+  const backupNote = el('div', { class: 'settings-note',
+    text: 'Playlists, favourites, corrections, chosen covers, racks, listening totals and settings. Not the audio.' });
+  const withArt = el('button', {
+    class: 'switch', role: 'switch', 'aria-checked': 'false',
+    title: 'Include the artwork thumbnails. Much larger, and they can be rebuilt from your files in seconds.',
+  }, el('span', { class: 'switch-knob' }));
+  let artIn = false;
+  withArt.addEventListener('click', () => {
+    artIn = !artIn;
+    withArt.classList.toggle('is-on', artIn);
+    withArt.setAttribute('aria-checked', String(artIn));
+  });
+
+  const saveBackup = el('button', {
+    class: 'btn ghost sm', text: 'Save a backup',
+    onclick: async () => {
+      saveBackup.disabled = true;
+      saveBackup.textContent = 'Collecting…';
+      try {
+        const doc = await backup.build({ art: artIn });
+        const blob = new Blob([JSON.stringify(doc)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = el('a', { href: url, download: `sonora-backup-${doc.saved.slice(0, 10)}.json` });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toast(`Saved ${fmtCount(doc.counts.overlays, 'correction')} · ${fmtCount(doc.counts.playlists, 'playlist')} · ${fmtCount(doc.counts.favourites, 'favourite')}`);
+      } finally {
+        saveBackup.disabled = false;
+        saveBackup.textContent = 'Save a backup';
+      }
+    },
+  });
+
+  const restorePicker = el('input', {
+    type: 'file', accept: '.json,application/json', hidden: true,
+    onchange: async () => {
+      const file = restorePicker.files && restorePicker.files[0];
+      restorePicker.value = '';
+      if (file) offerBackup(await file.text());
+    },
+  });
+  const restoreBtn = el('button', {
+    class: 'btn ghost sm', text: 'Read one back',
+    onclick: () => restorePicker.click(),
+  });
+
+  /** Shows what merging a backup would do, and merges only if asked. */
+  function offerBackup(text) {
+    const read = backup.inspect(text);
+    if (!read.ok) { toast(read.reason); return; }
+    const s = read.summary;
+    const lines = [];
+    if (s.overlays) lines.push(`${fmtCount(s.overlays, 'correction')}, ${s.matched} of which match tracks you have`);
+    if (s.favourites) lines.push(`${fmtCount(s.favourites, 'favourite')}, ${s.favMatched} matched`);
+    if (s.playlists) lines.push(`${fmtCount(s.playlists, 'playlist')}, ${s.newPlaylists} new to this library`);
+    if (s.art) lines.push(`${fmtCount(s.art, 'cover')}`);
+
+    /* Settings are off by default and stated separately. The common case is a
+       fresh browser that has just rescanned the same folder, where what is
+       wanted back is the work — and quietly replacing the crossfade, the Look
+       and the output device with a six-month-old machine's is a surprise. */
+    let bringSettings = false;
+    const settingsSwitch = el('button', {
+      class: 'switch', role: 'switch', 'aria-checked': 'false',
+    }, el('span', { class: 'switch-knob' }));
+    settingsSwitch.addEventListener('click', () => {
+      bringSettings = !bringSettings;
+      settingsSwitch.classList.toggle('is-on', bringSettings);
+      settingsSwitch.setAttribute('aria-checked', String(bringSettings));
+    });
+
+    const body = el('div', {},
+      el('p', { text: read.saved ? `Saved ${read.saved.slice(0, 10)}.` : 'A Sonora backup.' }),
+      lines.length
+        ? el('ul', { class: 'backup-list' }, lines.map((t) => el('li', { text: t })))
+        : el('p', { class: 'muted', text: 'There is nothing in it this library does not already have.' }),
+      s.roots.length
+        ? el('p', { class: 'muted', text: `It came from: ${s.roots.join(', ')}. Folder permissions cannot be carried between browsers, so you will be asked to point at them again.` })
+        : null,
+      el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-text' },
+          el('div', { class: 'settings-name', text: 'Also bring the settings and the Look' }),
+          el('div', { class: 'settings-note', text: 'Off by default: what you usually want back is the work, not another machine\u2019s crossfade.' })),
+        el('div', { class: 'settings-actions' }, settingsSwitch)),
+      el('p', { class: 'muted', text: 'Nothing is replaced — this merges, and the whole merge is one undo.' }));
+
+    dialog({
+      title: 'Read this backup in?',
+      body,
+      width: 520,
+      actions: [
+        { label: 'Cancel' },
+        { label: 'Merge it in', primary: true, onSelect: async () => {
+          const res = await backup.merge(read, { settings: bringSettings });
+          if (!res.ok) { toast('That backup could not be read'); return; }
+          const d = res.done;
+          toast(`Restored ${fmtCount(d.overlays, 'correction')}, ${fmtCount(d.favourites, 'favourite')}, ${fmtCount(d.playlists, 'playlist')}`);
+        } },
+      ],
+    });
+  }
+
+  storage.appendChild(el('div', { class: 'settings-row' },
+    el('div', { class: 'settings-ico', html: ico('file') }),
+    el('div', { class: 'settings-text' },
+      el('div', { class: 'settings-name', text: 'Backup' }), backupNote),
+    el('div', { class: 'settings-actions' }, withArt, saveBackup, restoreBtn, restorePicker)));
+
   const keepNote = el('div', { class: 'settings-note', text: 'Checking…' });
   const keepBtn = el('button', { class: 'btn ghost sm', text: 'Ask to keep it', hidden: true });
   storage.appendChild(el('div', { class: 'settings-row' },
@@ -3102,9 +4118,9 @@ function viewSettings(host) {
     el('p', { class: 'muted small mono', text: lib.serial }));
   host.appendChild(about);
 
-  enter([head, folders, conn, appearance, viz, online, listening, storage, shape, keys, about], { each: 34, y: 12 });
-  const off = lib.events.on('roots', paintRoots);
-  return () => off();
+  enter([head, folders, imports, overrides, backfill, conn, appearance, viz, online, listening, storage, shape, keys, about], { each: 34, y: 12 });
+  offs.push(lib.events.on('roots', paintRoots));
+  return () => { while (offs.length) offs.pop()(); };
 }
 
 /**
@@ -3643,8 +4659,351 @@ function viewFiles(host) {
   return () => off();
 }
 
+/* ------------------------------------------------------------------ L4
+ *
+ * Genres, as a place. A grid weighted by how much of the library each one
+ * holds, because a genre with four tracks and a genre with four hundred are
+ * not the same kind of thing and a uniform grid says they are.
+ */
+function viewGenres(host) {
+  const all = lib.genres();
+  const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
+    el('h1', { class: 'page-title', text: 'Genres' }),
+    el('p', { class: 'page-sub', text: fmtCount(all.length, 'genre') }));
+  host.appendChild(head);
+  decode(head.querySelector('.page-title'), 'Genres');
+
+  if (!all.length) {
+    host.appendChild(emptyState({
+      icon: 'circles', title: 'No genres yet',
+      note: 'Genre is read from the files. Nothing in this library carries one.',
+    }));
+    return () => {};
+  }
+
+  const top = all[0].tracks.length || 1;
+  const wall = el('div', { class: 'genre-wall' });
+  for (const g of all) {
+    /* Weight by the fourth root of the share, not by the share: a library
+       where one genre is nine tenths of everything would otherwise be one
+       enormous tile and forty slivers. This keeps the biggest about three
+       times the smallest, which reads as a ranking without becoming a
+       treemap. */
+    const w = Math.pow(g.tracks.length / top, 0.25);
+    const tile = el('a', {
+      class: 'genre-tile', href: '#/genre/' + encodeURIComponent(g.key),
+      style: `--w:${w.toFixed(3)}`,
+    },
+      el('b', { class: 'genre-name', text: g.label }),
+      el('span', { class: 'genre-count', text: `${fmtCount(g.tracks.length, 'track')} · ${fmtCount(g.albums.size, 'album')}` }));
+    wall.appendChild(tile);
+  }
+  host.appendChild(wall);
+  enter(wall.children, { each: 14, y: 10 });
+  return () => {};
+}
+
+/** One genre: everything filed under it. */
+function viewGenre(host, key) {
+  const g = lib.genreOf(decodeURIComponent(key || ''));
+  if (!g) return notFound(host, 'No such genre');
+
+  const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow' }, el('a', { class: 'hero-link', href: '#/genres', text: 'Genres' })),
+    el('h1', { class: 'page-title', text: g.label }),
+    el('p', { class: 'page-sub', text: `${fmtCount(g.tracks.length, 'track')} · ${fmtCount(g.albums.size, 'album')} · ${fmtTotal(g.duration)}` }));
+  host.appendChild(head);
+
+  host.appendChild(el('div', { class: 'toolbar' },
+    el('button', {
+      class: 'btn primary', html: ico('play') + '<span>Play</span>',
+      onclick: () => playAll(g.tracks, 0, { type: 'genre', key: g.key, label: g.label }),
+    }),
+    el('button', {
+      class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>',
+      onclick: () => playAll(g.tracks, Math.floor(Math.random() * g.tracks.length),
+        { type: 'genre', key: g.key, label: g.label }),
+    })));
+
+  return trackTable(host, () => g.tracks, { origin: { type: 'genre', key: g.key, label: g.label } });
+}
+
+/* ------------------------------------------------------------------ L9
+ *
+ * Everything that needs a human.
+ *
+ * Six findings the application already had and kept in six places. Each one is
+ * a count, the list behind it and one thing to do about it — which is the only
+ * shape that makes a page like this worth opening twice.
+ */
+function viewAttention(host) {
+  const head = el('header', { class: 'page-head' },
+    el('p', { class: 'eyebrow', text: 'Library' }),
+    el('h1', { class: 'page-title', text: 'Needs attention' }),
+    el('p', { class: 'page-sub', id: 'attn-sub', text: 'Looking…' }));
+  host.appendChild(head);
+
+  const body = el('div', { class: 'attn' });
+  host.appendChild(body);
+
+  const paint = () => {
+    const a = lib.attention();
+    body.textContent = '';
+
+    const items = [
+      {
+        key: 'untagged', icon: 'info',
+        title: 'Nothing in the file',
+        note: 'Artist and album came from the folder name. These are the ones that make a library look wrong.',
+        rows: a.untagged,
+        act: (rows) => openEdit(rows),
+        actLabel: 'Correct them',
+      },
+      {
+        key: 'noart', icon: 'image',
+        title: 'No cover',
+        note: 'No artwork in the files and none chosen. Drop a picture on the record to set one.',
+        rows: a.noArt,
+        albums: true,
+      },
+      {
+        key: 'dupes', icon: 'grip',
+        title: 'Possible duplicates',
+        note: 'Same artist, same title, same length — usually one file at two bitrates.',
+        groups: a.duplicates,
+      },
+      {
+        key: 'undecodable', icon: 'plug',
+        title: 'This browser cannot play them',
+        note: 'Catalogued and searchable, but no decoder here. Another browser may manage them.',
+        rows: a.undecodable,
+      },
+      {
+        key: 'suspect', icon: 'wave',
+        title: 'Look like transcodes',
+        note: 'A lossless container with a lossy encoder\u2019s shelf in the spectrum. Measured, not guessed — only tracks you have played are tested.',
+        rows: a.suspect,
+      },
+      {
+        key: 'guessed', icon: 'edit',
+        title: 'Partly guessed',
+        note: 'Some fields came from the folder tree rather than from the file.',
+        rows: a.guessed,
+        act: (rows) => openEdit(rows),
+        actLabel: 'Correct them',
+      },
+    ];
+
+    let total = 0;
+    for (const item of items) {
+      const n = item.groups ? item.groups.length : item.rows.length;
+      total += n;
+      if (!n) continue;
+
+      const list = el('div', { class: 'attn-body', hidden: true });
+      const card = el('section', { class: 'attn-card' },
+        el('button', {
+          class: 'attn-head', 'aria-expanded': 'false',
+          onclick: (e) => {
+            const open = list.hidden;
+            list.hidden = !open;
+            e.currentTarget.setAttribute('aria-expanded', String(open));
+            if (open && !list.firstChild) fill(list, item);
+          },
+        },
+          el('span', { class: 'attn-ico', html: ico(item.icon) }),
+          el('span', { class: 'attn-text' },
+            el('b', { text: item.title }),
+            el('span', { class: 'attn-note', text: item.note })),
+          el('span', { class: 'attn-count', text: String(n) })),
+        list);
+
+      if (item.act) {
+        card.querySelector('.attn-head').after(el('div', { class: 'attn-actions' },
+          el('button', {
+            class: 'btn ghost sm', text: item.actLabel,
+            onclick: () => item.act(item.rows),
+          })));
+      }
+      body.appendChild(card);
+    }
+
+    host.querySelector('#attn-sub').textContent = total
+      ? `${fmtCount(total, 'thing')} worth a look`
+      : 'Nothing needs you. The library is as tidy as the files allow.';
+    if (!total) {
+      body.appendChild(emptyState({
+        icon: 'star', title: 'All clear',
+        note: 'Untagged files, missing covers, duplicates and anything this browser cannot play would be listed here.',
+      }));
+    }
+  };
+
+  /** Fills a card's list the first time it is opened, not before. */
+  const fill = (list, item) => {
+    if (item.albums) {
+      const grid = el('div', { class: 'attn-albums' });
+      for (const al of item.rows.slice(0, 60)) {
+        grid.appendChild(el('a', { class: 'attn-album', href: '#/album/' + al.key },
+          el('b', { text: al.title }), el('span', { text: al.artist })));
+      }
+      list.appendChild(grid);
+      if (item.rows.length > 60) list.appendChild(el('p', { class: 'muted', text: `and ${item.rows.length - 60} more` }));
+      return;
+    }
+    if (item.groups) {
+      for (const group of item.groups.slice(0, 40)) {
+        const g = el('div', { class: 'attn-group' },
+          el('b', { text: `${group[0].title} — ${group[0].artist}` }));
+        for (const t of group) {
+          g.appendChild(el('div', { class: 'attn-file' },
+            el('span', { class: 'attn-path', text: t.path || t.name }),
+            el('span', { class: 'attn-meta', text: [formatName(t.name || ''), t.bitrate ? t.bitrate + ' kbps' : '', fmtBytes(t.size || 0)].filter(Boolean).join(' · ') })));
+        }
+        list.appendChild(g);
+      }
+      if (item.groups.length > 40) list.appendChild(el('p', { class: 'muted', text: `and ${item.groups.length - 40} more` }));
+      return;
+    }
+    const rows = item.rows.slice(0, 200);
+    const table = el('div', { class: 'plain-list' });
+    const factory = trackRowFactory({
+      columns: ['index', 'title', 'album', 'duration'],
+      onPlay: (i) => playAll(rows, i, { type: 'attention', label: item.title }),
+      onMenu: (i, anchor, event) => menu(trackMenu([rows[i]]), { anchor, event }),
+    });
+    rows.forEach((t, i) => {
+      const row = factory.create();
+      row.dataset.index = i;
+      row.classList.add('static-row');
+      factory.render(row, t, i);
+      table.appendChild(row);
+    });
+    list.appendChild(table);
+    if (item.rows.length > rows.length) {
+      list.appendChild(el('p', { class: 'muted', text: `and ${item.rows.length - rows.length} more` }));
+    }
+  };
+
+  /** The existing edit dialog, against the whole finding. */
+  const openEdit = (rows) => {
+    if (!rows.length) return;
+    editDialog(rows.slice(0, 500));
+  };
+
+  /* L11: the one systematic mistake.
+   *
+   * Every library has one — "feat." against "ft.", a name misspelled the same
+   * way across three albums — and one-at-a-time correction cannot reach it.
+   * It lives here because this is the page somebody opens when their library
+   * is wrong, and because it belongs beside the findings rather than behind a
+   * menu on one track. */
+  host.appendChild(el('div', { class: 'toolbar attn-tools' },
+    el('button', {
+      class: 'btn ghost', html: ico('edit') + '<span>Find and replace…</span>',
+      onclick: () => replaceDialog(),
+    })));
+
+  paint();
+  const off = lib.events.on('change', paint);
+  return () => off();
+}
+
+/** Find and replace across one field, previewed before anything is written. */
+function replaceDialog() {
+  const fields = lib.replaceableFields();
+  const pick = el('select', { class: 'settings-select', 'aria-label': 'Field' });
+  for (const [id, label] of fields) pick.appendChild(el('option', { value: id, text: label }));
+  const findIn = el('input', { class: 'input', placeholder: 'feat.', 'aria-label': 'Find' });
+  const withIn = el('input', { class: 'input', placeholder: 'ft.', 'aria-label': 'Replace with' });
+
+  let matchCase = false;
+  let wholeOnly = false;
+  const flag = (label, hint, get, set) => {
+    const b = el('button', { class: 'switch', role: 'switch', 'aria-checked': 'false' },
+      el('span', { class: 'switch-knob' }));
+    b.addEventListener('click', () => {
+      set(!get());
+      b.classList.toggle('is-on', get());
+      b.setAttribute('aria-checked', String(get()));
+      preview();
+    });
+    return el('div', { class: 'settings-row' },
+      el('div', { class: 'settings-text' },
+        el('div', { class: 'settings-name', text: label }),
+        el('div', { class: 'settings-note', text: hint })),
+      el('div', { class: 'settings-actions' }, b));
+  };
+
+  const out = el('div', { class: 'replace-out' });
+  let changes = [];
+
+  const preview = () => {
+    const find = findIn.value;
+    changes = find
+      ? lib.findReplace(pick.value, find, withIn.value, { caseSensitive: matchCase, whole: wholeOnly })
+      : [];
+    out.textContent = '';
+    if (!find) {
+      out.appendChild(el('p', { class: 'muted', text: 'Type something to find.' }));
+      return;
+    }
+    if (!changes.length) {
+      out.appendChild(el('p', { class: 'muted', text: 'Nothing matches.' }));
+      return;
+    }
+    out.appendChild(el('p', { class: 'replace-count',
+      text: `${fmtCount(changes.length, 'track')} would change` }));
+    const list = el('ul', { class: 'replace-list' });
+    for (const c of changes.slice(0, 40)) {
+      list.appendChild(el('li', {},
+        el('span', { class: 'replace-from', text: c.from }),
+        el('span', { class: 'replace-arrow', text: '→' }),
+        el('span', { class: 'replace-to', text: c.to })));
+    }
+    out.appendChild(list);
+    if (changes.length > 40) out.appendChild(el('p', { class: 'muted', text: `and ${changes.length - 40} more` }));
+  };
+
+  findIn.addEventListener('input', preview);
+  withIn.addEventListener('input', preview);
+  pick.addEventListener('change', preview);
+
+  const body = el('div', { class: 'replace-form' },
+    el('div', { class: 'replace-row' },
+      el('label', { class: 'replace-label', text: 'In' }), pick),
+    el('div', { class: 'replace-row' },
+      el('label', { class: 'replace-label', text: 'Find' }), findIn),
+    el('div', { class: 'replace-row' },
+      el('label', { class: 'replace-label', text: 'Replace with' }), withIn),
+    flag('Match case', 'Off, “ft.” also finds “FT.”', () => matchCase, (v) => { matchCase = v; }),
+    flag('The whole field only', 'On, “Various” changes a field that says exactly that and leaves “Various Artists” alone', () => wholeOnly, (v) => { wholeOnly = v; }),
+    out,
+    el('p', { class: 'edit-note', text: 'Saved in Sonora only — your files are never modified. The whole run is one undo.' }));
+
+  preview();
+
+  dialog({
+    title: 'Find and replace',
+    body,
+    width: 560,
+    actions: [
+      { label: 'Cancel' },
+      { label: 'Replace', primary: true, onSelect: async () => {
+        if (!changes.length) { toast('Nothing to replace'); return; }
+        const n = await lib.applyReplace(pick.value, changes);
+        toast(n ? `Changed ${fmtCount(n, 'track')}` : 'Nothing changed');
+      } },
+    ],
+  });
+}
+
 const ROUTES = {
   home: viewHome,
+  attention: viewAttention,
+  genres: viewGenres,
+  genre: viewGenre,
   files: viewFiles,
   songs: viewSongs,
   albums: viewAlbums,

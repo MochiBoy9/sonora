@@ -45,9 +45,14 @@ import { chromium } from 'playwright';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { inflateSync } from 'node:zlib';
 
-const LIB = process.argv[2];
-const GOLD = process.argv[3] || './shots-looks';
-const ACCEPT = process.argv.includes('--accept');
+/* Flags are taken out before the positional arguments are read. Without this
+   `looks.mjs <lib> --accept` quietly made a golden directory called
+   "--accept", accepted every surface into it, and reported a clean run. */
+const ARGS = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const FLAGS = process.argv.slice(2).filter((a) => a.startsWith('--'));
+const LIB = ARGS[0];
+const GOLD = ARGS[1] || './shots-looks';
+const ACCEPT = FLAGS.includes('--accept');
 const DIFF_DIR = `${GOLD}/_diff`;
 
 mkdirSync(GOLD, { recursive: true });
@@ -449,6 +454,16 @@ async function sweep(scheme, width, height) {
   for (const r of ['home', 'songs', 'albums', 'artists', 'playlists', 'favourites', 'files', 'circles', 'sound', 'settings']) {
     await surface('route-' + r, route(r));
   }
+
+  /* Settings is taller than the window and the shot is viewport-sized, so the
+     top of the page is the only part the goldens had ever seen — every row
+     below the fold, which is most of them, was unwatched. */
+  await surface('settings-lower', async () => {
+    await page.evaluate(() => { location.hash = '#/settings'; });
+    await page.waitForTimeout(650);
+    await page.evaluate(() => { document.querySelector('#view').scrollTop = 620; });
+    await page.waitForTimeout(450);
+  });
 
   await route('albums')();
   for (const m of ['Crate', 'Shelf', 'Floor']) {

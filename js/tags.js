@@ -132,6 +132,17 @@ const ID3_TEXT = {
   TCON: 'genre', TCO: 'genre',
   TYER: 'year', TYE: 'year', TDRC: 'year', TDRL: 'year',
   TCOM: 'composer', TCM: 'composer',
+  /* R11: the rest of what a file actually carries. The reader was already
+     walking past these frames; naming them costs nothing and they are the
+     whole of what a credits panel has to show. */
+  TEXT: 'lyricist', TXT: 'lyricist',
+  TPE3: 'conductor', TP3: 'conductor',
+  TPE4: 'remixer', TP4: 'remixer',
+  TPUB: 'publisher', TPB: 'publisher',
+  TCOP: 'copyright', TCR: 'copyright',
+  TSRC: 'isrc', TRC: 'isrc',
+  TENC: 'encodedBy', TEN: 'encodedBy',
+  TSSE: 'encoder',
   TLEN: 'lengthMs',
 };
 
@@ -294,6 +305,7 @@ async function mp3Duration(reader, start, out) {
 const MP4_FIELD = {
   '©nam': 'title', '©ART': 'artist', 'aART': 'albumArtist', '©alb': 'album',
   '©day': 'year', '©gen': 'genre', '©wrt': 'composer', '©lyr': 'lyrics',
+  '©cpy': 'copyright', '©pub': 'publisher', '©enc': 'encodedBy', '©too': 'encoder',
 };
 
 async function readMP4(reader, out) {
@@ -449,6 +461,10 @@ const VORBIS_FIELD = {
   TITLE: 'title', ARTIST: 'artist', ALBUM: 'album', ALBUMARTIST: 'albumArtist',
   'ALBUM ARTIST': 'albumArtist', TRACKNUMBER: 'track', DISCNUMBER: 'disc',
   DATE: 'year', YEAR: 'year', GENRE: 'genre', COMPOSER: 'composer',
+  LYRICIST: 'lyricist', CONDUCTOR: 'conductor', REMIXER: 'remixer',
+  PUBLISHER: 'publisher', LABEL: 'publisher', ORGANIZATION: 'publisher',
+  COPYRIGHT: 'copyright', ISRC: 'isrc', ENCODEDBY: 'encodedBy',
+  'ENCODED-BY': 'encodedBy', ENCODER: 'encoder',
   // Every writer picks a different one of these, so all of them map to the
   // same field and the first to arrive wins.
   LYRICS: 'lyrics', UNSYNCEDLYRICS: 'lyrics', 'UNSYNCED LYRICS': 'lyrics',
@@ -676,6 +692,8 @@ const MKV_TAG_FIELD = {
   TITLE: 'title', ARTIST: 'artist', ALBUM: 'album', 'ALBUM ARTIST': 'albumArtist',
   ALBUMARTIST: 'albumArtist', PART_NUMBER: 'track', DISC: 'disc', DATE: 'year',
   DATE_RELEASED: 'year', DATE_RELEASE: 'year', GENRE: 'genre', COMPOSER: 'composer',
+  LYRICIST: 'lyricist', CONDUCTOR: 'conductor', PUBLISHER: 'publisher',
+  COPYRIGHT: 'copyright', ISRC: 'isrc', ENCODER: 'encoder',
 };
 
 /** EBML variable-length integer. Element ids keep their marker bit, sizes don't. */

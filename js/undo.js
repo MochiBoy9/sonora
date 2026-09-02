@@ -46,6 +46,26 @@ let running = false;
 export const isRunning = () => running;
 
 /**
+ * Runs `fn` with nothing it does recorded on the stack.
+ *
+ * For a caller that is going to record one entry of its own covering the whole
+ * of what it did. The backup importer is the case: it creates playlists and
+ * toggles favourites through the ordinary mutators, every one of which pushes,
+ * so restoring a backup landed four hundred separate entries on the stack *and*
+ * one entry for the restore — and undoing the restore then left four hundred
+ * entries describing changes that had already been taken back.
+ *
+ * The same flag the inverses use, for the same reason and with the same
+ * discipline: it is restored in a `finally`, so a throw inside cannot leave the
+ * stack permanently deaf.
+ */
+export async function silence(fn) {
+  const was = running;
+  running = true;
+  try { return await fn(); } finally { running = was; }
+}
+
+/**
  * Records something that can be taken back.
  *
  * `label` is written from the user's side and reads after the word "Undo" —
@@ -54,6 +74,10 @@ export const isRunning = () => running;
 export function push(entry) {
   if (running) return;
   if (!entry || typeof entry.undo !== 'function') return;
+  // D5: when, so a panel can say "four minutes ago" rather than only "before
+  // the one below it". Stamped here rather than by the caller, because every
+  // caller would get it slightly differently.
+  entry.at = Date.now();
   past.push(entry);
   if (past.length > LIMIT) past.shift();
   // Anything that was undone and then built on top of is unreachable now.
@@ -65,6 +89,42 @@ export const canUndo = () => past.length > 0;
 export const canRedo = () => future.length > 0;
 export const nextUndo = () => (past.length ? past[past.length - 1].label : null);
 export const nextRedo = () => (future.length ? future[future.length - 1].label : null);
+
+/**
+ * The stack, for a panel to draw.
+ *
+ * D5. Undo covers every change the index holds, which is a genuinely hard
+ * thing to have built, and its entire interface was ⌘Z — so you could not see
+ * what you had done, could not tell what a run of edits amounted to, and could
+ * not step back past something you wanted to keep without first undoing it.
+ *
+ * Copies rather than the entries themselves: a caller with the real objects
+ * could call `undo()` on one out of order, and the two stacks are only
+ * coherent read from their ends.
+ */
+export function history() {
+  return {
+    past: past.map((e, i) => ({ label: e.label, at: e.at || 0, depth: past.length - i })),
+    future: future.map((e, i) => ({ label: e.label, at: e.at || 0, depth: i + 1 })),
+  };
+}
+
+/**
+ * Steps back `n` entries at once.
+ *
+ * Not the same as pressing ⌘Z n times from a caller's point of view — it is
+ * one gesture with one outcome, and it stops at the first inverse that fails
+ * rather than carrying on into a stack it can no longer trust.
+ */
+export async function undoTo(n) {
+  let done = 0;
+  for (let i = 0; i < n; i++) {
+    const r = await undo();
+    if (!r || r.error) break;
+    done++;
+  }
+  return done;
+}
 
 /** Empties both stacks. Used when the library underneath them is rebuilt. */
 export function clear() {
