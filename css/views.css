@@ -390,6 +390,21 @@
   color: var(--text-2);
   line-height: 1.4;
 }
+/* R8: the rule between sides. Set in the same fine print as the spec block,
+   because it is a marking on the sleeve rather than another track. */
+.back-list li.back-disc {
+  grid-template-columns: 1fr;
+  margin: 4px 0 2px;
+  padding-top: 3px;
+  border-top: var(--hair) solid var(--line);
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(8.5px * var(--scale));
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.back-list li.back-disc:first-child { margin-top: 0; border-top: 0; }
+
 .back-n, .back-d {
   font-family: var(--mono);
   font-size: calc(9px * var(--scale));
@@ -1970,3 +1985,163 @@
   white-space: nowrap;
   max-width: 220px;
 }
+
+
+/* ------------------------------------------------------------------ L4
+
+   Genres. Weighted tiles rather than a uniform grid: a genre with four tracks
+   and one with four hundred are not the same kind of thing, and a grid of
+   equal boxes says they are. */
+.genre-wall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 60px;
+}
+.genre-tile {
+  --w: 1;
+  flex: 1 1 calc(120px + 150px * var(--w));
+  min-width: calc(120px + 90px * var(--w));
+  min-height: calc(64px + 46px * var(--w));
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+  padding: 12px 14px;
+  text-decoration: none;
+  border: var(--hair) solid var(--line);
+  border-radius: var(--radius);
+  --k: var(--cut-sm);
+  clip-path: var(--nick-ne);
+  background:
+    linear-gradient(150deg,
+      rgb(var(--accent-rgb) / calc(.05 + .10 * var(--w))),
+      rgb(var(--surface-rgb) / .7));
+  transition: border-color var(--dur-2) var(--ease), transform var(--dur-2) var(--ease);
+}
+.genre-tile:hover { border-color: var(--accent-line); transform: translateY(-2px); }
+.genre-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.genre-name {
+  color: var(--text);
+  font-size: calc((13px + 5px * var(--w)) * var(--scale));
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+.genre-count {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  letter-spacing: .06em;
+}
+@media (prefers-reduced-motion: reduce) {
+  .genre-tile { transition: none; }
+  .genre-tile:hover { transform: none; }
+}
+
+
+/* ------------------------------------------------------------------ L9
+
+   Needs attention. Six findings the application already had and kept in six
+   places. Each is a count, the list behind it, and one thing to do. */
+.attn { display: flex; flex-direction: column; gap: 12px; padding-bottom: 70px; }
+.attn-card {
+  border: var(--hair) solid var(--line);
+  border-radius: var(--radius);
+  background: rgb(var(--surface-rgb) / .55);
+  overflow: hidden;
+}
+.attn-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+.attn-head:hover { background: var(--surface-hi); }
+.attn-ico { flex: none; color: var(--text-3); display: flex; }
+.attn-ico .ico { width: 18px; height: 18px; }
+.attn-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.attn-text b { color: var(--text); font-size: calc(14px * var(--scale)); font-weight: 600; }
+.attn-note { color: var(--text-3); font-size: calc(12px * var(--scale)); }
+/* The number is the point of the row, so it is set like one: mono, large, and
+   at the end where the eye lands after the label. */
+.attn-count {
+  flex: none;
+  font-family: var(--mono);
+  font-size: calc(17px * var(--scale));
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.attn-head[aria-expanded="true"] { background: var(--surface-hi); }
+.attn-actions { padding: 0 16px 12px; }
+.attn-body { padding: 0 16px 14px; max-height: 52vh; overflow-y: auto; }
+
+.attn-albums { display: flex; flex-wrap: wrap; gap: 8px; }
+.attn-album {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 12px;
+  border: var(--hair) solid var(--line-2);
+  border-radius: calc(var(--radius) * 0.6);
+  text-decoration: none;
+  font-size: calc(12.5px * var(--scale));
+}
+.attn-album:hover { border-color: var(--accent-line); }
+.attn-album b { color: var(--text); font-weight: 550; }
+.attn-album span { color: var(--text-3); font-size: calc(11px * var(--scale)); }
+
+.attn-group { padding: 8px 0; border-bottom: var(--hair) solid var(--line-2); }
+.attn-group > b { color: var(--text); font-size: calc(13px * var(--scale)); }
+.attn-file { display: flex; gap: 12px; padding: 3px 0 0 14px; }
+.attn-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: calc(11.5px * var(--scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;                 /* the filename matters more than the root */
+  text-align: left;
+}
+.attn-meta {
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+}
+
+
+/* L11: find and replace. The preview is the point of the dialog, so it gets
+   the room — everything above it is three lines of form. */
+.replace-form { display: flex; flex-direction: column; gap: 8px; }
+.replace-row { display: flex; align-items: center; gap: 10px; }
+.replace-label { flex: none; width: 96px; color: var(--text-3); font-size: calc(12.5px * var(--scale)); }
+.replace-row .input, .replace-row .settings-select { flex: 1; max-width: none; }
+.replace-out {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: var(--hair) solid var(--line);
+  max-height: 34vh;
+  overflow-y: auto;
+}
+.replace-count { color: var(--accent); font-size: calc(13px * var(--scale)); margin-bottom: 6px; }
+.replace-list { list-style: none; margin: 0; padding: 0; }
+.replace-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: calc(12.5px * var(--scale));
+}
+.replace-from { color: var(--text-3); text-decoration: line-through; }
+.replace-arrow { color: var(--text-3); flex: none; }
+.replace-to { color: var(--text); }
+.attn-tools { margin-bottom: 14px; }

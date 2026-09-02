@@ -14,7 +14,7 @@
 
 import * as db from './db.js';
 import * as undo from './undo.js';
-import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle, ext } from './util.js';
+import { Emitter, LRU, AUDIO_EXT, hash32, albumKeyOf, norm, isAudio, isAudioFile, isLyric, sortName, cmpText, idle, ext, canDecode } from './util.js';
 
 export const events = new Emitter();
 
@@ -480,7 +480,13 @@ function scheduleReindex() {
   requestAnimationFrame(() => { reindexQueued = false; reindex(); });
 }
 
+/* Bumped by every reindex. Anything derived from the index — the genre map
+   below is the first — can cache against it rather than rebuilding on every
+   read or listening for an event it would then have to unsubscribe from. */
+let indexSerial = 0;
+
 export function reindex() {
+  indexSerial++;
   const albumBy = new Map();
 
   /* I4: a folder switched off is not in the library today. Filtered rather
@@ -518,14 +524,28 @@ export function reindex() {
   // can hand its tracks a different artist — and an artist index built first
   // would keep a page for a folder name that no longer names anything.
   mergeAlbums(albumBy);
+  markCompilations(albumBy);
 
   const artistBy = new Map();
   for (const t of live()) {
-    let ar = artistBy.get(t.artistKey);
+    /* L8: a compilation is filed under itself.
+     *
+     * `artistKey` comes from the album artist, which falls back to the track
+     * artist — so a compilation with no ALBUMARTIST frame gives every one of
+     * its twenty tracks a different album artist, and the Artists page grows
+     * twenty entries with one track each. The album knows better than the
+     * track does here, so the album decides. The track's own artist is
+     * untouched: it still prints on every row, sorts, and is searchable. */
+    const own = albumBy.get(t.albumKey);
+    const key = own && own.compilation ? own.artistKey : t.artistKey;
+    const name = own && own.compilation ? own.artist : t.albumArtist;
+
+    let ar = artistBy.get(key);
     if (!ar) {
-      artistBy.set(t.artistKey, ar = {
-        key: t.artistKey, name: t.albumArtist, tracks: [],
-        albums: new Set(), duration: 0, sort: norm(sortName(t.albumArtist)),
+      artistBy.set(key, ar = {
+        key, name, tracks: [],
+        albums: new Set(), duration: 0, sort: norm(sortName(name)),
+        compilation: !!(own && own.compilation),
         // Rolled up here rather than recomputed per sort: every list that wants
         // to order by listening asks the same question of the same objects, and
         // the reindex is already walking every track.
@@ -581,6 +601,105 @@ const mergedThisScan = new Map();
  * The surviving album keeps the key most of its tracks already carry, so
  * artwork stored under that key stays attached.
  */
+/* L8: which records are compilations.
+ *
+ * The merge logic next door is careful and right: a guessed artist counts as
+ * no artist, and two records that both name themselves never merge. But a
+ * Various Artists compilation is the one case where the album artist and the
+ * track artists are *supposed* to disagree, and nothing in the model said so —
+ * so a twenty-track compilation with no ALBUMARTIST frame read as twenty
+ * artists with one track each, which is the Artists page shattered by one
+ * record.
+ *
+ * Two ways in, because tagging practice is not consistent:
+ *
+ *   — the album says so. "Various Artists", "VA", "Various" in the album
+ *     artist is a claim, and it is believed.
+ *   — the tracks say so. Several different artists, no consistent album artist
+ *     to hold them together, and enough of them that this is the shape of the
+ *     record rather than one guest verse on it.
+ *
+ * The second test is deliberately not "more than one artist". A record with a
+ * feature on two of twelve tracks has three artists and is not a compilation,
+ * and calling it one would file Kanye West under Various. Requiring the
+ * distinct artists to cover at least two fifths of the tracks is what separates
+ * "a record by somebody, with guests" from "a record by nobody in particular".
+ */
+const VARIOUS = new Set(['various artists', 'various', 'va', 'v.a.', 'diverse interpreten', 'compilation']);
+
+/** The directory a track sits in, which is the strongest signal on disk. */
+const folderOf = (t) => (t.rootId || '') + '/' + String(t.path || '').replace(/[^/]*$/, '');
+
+function markCompilations(albumBy) {
+  /* First, put the record back together.
+   *
+   * The album key is a hash of (album artist + album title), and on a
+   * compilation with no ALBUMARTIST frame every track's album artist is its
+   * own — so the record does not merely read as twenty artists, it reads as
+   * twenty *albums*, each holding one track. `mergeAlbums` above deliberately
+   * refuses to fold those: both sides named themselves and the names differ,
+   * which is exactly the rule that keeps two different "Greatest Hits" apart.
+   *
+   * The evidence it does not use is the folder. Files sitting in one directory
+   * under one album title are one album, whatever their artist tags say — that
+   * is what a compilation looks like on disk, and it is not what two different
+   * records that share a title look like. So the fold is by title *and*
+   * directory, which is narrow enough to be safe. */
+  const byPlace = new Map();
+  for (const al of albumBy.values()) {
+    if (!al.sort || al.sort === norm('Unknown Album')) continue;
+    // One directory, or this is not the case being caught.
+    const dirs = new Set(al.tracks.map(folderOf));
+    if (dirs.size !== 1) continue;
+    const place = [...dirs][0] + '\u0000' + al.sort;
+    let list = byPlace.get(place);
+    if (!list) byPlace.set(place, list = []);
+    list.push(al);
+  }
+
+  for (const list of byPlace.values()) {
+    if (list.length < 3) continue;               // not a shape, just a stray
+    const keep = list[0];
+    for (const other of list.slice(1)) {
+      for (const t of other.tracks) { t.albumKey = keep.key; keep.tracks.push(t); }
+      keep.duration += other.duration;
+      keep.addedAt = Math.max(keep.addedAt, other.addedAt);
+      keep.year = keep.year || other.year;
+      keep.accent = keep.accent || other.accent;
+      albumBy.delete(other.key);
+    }
+    mergedThisScan.set(keep.key, keep.title);
+  }
+
+  for (const al of albumBy.values()) {
+    if (al.tracks.length < 3) continue;          // too small to be a shape
+
+    const artists = new Set();
+    let claimed = 0;                             // tracks with a real ALBUMARTIST
+    for (const t of al.tracks) {
+      artists.add(norm(t.artist));
+      // `albumArtist` is filled from `artist` when the file carried none, so a
+      // real claim is one that differs from the track's own artist.
+      if (t.albumArtist && norm(t.albumArtist) !== norm(t.artist)) claimed++;
+    }
+
+    const said = VARIOUS.has(norm(al.artist));
+    const shape = artists.size >= 3 &&
+                  artists.size >= al.tracks.length * 0.4 &&
+                  claimed === 0;
+
+    if (!said && !shape) continue;
+
+    al.compilation = true;
+    /* Named, so the Artists page has something to call it. A record that
+       already says "Various Artists" keeps its own spelling; one detected by
+       shape is given the name the rest of the world uses for it. */
+    if (!said) al.artist = 'Various Artists';
+    al.artistKey = hash32(norm(al.artist));
+    al.named = true;
+  }
+}
+
 function mergeAlbums(albumBy) {
   const byTitle = new Map();
   for (const al of albumBy.values()) {
@@ -654,6 +773,221 @@ function mergeAlbums(albumBy) {
     }
   }
 }
+
+/* ------------------------------------------------------------------ L11
+ *
+ * Find and replace, across a field.
+ *
+ * Every real library has one systematic mistake in it — "feat." against "ft.",
+ * an artist misspelled the same way across three albums, a label that put the
+ * year in the title — and correcting one track at a time cannot reach that.
+ *
+ * Preview then commit, always: this returns what *would* change and changes
+ * nothing, and `editTracks` does the writing, so the whole run is one undo
+ * entry and the files are never touched. Text, not a regular expression: a
+ * find-and-replace that can be given `.*` is a find-and-replace that can empty
+ * a library by accident, and nobody typing "feat." wants a character class.
+ */
+export function findReplace(field, find, replace, { caseSensitive = false, whole = false } = {}) {
+  const out = [];
+  if (!EDITABLE.includes(field) || !find) return out;
+
+  const needle = caseSensitive ? find : find.toLowerCase();
+  for (const t of live()) {
+    const value = String(t[field] ?? '');
+    if (!value) continue;
+    const hay = caseSensitive ? value : value.toLowerCase();
+
+    let next;
+    if (whole) {
+      // The whole field, or nothing: "Various" should not rewrite "Various
+      // Artists" when what was meant was the field that says exactly Various.
+      if (hay !== needle) continue;
+      next = replace;
+    } else {
+      if (!hay.includes(needle)) continue;
+      /* Split and join rather than a regular expression, so every character in
+         the search text means itself. `String.replaceAll` would need the same
+         escaping and reads no better. */
+      if (caseSensitive) {
+        next = value.split(find).join(replace);
+      } else {
+        // Case-insensitive, but the surrounding text keeps its own case: only
+        // the matched runs are replaced, found by walking the lowered copy.
+        let at = 0, built = '';
+        for (;;) {
+          const i = hay.indexOf(needle, at);
+          if (i < 0) { built += value.slice(at); break; }
+          built += value.slice(at, i) + replace;
+          at = i + needle.length;
+        }
+        next = built;
+      }
+    }
+    if (next === value) continue;
+    out.push({ track: t, from: value, to: next });
+  }
+  return out;
+}
+
+/** Applies what `findReplace` previewed. One undo entry for the whole run. */
+export async function applyReplace(field, changes) {
+  if (!changes.length) return 0;
+  let n = 0;
+  await undo.silence(async () => {
+    /* Grouped by the value being written, so a hundred tracks going to the
+       same artist are one call rather than a hundred — `editTracks` writes,
+       reindexes and emits once per call. */
+    const byValue = new Map();
+    for (const c of changes) {
+      let list = byValue.get(c.to);
+      if (!list) byValue.set(c.to, list = []);
+      list.push(c.track);
+    }
+    for (const [value, tracks] of byValue) n += await editTracks(tracks, { [field]: value });
+  });
+  if (n) {
+    const before = changes.map((c) => ({ id: c.track.id, value: c.from }));
+    undo.push({
+      label: `replacing “${changes[0].from}” in ${fieldLabel(field)}`,
+      undo: async () => {
+        await undo.silence(async () => {
+          const byValue = new Map();
+          for (const b of before) {
+            let list = byValue.get(b.value);
+            if (!list) byValue.set(b.value, list = []);
+            const t = state.tracks.get(b.id);
+            if (t) list.push(t);
+          }
+          for (const [value, tracks] of byValue) await editTracks(tracks, { [field]: value });
+        });
+        return before.length;
+      },
+      redo: async () => {
+        await undo.silence(async () => {
+          const byValue = new Map();
+          for (const c of changes) {
+            let list = byValue.get(c.to);
+            if (!list) byValue.set(c.to, list = []);
+            list.push(c.track);
+          }
+          for (const [value, tracks] of byValue) await editTracks(tracks, { [field]: value });
+        });
+        return changes.length;
+      },
+    });
+  }
+  return n;
+}
+
+const FIELD_LABELS = { title: 'the title', artist: 'the artist', albumArtist: 'the album artist',
+                       album: 'the album', genre: 'the genre' };
+const fieldLabel = (f) => FIELD_LABELS[f] || f;
+
+/** Which fields find-and-replace can work on. */
+export const replaceableFields = () =>
+  EDITABLE.filter((f) => FIELD_LABELS[f]).map((f) => [f, FIELD_LABELS[f]]);
+
+/* ------------------------------------------------------------------ L9
+ *
+ * Everything that needs a human, in one place.
+ *
+ * The application already knows which files are untagged, which fields it had
+ * to guess, which have no cover, which this browser cannot decode, which look
+ * like transcodes and which are duplicates — and every one of those findings
+ * lived somewhere different: a badge on a row, a tab on Files, a marker you
+ * only see if you happen to open that album. Nobody has ever found all of them
+ * on purpose.
+ *
+ * Each finding is a count, a list and one thing to do about it. The counts are
+ * computed together in one walk, because six separate passes over a
+ * twenty-thousand-track library to draw one page is six passes too many.
+ */
+export function attention() {
+  const guessed = [];
+  const untagged = [];
+  const undecodable = [];
+  const suspect = [];
+  const byName = new Map();          // artist + title -> tracks, for duplicates
+
+  for (const t of live()) {
+    const g = String(t.guessed || '').split(' ').filter(Boolean);
+    if (g.includes('artist') && g.includes('album')) untagged.push(t);
+    else if (g.length) guessed.push(t);
+    if (!canDecode(t.name || t.path || '')) undecodable.push(t);
+    if (t.truncated === true) suspect.push(t);
+
+    /* Duplicates by what they claim to be, not by content: two files of the
+       same song at different bitrates are the case people actually have, and
+       they are not byte-identical. Duration is in the key at whole seconds so
+       that a live version and a studio one do not read as the same track. */
+    const key = norm(t.artist) + '\u0000' + norm(t.title) + '\u0000' + Math.round(t.duration || 0);
+    let list = byName.get(key);
+    if (!list) byName.set(key, list = []);
+    list.push(t);
+  }
+
+  const duplicates = [];
+  for (const list of byName.values()) if (list.length > 1) duplicates.push(list);
+
+  /* Albums with no cover. Asked of the album rather than the track, because a
+     record with no artwork is one thing to fix and not eleven. */
+  const noArt = state.albums.filter((al) => !ownArt.has(al.key) && !accents.has(al.key));
+
+  return { guessed, untagged, undecodable, suspect, duplicates, noArt };
+}
+
+/* ------------------------------------------------------------------ L4
+ *
+ * Genre, as somewhere you can go.
+ *
+ * Every container the tag reader handles gives up a genre, and the Circle
+ * Analysis Center will draw your listening by it — but there was no genre
+ * route, no genre on an album page, and no way to say "everything ambient"
+ * except by typing it into search and hoping.
+ *
+ * Genre in the wild is free text and frequently a list: "Rock; Alternative",
+ * "Electronic/Ambient", "Jazz, Vocal". Split on the three separators everybody
+ * uses, fold case for grouping, and keep the best-looking spelling for
+ * display — the first one seen with a capital letter, because "Post-Rock" is
+ * what somebody typed and "post-rock" is what the sort key is.
+ */
+const genreCache = { serial: -1, list: null, by: null };
+
+const splitGenres = (v) =>
+  String(v || '')
+    .split(/[;/,]|\s+\+\s+/)
+    .map((g) => g.trim())
+    .filter((g) => g && g.length < 40);
+
+function buildGenres() {
+  if (genreCache.serial === indexSerial) return genreCache;
+  const by = new Map();
+  for (const t of live()) {
+    for (const raw of splitGenres(t.genre)) {
+      const key = norm(raw);
+      if (!key) continue;
+      let g = by.get(key);
+      if (!g) by.set(key, g = { key, label: raw, tracks: [], albums: new Set(), duration: 0 });
+      // The nicest spelling wins: one with a capital beats one without.
+      if (/[A-Z]/.test(raw) && !/[A-Z]/.test(g.label)) g.label = raw;
+      g.tracks.push(t);
+      g.albums.add(t.albumKey);
+      g.duration += t.duration || 0;
+    }
+  }
+  const list = [...by.values()].sort((a, b) => b.tracks.length - a.tracks.length || cmpText(a.label, b.label));
+  genreCache.serial = indexSerial;
+  genreCache.by = by;
+  genreCache.list = list;
+  return genreCache;
+}
+
+/** Every genre in the library, heaviest first. */
+export const genres = () => buildGenres().list;
+
+/** One genre by its normalised key, or null. */
+export const genreOf = (key) => buildGenres().by.get(norm(key)) || null;
 
 /* ------------------------------------------------------------------ queries */
 

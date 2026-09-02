@@ -32,8 +32,10 @@ const NAV = [
   { route: 'artists', label: 'Artists', icon: 'artist' },
   { route: 'favourites', label: 'Favourites', icon: 'star' },
   { route: 'recent', label: 'Recently played', icon: 'clock' },
+  { route: 'genres', label: 'Genres', icon: 'circles' },
   { route: 'playlists', label: 'Playlists', icon: 'playlist' },
   { route: 'files', label: 'Files', icon: 'folder' },
+  { route: 'attention', label: 'Needs attention', icon: 'info' },
   { route: 'circles', label: 'Analysis', icon: 'circles' },
   { route: 'sound', label: 'Sound', icon: 'sliders' },
 ];
@@ -43,6 +45,8 @@ function routeLabel(route) {
   if (route.name === 'album') return 'Album';
   if (route.name === 'artist') return 'Artist';
   if (route.name === 'playlist') return 'Playlist';
+  if (route.name === 'genre') return 'Genre';
+  if (route.name === 'attention') return 'Attention';
   if (route.name === 'search') return 'Search';
   if (route.name === 'settings') return 'Settings';
   if (route.name === 'circles') return 'Analysis';
