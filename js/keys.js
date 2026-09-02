@@ -30,6 +30,12 @@
  *           further, and the overlay should still say so.
  *   passive optional: documented but not dispatched here, for keys the platform
  *           or a component already owns. Escape is the whole of that category.
+ *   release optional: what to do when the key comes back up. A binding with one
+ *           is a *hold*, which is a different instrument from a toggle — the
+ *           mono check exists to be held, because the question it answers is
+ *           "what does this sound like folded down", and the answer is only
+ *           useful for as long as you are listening to it. `run` is called once
+ *           on the way down however long the key is held, never repeatedly.
  *
  * WHAT IT DELIBERATELY DOES NOT DO
  *
@@ -91,10 +97,37 @@ export function remap(id, combo) {
 }
 export function resetAll() { overrides = {}; write(); }
 
-/** What else is already on this combo — so a remapping UI can say so. */
+/** What else is already on this combo — so a remapping UI can say so.
+ *
+ * Against what each binding *currently* answers to, not against what it was
+ * declared with: once one shortcut has been moved, the combo it was moved to
+ * is the one a second remapping would collide with, and the one it vacated is
+ * free. Reading `b.combo` here reported the opposite of both. */
 export function conflicts(id, combo) {
   return all().filter((b) => b.id !== id && !b.passive &&
-    [].concat(b.combo).some((c) => sameCombo(c, combo)));
+    [].concat(comboOf(b)).some((c) => sameCombo(c, combo)));
+}
+
+/**
+ * The combo a keydown event represents, in this module's own notation.
+ *
+ * For a remapping UI: the user presses the keys they want and this is what
+ * gets stored, so a binding made by pressing keys and one written by hand in
+ * `registerKeys` are the same kind of thing.
+ */
+export function comboFor(e) {
+  const key = e.key === ' ' ? 'Space' : e.key;
+  // A modifier on its own is somebody still reaching for the other key.
+  if (['Shift', 'Control', 'Alt', 'Meta'].includes(key)) return null;
+  const parts = [];
+  if (e.metaKey || e.ctrlKey) parts.push('Mod');
+  // Shift is only worth recording where it is not already implied by the
+  // character: "?" is Shift and "/" on most layouts, and storing "Shift+?"
+  // would be a combo nobody can type.
+  if (e.shiftKey && (key.length > 1 || key === key.toLowerCase())) parts.push('Shift');
+  if (e.altKey) parts.push('Alt');
+  parts.push(key.length === 1 ? key.toUpperCase() : key);
+  return parts.join('+');
 }
 
 /* ------------------------------------------------------------------ parsing */
@@ -170,14 +203,51 @@ export function caps(combo) {
  * owns the decision to preventDefault — the handler here should not be deciding
  * whether the browser gets to keep a keystroke.
  */
+/* Which holds are currently down.
+ *
+ * Keyed by binding rather than by key, because a hold has to be released by
+ * exactly the binding that took it: the modifier state can change between the
+ * press and the release (letting go of Shift first is normal), so matching the
+ * keyup against the combo would strand a held binding in the down state with
+ * no way back. Holding the *binding* means the release always finds its
+ * partner. */
+const held = new Set();
+
 export function dispatch(e, { typing }) {
   for (const b of bindings) {
     if (b.passive) continue;
     if (typing && !b.allowTyping) continue;
     if (b.active && !b.active()) continue;
     if (![].concat(comboOf(b)).some((c) => matches(c, e))) continue;
-    if (b.run(e) === false) continue;
+    // Auto-repeat is one press, not fifty. A hold that re-ran on every repeat
+    // would restart whatever it started, several times a second.
+    if (b.release) {
+      if (held.has(b)) return b;
+      held.add(b);
+    }
+    if (b.run(e) === false) { held.delete(b); continue; }
     return b;
   }
   return null;
+}
+
+/**
+ * Ends any hold whose key has come up.
+ *
+ * Matched on the key itself rather than on the whole combo, for the reason
+ * given above `held`: by the time the letter is released the modifiers may
+ * already be gone.
+ */
+export function dispatchUp(e) {
+  for (const b of [...held]) {
+    const up = e.key === ' ' ? 'Space' : e.key;
+    if (![].concat(comboOf(b)).some((c) => sameKey(parse(c).key, up))) continue;
+    held.delete(b);
+    b.release(e);
+  }
+}
+
+/** Ends every hold at once — for a blur, where no keyup is ever delivered. */
+export function releaseAll() {
+  for (const b of [...held]) { held.delete(b); b.release(); }
 }

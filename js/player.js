@@ -60,6 +60,10 @@ export const state = {
      the same amount on correlated material. Neither is the right answer for
      both, which is why it is a control and not a constant. */
   fadeCurve: 'equal',
+  /* S4: phase correlation of what is leaving the file, −1 to +1, or null when
+     there is nothing to measure — silence, or a mono source, where the
+     question does not arise. Written by the meter worklet's summaries. */
+  correlation: null,
   /* Which output the audio leaves by, as a device id. Empty means the system
      default, which is what everything did before this existed — and on a desk
      with an interface, a DAC and a pair of speakers, that meant changing the
@@ -257,6 +261,7 @@ const dr = { track: null, peak: 0, sumSq: 0, samples: 0, seconds: 0, at: -1 };
 function resetMeter(track) {
   dr.track = track || null;
   dr.peak = 0; dr.sumSq = 0; dr.samples = 0; dr.seconds = 0; dr.at = -1;
+  state.correlation = null;
   // The worklet keeps its own running totals and would otherwise carry the
   // previous track's peak into the next one's figure.
   if (meterNode) meterNode.port.postMessage({ type: 'reset' });
@@ -379,6 +384,17 @@ async function ensureMeterWorklet() {
          of this did you actually listen to" should mean. */
       const chans = Math.max(1, node.channelCount || 2);
       dr.seconds = d.samples / chans / (ctx ? ctx.sampleRate : 48000);
+      /* S4. The worklet has already normalised it; this only smooths the
+         needle. A raw eighth-of-a-second figure jitters by a tenth of the
+         scale on any real music, which reads as a broken instrument rather
+         than as a live one — the same reason the VU has ballistics. Rising
+         faster than it falls, so a moment of cancellation is seen. */
+      if (d.corr === null || d.corr === undefined) state.correlation = null;
+      else if (state.correlation === null) state.correlation = d.corr;
+      else {
+        const k = d.corr < state.correlation ? 0.55 : 0.28;
+        state.correlation = state.correlation + (d.corr - state.correlation) * k;
+      }
     };
     /* Tapped on the decoders themselves, ahead of every gain this app owns.
      *
@@ -555,6 +571,42 @@ function applyVolume() {
  * release — the shape of a real VU meter) and capped by peaks that fall under
  * their own weight. Nothing here allocates.
  */
+/* S5: the spectrum as a measurement rather than as a picture.
+ *
+ * `analysis()` next door is a *drawing*: its bands are tilted to undo the
+ * natural roll-off of recorded music, raised to a power to make the quiet parts
+ * visible, normalised to 0..1 and smoothed with a meter's ballistics. Every one
+ * of those is right for a visualiser and wrong for an instrument — a dB scale
+ * printed against those numbers would be a lie with a ruler next to it.
+ *
+ * So this is a second, plain read: `getFloatFrequencyData` hands back dBFS per
+ * bin with nothing done to it. The analyser's own smoothing (0.62) stays,
+ * because that is a time constant rather than a shaping, and a spectrum with
+ * none of it is unreadable.
+ */
+let specData = null;
+let specAt = 0;
+const spec = { db: null, hz: null, bins: 0, live: false, floor: -100 };
+
+export function spectrum() {
+  const now = performance.now();
+  if (now - specAt < 12) return spec;                 // at most once a frame
+  specAt = now;
+  if (!analyser) { spec.live = false; return spec; }
+  if (!specData || specData.length !== analyser.frequencyBinCount) {
+    specData = new Float32Array(analyser.frequencyBinCount);
+    spec.db = specData;
+    spec.bins = specData.length;
+    spec.hz = new Float32Array(specData.length);
+    const step = (ctx ? ctx.sampleRate : 48000) / 2 / specData.length;
+    for (let i = 0; i < specData.length; i++) spec.hz[i] = (i + 0.5) * step;
+  }
+  spec.live = !!state.playing;
+  if (spec.live) analyser.getFloatFrequencyData(specData);
+  else specData.fill(-Infinity);
+  return spec;
+}
+
 export function analysis() {
   const now = performance.now();
   const dt = frameAt ? Math.min(64, now - frameAt) : 16.7;

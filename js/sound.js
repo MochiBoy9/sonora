@@ -14,7 +14,7 @@
 import { el, ico } from './util.js';
 import * as rack from './audio.js';
 import * as player from './player.js';
-import { toast, promptDialog } from './ui.js';
+import { toast, promptDialog, dialog } from './ui.js';
 import { enter, tick } from './motion.js';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -114,8 +114,52 @@ export function mountSound(host) {
   const plate = el('span', { class: 'rack-plate' }, lamp,
     el('b', { text: 'SONORA' }), el('span', { text: 'RK-10' }));
 
+  /* S1: the switch that makes the comparison fair.
+   *
+   * Beside the bypass rather than inside it, because they are two different
+   * questions and both are worth asking: the hard bypass says what the rack is
+   * doing to the level, and the matched one says what it is doing to the
+   * sound. Louder wins every blind test, so an unmatched A/B on a rack with
+   * make-up gain is not a comparison at all — it is a volume control with
+   * opinions. */
+  const matchBtn = el('button', {
+    class: 'btn ghost sm rack-match', 'aria-pressed': 'false',
+    title: 'Level-match the bypass, so the two sides are the same loudness',
+    html: ico('sliders') + '<span>Match</span>',
+    onclick: async () => {
+      const on = !rack.state.levelMatch;
+      rack.set({ levelMatch: on });
+      paintAll();
+      if (!on) return;
+      /* Measured now rather than remembered: the figure belongs to this rack
+         against this record, and the last one was neither. */
+      matchBtn.classList.add('is-busy');
+      const res = await rack.measureMatch();
+      matchBtn.classList.remove('is-busy');
+      paintAll();
+      if (res.ok) toast(`Matched: bypass ${res.db >= 0 ? '+' : ''}${res.db.toFixed(1)} dB`);
+      else if (res.reason === 'too-quiet') toast('Play something for a couple of seconds, then match');
+      else toast('Nothing to measure yet');
+    },
+  });
+
+  /* S2: the other rack. */
+  const slotBtn = el('button', {
+    class: 'btn ghost sm rack-slot', title: 'Swap with the other rack (Shift+B)',
+    html: '<span>A</span>',
+    onclick: () => {
+      if (!rack.hasSlotB()) {
+        rack.copyToOther();
+        toast('Copied into B — change the rack, then swap');
+      } else {
+        toast('Now on ' + rack.swapSlots());
+      }
+      paintAll();
+    },
+  });
+
   left.appendChild(el('div', { class: 'rack-head' },
-    el('span', { class: 'label', text: 'Equaliser' }), plate, bypass, resetBtn));
+    el('span', { class: 'label', text: 'Equaliser' }), plate, slotBtn, matchBtn, bypass, resetBtn));
 
   /* ---- presets --------------------------------------------------------- */
 
@@ -170,7 +214,128 @@ export function mountSound(host) {
   svg.append(fill, line);
   stage.appendChild(svg);
 
+  /* S5: the live spectrum, behind the curve and on the same axes.
+   *
+   * A canvas rather than more SVG: this is repainted every frame and a path of
+   * five hundred points reparsed sixty times a second is the one shape of work
+   * this file has otherwise avoided.
+   *
+   * It reads `player.spectrum()`, which is dBFS per bin with nothing done to
+   * it — not the visualiser's `analysis()`, whose bands are tilted, curved and
+   * normalised for the eye. A dB scale printed against those would be a ruler
+   * beside a lie. */
+  const scope = el('canvas', { class: 'eq-scope', 'aria-hidden': 'true' });
+  stage.appendChild(scope);
+
+  const SPEC_TOP = -18, SPEC_FLOOR = -96;         // dBFS at the top and bottom
+  const specY = (db) => (SPEC_TOP - db) / (SPEC_TOP - SPEC_FLOOR);
+  let hold = null;                                 // peak hold, per bin
+  let holdAt = 0;
+
+  function paintScope(dt) {
+    const cw = scope.clientWidth, ch = scope.clientHeight;
+    if (!cw || !ch) return;
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    if (scope.width !== Math.round(cw * dpr) || scope.height !== Math.round(ch * dpr)) {
+      scope.width = Math.round(cw * dpr);
+      scope.height = Math.round(ch * dpr);
+    }
+    const g = scope.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, cw, ch);
+
+    const sp = player.spectrum();
+    if (!sp.db || !sp.live) { hold = null; return; }
+    if (!hold || hold.length !== sp.bins) hold = new Float32Array(sp.bins).fill(-Infinity);
+
+    /* Peak hold falls at 12 dB a second — slow enough to read a transient off
+       the screen, fast enough that the line follows the music rather than
+       recording the loudest moment of the record. */
+    const fall = 12 * (dt / 1000);
+
+    g.beginPath();
+    let started = false;
+    for (let i = 1; i < sp.bins; i++) {
+      const f = sp.hz[i];
+      if (f < F_MIN || f > F_MAX) continue;
+      const x = (Math.log(f / F_MIN) / Math.log(F_MAX / F_MIN)) * cw;
+      const db = sp.db[i];
+      hold[i] = Math.max(db, hold[i] - fall);
+      const y = Math.max(0, Math.min(1, specY(db))) * ch;
+      if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
+    }
+    g.lineTo(cw, ch); g.lineTo(0, ch); g.closePath();
+    const grd = g.createLinearGradient(0, 0, 0, ch);
+    grd.addColorStop(0, 'rgba(255,255,255,.20)');
+    grd.addColorStop(1, 'rgba(255,255,255,.02)');
+    g.fillStyle = grd;
+    g.fill();
+
+    // The hold, as a hairline above it.
+    g.beginPath();
+    started = false;
+    for (let i = 1; i < sp.bins; i++) {
+      const f = sp.hz[i];
+      if (f < F_MIN || f > F_MAX) continue;
+      const x = (Math.log(f / F_MIN) / Math.log(F_MAX / F_MIN)) * cw;
+      const y = Math.max(0, Math.min(1, specY(hold[i]))) * ch;
+      if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
+    }
+    g.strokeStyle = 'rgba(255,255,255,.30)';
+    g.lineWidth = 1;
+    g.stroke();
+    holdAt = performance.now();
+  }
+
+  /* The readout under the pointer. Two numbers — where you are and what is
+     there — because a spectrum you cannot put a number to is a picture. */
+  const readout = el('div', { class: 'eq-readout', hidden: true });
+  stage.appendChild(readout);
+  const cross = el('i', { class: 'eq-cross', hidden: true, 'aria-hidden': 'true' });
+  stage.appendChild(cross);
+
+  const onHover = (e) => {
+    const r = stage.getBoundingClientRect();
+    const t = (e.clientX - r.left) / r.width;
+    if (t < 0 || t > 1) return;
+    const f = F_MIN * Math.pow(F_MAX / F_MIN, t);
+    const sp = player.spectrum();
+    let db = null;
+    if (sp.db && sp.live && sp.bins) {
+      const step = sp.hz[1] - sp.hz[0];
+      const i = Math.max(1, Math.min(sp.bins - 1, Math.round(f / step - 0.5)));
+      db = sp.db[i];
+    }
+    // Already in dB — `response()` sums each filter's magnitude in decibels and
+    // adds the preamp. Converting it again read −120 dB across a flat rack.
+    const curve = rack.response(Float32Array.of(f))[0];
+    readout.hidden = false;
+    cross.hidden = false;
+    cross.style.left = (t * 100).toFixed(2) + '%';
+    readout.style.left = (t * 100).toFixed(2) + '%';
+    readout.classList.toggle('is-right', t > 0.72);
+    /* Below the floor of the plot there is no number worth printing: a
+       22 kHz-sampled file reads −184 dBFS above its own Nyquist, which is
+       true, unhelpful, and four characters wider than everything else. */
+    const level = db === null || !isFinite(db) ? ''
+      : db < SPEC_FLOOR ? ` · under ${SPEC_FLOOR} dBFS`
+      : ` · ${db.toFixed(0)} dBFS`;
+    readout.textContent = `${hz(Math.round(f))}Hz · rack ${dbText(curve)} dB${level}`;
+  };
+  const offHover = () => { readout.hidden = true; cross.hidden = true; };
+  stage.addEventListener('pointermove', onHover);
+  stage.addEventListener('pointerleave', offHover);
+
   const overlay = el('div', { class: 'eq-overlay' });
+  /* The dBFS scale for the spectrum, down the right edge — the left edge
+     already carries the rack's own dB scale, and one axis cannot mean two
+     things. */
+  for (const d of [-24, -48, -72]) {
+    overlay.appendChild(el('span', {
+      class: 'eq-mark eq-mark-spec', text: d + ' dBFS',
+      style: `top:${(specY(d) * 100).toFixed(1)}%`,
+    }));
+  }
   for (const f of HZ_MARKS) {
     // The last gridline is all but against the right edge, so its label is set
     // back from the line rather than out past it.
@@ -282,13 +447,77 @@ export function mountSound(host) {
       format: (v) => (v / 100).toFixed(2) + '×',
       hint: 'Changes the tempo without changing the key' }),
     toggleRow('Keep the key', () => rack.state.preservePitch, (v) => rack.set({ preservePitch: v }),
-      'Off, speed drags the pitch with it — the sound of a record played fast'));
+      'Off, speed drags the pitch with it — the sound of a record played fast'),
+    /* S7: which shifter. The cost is stated where the choice is made, because
+       "fine" is not free and a control that hides its price is a control that
+       gets blamed for the latency later. */
+    qualityRow());
+
+  /* S3: held, not set. The check is worth having as a control as well as a
+     key, because somebody on the Sound page with a mouse in their hand should
+     not have to know about O — and pointer capture is what makes the release
+     reliable when the pointer wanders off the button mid-press. */
+  function monoRow() {
+    const btn = el('button', { class: 'preset mono-check', text: 'Hold to check' });
+    const down = (e) => {
+      btn.setPointerCapture?.(e.pointerId);
+      btn.classList.add('is-on');
+      rack.holdMono(true);
+    };
+    const up = () => { btn.classList.remove('is-on'); rack.holdMono(false); };
+    btn.addEventListener('pointerdown', down);
+    btn.addEventListener('pointerup', up);
+    btn.addEventListener('pointercancel', up);
+    /* And from the keyboard, where a button is pressed with Space or Enter and
+       there is no pointer to capture. `keyup` on the button is delivered even
+       if focus moves, because focus cannot move while a key is down. */
+    btn.addEventListener('keydown', (e) => {
+      if (e.key !== ' ' && e.key !== 'Enter') return;
+      e.preventDefault();
+      if (!e.repeat) { btn.classList.add('is-on'); rack.holdMono(true); }
+    });
+    btn.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') up(); });
+    btn.addEventListener('blur', up);
+    return el('div', { class: 'rack-row' },
+      el('span', { class: 'rack-name', text: 'Mono check',
+        title: 'Hold to hear the two channels summed. Anything that disappears will disappear on a phone speaker too. (O)' }),
+      el('span', {}), btn);
+  }
+
+  function qualityRow() {
+    const pick = el('div', { class: 'segmented sm', role: 'radiogroup', 'aria-label': 'Pitch shifter' });
+    for (const [id, label, hint] of [
+      ['fast', 'Fast', 'A delay line: no latency worth the name, clean to about seven semitones'],
+      ['fine', 'Fine', 'A phase vocoder: holds a sustained note together at any shift, at about 50 ms of latency'],
+    ]) {
+      const b = el('button', {
+        class: 'seg' + (rack.state.pitchQuality === id ? ' is-on' : ''),
+        role: 'radio', 'aria-checked': String(rack.state.pitchQuality === id),
+        text: label, title: hint,
+      });
+      b.addEventListener('click', () => {
+        rack.set({ pitchQuality: id });
+        for (const x of pick.children) {
+          const on = x === b;
+          x.classList.toggle('is-on', on);
+          x.setAttribute('aria-checked', String(on));
+        }
+        if (id === 'fine' && rack.state.pitch) toast('Fine shifting adds about 50 ms of delay');
+      });
+      pick.appendChild(b);
+    }
+    return el('div', { class: 'rack-row' },
+      el('span', { class: 'rack-name', text: 'Shifter',
+        title: 'Fast is a delay line and adds no delay. Fine is a phase vocoder: better on sustained notes and large shifts, at about 50 ms of latency.' }),
+      el('span', {}), pick);
+  }
 
   module('Stereo',
     knob('Width', { min: 0, max: 200, step: 1, neutral: 100,
       get: () => Math.round(rack.state.width * 100), set: (v) => rack.set({ width: v / 100 }),
       format: (v) => (v === 0 ? 'Mono' : v + '%'),
       hint: '0 is mono, 100 is as recorded, 200 pushes the sides out' }),
+    monoRow(),
     knob('Balance', { min: -100, max: 100, step: 1, neutral: 0,
       get: () => Math.round(rack.state.balance * 100), set: (v) => rack.set({ balance: v / 100 }),
       format: (v) => (v === 0 ? 'Centre' : (v < 0 ? 'L' : 'R') + Math.abs(v)) }));
@@ -344,7 +573,97 @@ export function mountSound(host) {
       },
     }),
   });
-  const mine = module('Your racks', rackStrip, saveBtn);
+  /* S6: a rack as a file.
+   *
+   * The application's whole argument is that your library is a folder on your
+   * disk and nothing is locked away; a rack that exists only inside IndexedDB,
+   * reachable by nothing and lost with a Clear library, is the same objection
+   * turned inward. So: written out as a small JSON file, and read back by
+   * choosing one or by dropping it on the page. */
+  const exportBtn = el('button', {
+    class: 'btn ghost sm', html: ico('file') + '<span>Save as a file</span>',
+    title: 'Write this rack out, to keep or to pass on',
+    onclick: () => promptDialog({
+      title: 'Save this rack as a file',
+      label: 'Name',
+      placeholder: 'That pressing of Kind of Blue…',
+      confirm: 'Save',
+      onConfirm: (name) => {
+        const doc = rack.exportRack(name || 'Rack');
+        const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = el('a', { href: url, download: (doc.name || 'rack').replace(/[^\w -]+/g, '') + '.sonora-rack.json' });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // Freed on the next turn of the loop rather than immediately: revoking
+        // it in the same task cancels the download in some browsers.
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toast('Saved');
+      },
+    }),
+  });
+
+  const picker = el('input', {
+    type: 'file', accept: '.json,application/json', hidden: true,
+    onchange: async () => {
+      const file = picker.files && picker.files[0];
+      picker.value = '';
+      if (file) offerRack(await file.text());
+    },
+  });
+  const importBtn = el('button', {
+    class: 'btn ghost sm', html: ico('folder') + '<span>Open a rack file</span>',
+    title: 'Read a rack somebody wrote out. You will see what it changes first.',
+    onclick: () => picker.click(),
+  });
+
+  /** Shows what a rack file would change, and applies it only if asked. */
+  function offerRack(text) {
+    const read = rack.readRackFile(text);
+    if (!read.ok) { toast(read.reason); return; }
+    const body = el('div', {},
+      el('p', { text: read.changes.length
+        ? `“${read.name}” changes ${read.changes.join(', ')}.`
+        : `“${read.name}” is the same as what you have now.` }),
+      el('p', { class: 'muted', text: 'Nothing is saved until you load it, and Undo does not cover the rack — write your own out first if you want it back.' }));
+    dialog({
+      title: 'Load this rack?',
+      body,
+      width: 460,
+      actions: [
+        { label: 'Cancel' },
+        { label: 'Load it', primary: true, onSelect: () => {
+          rack.loadRack({ state: read.state });
+          paintAll();
+          toast('Loaded “' + read.name + '”');
+        } },
+      ],
+    });
+  }
+
+  /* Dropped on the page, which is how a file arrives when somebody has just
+     been sent one. Scoped to the Sound page and taken back with it. */
+  const onDragOver = (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); host.classList.add('is-dropping'); } };
+  const onDragLeave = () => host.classList.remove('is-dropping');
+  const onDrop = async (e) => {
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    e.preventDefault();
+    host.classList.remove('is-dropping');
+    if (!/\.json$/i.test(file.name)) { toast('A rack is a .json file'); return; }
+    offerRack(await file.text());
+  };
+  host.addEventListener('dragover', onDragOver);
+  host.addEventListener('dragleave', onDragLeave);
+  host.addEventListener('drop', onDrop);
+  offs.push(() => {
+    host.removeEventListener('dragover', onDragOver);
+    host.removeEventListener('dragleave', onDragLeave);
+    host.removeEventListener('drop', onDrop);
+  });
+
+  const mine = module('Your racks', rackStrip, saveBtn, exportBtn, importBtn, picker);
   mine.classList.add('rack-mine');
 
   async function paintRacks() {
@@ -471,6 +790,18 @@ export function mountSound(host) {
 
     bypass.classList.toggle('is-on', !rack.state.on);
     bypass.querySelector('span').textContent = rack.state.on ? 'Bypass' : 'Bypassed';
+    matchBtn.classList.toggle('is-on', rack.state.levelMatch);
+    matchBtn.setAttribute('aria-pressed', String(rack.state.levelMatch));
+    {
+      const off = rack.matchOffset();
+      matchBtn.querySelector('span').textContent = rack.state.levelMatch && off
+        ? `${off >= 0 ? '+' : ''}${off.toFixed(1)} dB` : 'Match';
+    }
+    slotBtn.querySelector('span').textContent = rack.hasSlotB() ? rack.whichSlot() : 'A→B';
+    slotBtn.classList.toggle('is-on', rack.hasSlotB() && rack.whichSlot() === 'B');
+    slotBtn.title = rack.hasSlotB()
+      ? `On rack ${rack.whichSlot()} — swap with the other (Shift+B)`
+      : 'Copy this rack into B, so the two can be compared (Shift+B)';
     host.classList.toggle('is-bypassed', !rack.state.on);
 
     const sub = host.querySelector('#rack-sub');
@@ -518,6 +849,7 @@ export function mountSound(host) {
   let sig = 0;
   const stopLamp = tick((dt) => {
     if (!host.isConnected) return;
+    paintScope(dt);
     const live = player.state.playing && rack.state.on;
     const target = live ? Math.min(1, player.analysis().level * 1.6) : 0;
     sig += (target - sig) * Math.min(1, dt / (target > sig ? 60 : 260));
@@ -526,5 +858,9 @@ export function mountSound(host) {
   offs.push(stopLamp);
 
   enter(host.children, { each: 60, y: 12 });
-  return () => { while (offs.length) offs.pop()(); };
+  return () => {
+    stage.removeEventListener('pointermove', onHover);
+    stage.removeEventListener('pointerleave', offHover);
+    while (offs.length) offs.pop()();
+  };
 }

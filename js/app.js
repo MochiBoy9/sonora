@@ -710,6 +710,15 @@ function registerKeys() {
   K({ id: 'undo', group: 'The library', combo: 'Mod+Z', label: 'Undo the last change',
       run: () => { runUndo(false); } });
 
+  /* Before the plain B below it, for the reason the Redo pair gives: a
+     single-letter binding matches with Shift held, so ⇧B would otherwise be
+     taken by the bypass and the swap would never fire. */
+  K({ id: 'swap-rack', group: 'Sound', combo: 'Shift+B', label: 'Swap with the other rack',
+      run: () => {
+        if (!rack.hasSlotB()) { rack.copyToOther(); toast('Copied into B — change the rack, then swap'); }
+        else toast('Now on rack ' + rack.swapSlots());
+      } });
+
   // A/B the whole rack from anywhere: the only way to hear what an equaliser is
   // actually doing is to take it out and put it back.
   K({ id: 'bypass', group: 'Sound', combo: 'B', label: 'Bypass the rack — A/B it',
@@ -717,6 +726,16 @@ function registerKeys() {
         rack.set({ on: !rack.state.on });
         toast(rack.state.on ? 'Rack in' : 'Rack bypassed');
       } });
+
+  /* S3: mono compatibility is checked by holding a button, hearing the sum and
+     letting go. The width control already reaches mono at zero, so the
+     capability was there — as a setting you had to set and then remember to
+     put back, which is not how anybody checks anything. Held, it is a
+     measurement; latched, it is a mistake waiting to be noticed three records
+     later. */
+  K({ id: 'mono', group: 'Sound', combo: 'O', label: 'Hold to hear it in mono',
+      run: () => { rack.holdMono(true); },
+      release: () => { rack.holdMono(false); } });
 }
 
 let shortcutSheet = null;
@@ -727,10 +746,77 @@ function showShortcuts() {
   /* Rendered from the same table the handler dispatches from, so a shortcut
      cannot exist without appearing here and cannot appear here without
      existing. */
+  /* A4: the table is data, so rebinding is editing the table.
+   *
+   * Twenty-odd single-letter shortcuts, all fixed, is the first thing that
+   * collides with a keyboard layout that is not the one they were chosen on —
+   * and there was no way out of it. Pressing a keycap here arms it; the next
+   * keystroke becomes the binding.
+   *
+   * Only one at a time, and Escape cancels: a capture left armed swallows the
+   * next thing typed anywhere in the application. */
+  let capturing = null;
+
+  const stopCapture = () => {
+    if (!capturing) return;
+    capturing.dt.classList.remove('is-capturing');
+    capturing.dt.textContent = '';
+    for (const k of keys.caps(capturing.b.combo)) capturing.dt.appendChild(el('kbd', { text: k }));
+    capturing = null;
+  };
+
+  const onCapture = (e) => {
+    if (!capturing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { stopCapture(); return; }
+    const combo = keys.comboFor(e);
+    if (!combo) return;                              // a modifier on its own
+    const clash = keys.conflicts(capturing.b.id, combo);
+    if (clash.length) {
+      toast(`${keys.caps(combo).join(' ')} is taken — it is “${clash[0].label}”`);
+      return;
+    }
+    keys.remap(capturing.b.id, combo);
+    const dt = capturing.dt;
+    capturing = null;
+    dt.classList.remove('is-capturing');
+    dt.classList.add('is-custom');
+    dt.textContent = '';
+    for (const k of keys.caps(combo)) dt.appendChild(el('kbd', { text: k }));
+  };
+  /* Capture phase, so an armed keycap is served before the application's own
+     handler — otherwise pressing "N" to rebind something would also skip the
+     track. */
+  addEventListener('keydown', onCapture, true);
+
   for (const [group, rows] of keys.groups()) {
     const table = el('dl', { class: 'keys-list' });
     for (const b of rows) {
-      table.appendChild(el('dt', {}, (b.display || keys.caps(b.combo)).map((k) => el('kbd', { text: k }))));
+      const dt = el('dt', {}, (b.display || keys.caps(b.combo)).map((k) => el('kbd', { text: k })));
+      /* Only a binding with one plain combo is offered. The pairs — "?" and
+         Shift+/ for the same key, ⌘⇧Z and ⌘Y for redo — are two spellings of
+         one shortcut rather than a choice, and a remapping UI that let you
+         replace half of a pair would leave the other half behind. */
+      if (!b.display && !Array.isArray(b.combo)) {
+        dt.classList.add('keys-edit');
+        dt.tabIndex = 0;
+        dt.setAttribute('role', 'button');
+        dt.setAttribute('title', 'Press to change this shortcut');
+        dt.classList.toggle('is-custom', b.custom);
+        const arm = () => {
+          stopCapture();
+          capturing = { b, dt };
+          dt.classList.add('is-capturing');
+          dt.textContent = 'Press a key…';
+        };
+        dt.addEventListener('click', arm);
+        dt.addEventListener('keydown', (e) => {
+          if (capturing) return;                     // the capture handler has it
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); arm(); }
+        });
+      }
+      table.appendChild(dt);
       table.appendChild(el('dd', { text: b.label }));
       if (b.alt) {
         table.appendChild(el('dt', {}, keys.caps(b.alt).map((k) => el('kbd', { text: k }))));
@@ -744,12 +830,22 @@ function showShortcuts() {
     body.appendChild(el('section', { class: 'keys-col' },
       el('h3', { class: 'keys-group', text: group }), table));
   }
+  body.appendChild(el('p', { class: 'keys-foot muted',
+    text: 'Press any shortcut above to change it. Escape cancels.' }));
+
   shortcutSheet = dialog({
     title: 'Keyboard',
     body,
     width: 640,
-    actions: [{ label: 'Close', primary: true }],
-    onClose: () => { shortcutSheet = null; },
+    actions: [
+      { label: 'Put them all back', onSelect: () => { keys.resetAll(); toast('Shortcuts reset'); } },
+      { label: 'Close', primary: true },
+    ],
+    onClose: () => {
+      stopCapture();
+      removeEventListener('keydown', onCapture, true);
+      shortcutSheet = null;
+    },
   });
 }
 
@@ -785,6 +881,11 @@ function bindKeys() {
        application that it should not also mean in the page. */
     if (keys.dispatch(e, { typing })) e.preventDefault();
   });
+  addEventListener('keyup', (e) => { keys.dispatchUp(e); });
+  /* A hold whose key comes up while the window is not looking never delivers a
+     keyup — alt-tab away mid-check and the rack would have stayed folded to
+     mono until the next press. */
+  addEventListener('blur', () => keys.releaseAll());
 }
 
 /* ------------------------------------------------------------------ right pane */

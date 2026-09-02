@@ -116,6 +116,33 @@ const audit = () => page.evaluate(() => {
     return d[size] > d[client] + 1;
   };
 
+  /* A control that parks itself off screen and comes back when it takes focus
+     is not unreachable — it is the opposite, and a skip link is the whole of
+     that category. Checked rather than named: focus it, measure again, and put
+     focus back where it was. Anything that stays off screen when focused is
+     still a problem and still reported. */
+  const revealsOnFocus = (el) => {
+    const was = document.activeElement;
+    /* The reveal is animated, and measuring it a microtask after `focus()`
+       catches it somewhere over the top edge — which is how this reported a
+       skip link as unreachable at one width out of six and not the others.
+       The transition is suppressed for the measurement and put back, so what
+       is read is where the element ends up rather than where it was passing
+       through. */
+    const had = el.style.transition;
+    el.style.transition = 'none';
+    let back = false;
+    try {
+      el.focus({ preventScroll: true });
+      el.getBoundingClientRect();                    // flush the style change
+      const r = el.getBoundingClientRect();
+      back = r.top >= -1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1;
+    } catch { /* not focusable */ }
+    el.style.transition = had;
+    try { (was && was.focus) ? was.focus({ preventScroll: true }) : el.blur(); } catch { /* gone */ }
+    return back;
+  };
+
   const escaped = [];
   const seen = new Set();
   const interactive = 'button, a[href], input, select, [tabindex]:not([tabindex="-1"])';
@@ -130,7 +157,7 @@ const audit = () => page.evaluate(() => {
     if ((r.right > vw + 1 || r.left < -1) && !canScroll(el, 'x')) {
       seen.add(key);
       escaped.push(`${key} x:${Math.round(r.left)}..${Math.round(r.right)} of ${vw}`);
-    } else if ((r.bottom > vh + 1 || r.top < -1) && !canScroll(el, 'y')) {
+    } else if ((r.bottom > vh + 1 || r.top < -1) && !canScroll(el, 'y') && !revealsOnFocus(el)) {
       seen.add(key);
       escaped.push(`${key} y:${Math.round(r.top)}..${Math.round(r.bottom)} of ${vh}`);
     }

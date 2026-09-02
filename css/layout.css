@@ -622,6 +622,65 @@ body.is-ready .app { opacity: 1; }
  * behind it. Both are rotated by the transport's ticker, so the whole meter is
  * two transforms a frame and no layout.
  */
+/* The meter and the bar under it are one instrument, so they share a width and
+   a column rather than being two things that happen to sit near each other. */
+.vu-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: none;
+}
+
+/* S4: phase correlation, −1 to +1, growing from the middle.
+ *
+ * A bar rather than a second needle: it is signed with a meaningful zero, and
+ * the question asked of it — which side of the middle, and how far — is one a
+ * bar answers at a glance. Two colours, because the two ends mean opposite
+ * things: to the right is mono-safe and eventually just mono, to the left is
+ * cancellation, which is the one that has to be noticed. */
+.corr {
+  position: relative;
+  width: 46px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgb(var(--surface-3-rgb) / .5);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  transition: opacity var(--dur-3) var(--ease);
+}
+/* Nothing to report — silence, or a mono file. Dimmed rather than emptied, so
+   the instrument is still visibly there. */
+.corr.is-idle { opacity: .35; }
+.corr.is-idle .corr-fill { transform: scaleX(0); }
+
+.corr-fill {
+  position: absolute;
+  left: 50%;
+  top: 0; bottom: 0;
+  width: 50%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: rgb(var(--accent-rgb) / .8);
+  transition: background var(--dur-3) var(--ease);
+}
+/* Which way it leans — true of any negative reading, and only a direction. */
+.corr.is-left .corr-fill { left: 0; }
+/* Far enough out to matter. The one state worth a colour of its own, because
+   it is the one that costs you the record on a phone speaker. */
+.corr.is-out .corr-fill { background: var(--warn); }
+/* Correlated to the point of being mono. Not a fault, so not a warning — but
+   worth saying, because a stereo record reading +0.98 usually is not one. */
+.corr.is-narrow .corr-fill { background: var(--text-3); }
+
+.corr-mid {
+  position: absolute;
+  left: 50%;
+  top: 1px; bottom: 1px;
+  width: var(--hair);
+  background: var(--line-2);
+  transform: translateX(-50%);
+}
+
 .vu {
   position: relative;
   width: 46px;

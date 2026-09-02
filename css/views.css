@@ -1877,3 +1877,67 @@
   opacity: .3;
   font-size: calc(34px * var(--scale));
 }
+
+
+/* ------------------------------------------------------- the circles' table
+
+   A3. The same figures the drawing shows, as figures. Offered to everybody
+   rather than hidden for assistive technology only: "how much more is the
+   first than the fourth" is a question a sorted column answers at a glance and
+   a packed circle does not. */
+.circle-table {
+  margin-top: 18px;
+  border: var(--hair) solid var(--line);
+  border-radius: var(--radius);
+  background: rgb(var(--surface-rgb) / .6);
+  overflow: hidden;
+}
+.circle-table-head { padding: 10px 12px; border-bottom: var(--hair) solid var(--line); }
+.circle-find {
+  width: 100%;
+  max-width: 280px;
+  padding: 6px 10px;
+  border: var(--hair) solid var(--line);
+  border-radius: calc(var(--radius) * 0.6);
+  background: rgb(var(--bg-rgb) / .5);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(13px * var(--scale));
+}
+.circle-table table { width: 100%; border-collapse: collapse; }
+.circle-table th, .circle-table td {
+  text-align: left;
+  padding: 7px 12px;
+  font-size: calc(12.5px * var(--scale));
+  border-bottom: var(--hair) solid var(--line-2);
+}
+.circle-table thead th {
+  color: var(--text-3);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: calc(10px * var(--scale));
+}
+.circle-table .num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+.circle-table tbody th { font-weight: 500; color: var(--text); }
+.circle-table tr.is-pinned { background: rgb(var(--accent-rgb) / .08); }
+.circle-table tbody tr:last-child th,
+.circle-table tbody tr:last-child td { border-bottom: 0; }
+
+/* A button that reads as the text it contains, because what it does is take
+   you to that thing rather than perform an action on it. */
+.linkish {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.linkish:hover { color: var(--accent); text-decoration: underline; }
+
+/* The circle that stands for all the rest. Drawn as an outline rather than a
+   disc, so it does not read as one more artist. */
+.circle-node.is-tail .circle-disc { fill: none; stroke: var(--line-2); stroke-dasharray: 3 4; }
