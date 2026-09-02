@@ -8,6 +8,12 @@ package-lock.json
 shots/
 shots-*/
 
+# Python bytecode. `make-testlib.py` is a script rather than a module, but
+# importing it to build a fixture library makes CPython write one of these
+# beside it — and one got committed that way.
+__pycache__/
+*.pyc
+
 # Windows shell metadata
 desktop.ini
 Thumbs.db
