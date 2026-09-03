@@ -136,6 +136,29 @@ export const __debug = () => ({
   limitDb: limiter ? +limiter.reduction.toFixed(2) : null,
 });
 
+/**
+ * G5: how hard the dynamics are working, in dB and negative.
+ *
+ * The compressor, the limiter and the make-up gain have all been doing their
+ * jobs since the rack existed and none of them has ever said how much. A
+ * compressor you cannot see working is a compressor you will leave set wrong —
+ * it is the one control in the chain whose effect is hardest to hear and
+ * easiest to read.
+ *
+ * The numbers were already computed for `__debug`; this is the same two
+ * readings under a name that is not a debug hook, so a meter can pull them on
+ * every frame without pretending to be a test.
+ */
+export const reduction = () => ({
+  comp: comp ? comp.reduction : 0,
+  limit: limiter ? limiter.reduction : 0,
+  // Whether either is even in circuit — a meter that reads zero because the
+  // compressor is off is a different statement from one that reads zero
+  // because nothing is loud enough to squash.
+  compOn: !!(comp && state.comp.on),
+  limitOn: !!(limiter && state.limiter),
+});
+
 /** True once the rack is between the player's gain and its analyser. */
 export const isLive = () => !!ctx;
 
@@ -871,15 +894,68 @@ export function bindingForTrack(t) {
   return hit ? hit.id : null;
 }
 
-/** Which binding claims this track, and under which scope. Album beats artist. */
+/**
+ * G3/G6: which binding claims this track, and under which scope.
+ *
+ * Most specific wins, and the order below *is* the specificity: one track is a
+ * smaller claim than one record, which is a smaller claim than one band, which
+ * is smaller than a folder, which is smaller than a genre — and the output
+ * device is last because it is a claim about the room rather than about the
+ * music, and anything said about the music should beat it.
+ *
+ * The two that matter most in practice are the two that were missing. A single
+ * badly mastered track on an otherwise fine record is the case that made
+ * anybody want this feature; a genre is where most listeners would actually
+ * put a rack if asked.
+ */
+const BIND_SCOPES = [
+  { scope: 'track', of: (t) => t.id, label: (t) => t.title },
+  { scope: 'album', of: (t) => t.albumKey, label: (t) => t.album },
+  { scope: 'artist', of: (t) => t.artistKey, label: (t) => t.albumArtist || t.artist },
+  { scope: 'folder', of: (t) => folderKeyOf(t), label: (t) => folderLabel(t) },
+  { scope: 'genre', of: (t) => (t.genre || '').trim().toLowerCase(), label: (t) => t.genre },
+  { scope: 'output', of: () => currentSink, label: () => 'this output' },
+];
+
 function matchFor(t) {
   if (!t) return null;
-  const album = bindings['album:' + t.albumKey];
-  if (album) return { scope: 'album', key: t.albumKey, id: album, label: t.album };
-  const artist = bindings['artist:' + t.artistKey];
-  if (artist) return { scope: 'artist', key: t.artistKey, id: artist, label: t.albumArtist };
+  for (const s of BIND_SCOPES) {
+    const key = s.of(t);
+    if (!key) continue;
+    const id = bindings[s.scope + ':' + key];
+    if (id) return { scope: s.scope, key, id, label: s.label(t) };
+  }
   return null;
 }
+
+/* The folder a track sits in, as its own key. `rootId + path up to the last
+   slash` — the same shape the Files view groups by, so "bind a rack to this
+   folder" means the folder somebody can actually see. */
+const folderKeyOf = (t) =>
+  (t.rootId || '') + '/' + String(t.path || '').replace(/[^/]*$/, '');
+
+const folderLabel = (t) => {
+  const parts = String(t.path || '').split('/').filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 2] : 'this folder';
+};
+
+/* G6: which output the audio is going to, as a binding key.
+ *
+ * Headphones and speakers want different racks, and the app has known which
+ * device it is using since the output picker landed — it has driven nothing
+ * but routing. This is the one binding that needs no thought at all from the
+ * listener: plug the headphones in, the headphone rack arrives.
+ *
+ * `default` is a real device id in this API and is bound like any other. */
+let currentSink = '';
+
+/** Told by the player when the output moves. */
+export function noteOutput(sinkId) {
+  currentSink = sinkId || 'default';
+  events.emit('bindings', bindings);
+}
+
+export const outputKey = () => currentSink || 'default';
 
 const saveBindings = () => db.setKV(BIND_KEY, bindings).catch(() => {});
 

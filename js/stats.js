@@ -22,6 +22,7 @@ import { tick } from './motion.js';
 export const events = new Emitter();
 
 const KEY = 'listen:v1';
+const DAYS_KEY = 'listen-days:v1';
 const FLUSH_MS = 20000;
 /** Below this, it was a skip rather than a listen. */
 const MIN_CREDIT = 2;
@@ -29,6 +30,55 @@ const MIN_CREDIT = 2;
 /** trackId -> seconds listened, across all time. */
 let totals = new Map();
 let loaded = false;
+
+/* ------------------------------------------------------------------ A1
+ *
+ * When, as well as how much.
+ *
+ * `totals` answers "how long have I listened to this" and cannot answer a
+ * single question with a date in it — not "what did I play last month", not
+ * "what do I put on at the weekend", not "what was I listening to a year ago
+ * today". The map above is the whole of what this module knew, and one axis
+ * was missing from it.
+ *
+ * So there is a second map: `YYYY-MM-DD` to a map of trackId to seconds. Days
+ * rather than timestamps, because every question anybody actually asks of a
+ * listening history is a question about a period, and a day is the smallest
+ * period worth keeping — an exact clock time would be four times the storage
+ * to answer nothing extra.
+ *
+ * WHAT IT COSTS. A day of heavy listening touches perhaps forty tracks, so a
+ * year is around 15,000 short entries — a few hundred kilobytes, against a
+ * library index that is already megabytes. Days older than the retention
+ * window are dropped whole, and the window is generous because the whole point
+ * of this data is that it gets more interesting with age.
+ *
+ * WHY IT CANNOT BE BACKFILLED. `lastPlayed` is one number per track that the
+ * next play overwrites, so there is no past to recover — a history started
+ * today begins today. That is the argument for starting it now rather than
+ * when something needs it.
+ */
+const KEEP_DAYS = 1200;              // a little over three years
+let days = new Map();                // 'YYYY-MM-DD' -> Map(trackId -> seconds)
+let daysDirty = false;
+
+/** The local date, as the key this module files things under. */
+export function dayKey(when = Date.now()) {
+  const d = new Date(when);
+  // Local, not UTC: a listener at 1am is having last night, not tomorrow.
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/** Adds seconds to one day's tally for one track. */
+function credit_day(id, seconds, when = Date.now()) {
+  const key = dayKey(when);
+  let bucket = days.get(key);
+  if (!bucket) days.set(key, bucket = new Map());
+  bucket.set(id, (bucket.get(id) || 0) + seconds);
+  daysDirty = true;
+}
 
 let currentId = null;
 let credit = 0;                 // seconds banked for the current track
@@ -52,6 +102,8 @@ function frame(dt, now) {
 function bank() {
   if (currentId && credit >= MIN_CREDIT) {
     totals.set(currentId, (totals.get(currentId) || 0) + credit);
+    // A1: the same credit, filed under today as well as under all time.
+    credit_day(currentId, credit);
     dirty = true;
     events.emit('change');
   }
@@ -60,9 +112,32 @@ function bank() {
 
 function flush() {
   lastFlush = performance.now();
-  if (!dirty) return;
-  dirty = false;
-  db.setKV(KEY, Object.fromEntries(totals)).catch(() => {});
+  if (!dirty && !daysDirty) return;
+  if (dirty) {
+    dirty = false;
+    db.setKV(KEY, Object.fromEntries(totals)).catch(() => {});
+  }
+  if (daysDirty) {
+    daysDirty = false;
+    /* Written as a plain object of objects and rounded to the second: this is
+       a log, and a tenth of a second of listening on the third of March is not
+       a fact anybody will ever need. Rounding roughly halves the file. */
+    const out = {};
+    for (const [day, bucket] of days) {
+      const o = {};
+      for (const [id, secs] of bucket) if (secs >= 1) o[id] = Math.round(secs);
+      if (Object.keys(o).length) out[day] = o;
+    }
+    db.setKV(DAYS_KEY, out).catch(() => {});
+  }
+}
+
+/** Drops days past the retention window. Runs once, at load. */
+function prune() {
+  if (days.size <= KEEP_DAYS) return;
+  const keys = [...days.keys()].sort();
+  for (const k of keys.slice(0, keys.length - KEEP_DAYS)) days.delete(k);
+  daysDirty = true;
 }
 
 /** Only run a frame callback while something is actually playing. */
@@ -73,9 +148,23 @@ function syncTicker() {
 }
 
 export async function init() {
-  const stored = await db.getKV(KEY).catch(() => null);
+  const [stored, storedDays] = await Promise.all([
+    db.getKV(KEY).catch(() => null),
+    db.getKV(DAYS_KEY).catch(() => null),
+  ]);
   if (stored && typeof stored === 'object') {
     totals = new Map(Object.entries(stored).filter(([, v]) => typeof v === 'number' && v > 0));
+  }
+  if (storedDays && typeof storedDays === 'object') {
+    for (const [day, bucket] of Object.entries(storedDays)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !bucket || typeof bucket !== 'object') continue;
+      const m = new Map();
+      for (const [id, v] of Object.entries(bucket)) {
+        if (typeof v === 'number' && v > 0) m.set(id, v);
+      }
+      if (m.size) days.set(day, m);
+    }
+    prune();
   }
   loaded = true;
 
@@ -114,14 +203,96 @@ export const MODES = [
 
 export const isMode = (id) => MODES.some((m) => m.id === id);
 
+/* ------------------------------------------------------------------ periods
+ *
+ * A window over the day log. `from` and `to` are day keys, inclusive; leaving
+ * both out means all time, which is what every caller wanted before there was
+ * a log to ask.
+ */
+
+/** Seconds per track over a window, as a Map. */
+export function tracksBetween(from, to) {
+  const out = new Map();
+  for (const [day, bucket] of days) {
+    if (from && day < from) continue;
+    if (to && day > to) continue;
+    for (const [id, secs] of bucket) out.set(id, (out.get(id) || 0) + secs);
+  }
+  /* What is playing right now has not been banked yet, and a window that ends
+     today should include it — otherwise "this week" is missing the record you
+     are looking at while you read it. */
+  if (currentId && credit >= MIN_CREDIT) {
+    const today = dayKey();
+    if ((!from || today >= from) && (!to || today <= to)) {
+      out.set(currentId, (out.get(currentId) || 0) + credit);
+    }
+  }
+  return out;
+}
+
+/** Seconds listened per day over a window, oldest first. */
+export function byDay(from, to) {
+  const out = [];
+  for (const [day, bucket] of [...days].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    if (from && day < from) continue;
+    if (to && day > to) continue;
+    let sum = 0;
+    for (const secs of bucket.values()) sum += secs;
+    out.push({ day, seconds: sum, tracks: bucket.size });
+  }
+  return out;
+}
+
+/** The first day anything was recorded, or null while the log is empty. */
+export function firstDay() {
+  let first = null;
+  for (const day of days.keys()) if (!first || day < first) first = day;
+  return first;
+}
+
+export const dayCount = () => days.size;
+
+/** `n` days back from today, as a day key — for the period presets. */
+export function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return dayKey(d.getTime());
+}
+
+/**
+ * A3: listening by weekday and by hour of the day.
+ *
+ * Weekday comes out of the day key directly. There is no hour in the log and
+ * deliberately so — see the note on `days` — so this reports the shape of a
+ * week, which is the pattern people actually recognise in themselves.
+ */
+export function byWeekday(from, to) {
+  const out = Array.from({ length: 7 }, (_, i) => ({ day: i, seconds: 0, days: 0 }));
+  for (const [day, bucket] of days) {
+    if (from && day < from) continue;
+    if (to && day > to) continue;
+    const [y, m, d] = day.split('-').map(Number);
+    const w = new Date(y, m - 1, d).getDay();
+    let sum = 0;
+    for (const secs of bucket.values()) sum += secs;
+    out[w].seconds += sum;
+    out[w].days++;
+  }
+  return out;
+}
+
 /**
  * Rolls listening time up by artist, genre or year.
  *
  * Returns `[{ key, label, seconds, plays, share }]`, largest first. Tracks the
  * library no longer holds are skipped rather than counted under a blank label:
  * a slice you cannot click into is worse than no slice.
+ *
+ * A window narrows it to a period. Without one it reads the all-time totals,
+ * which is both what it always did and the only thing that can answer for
+ * listening from before the day log existed.
  */
-export function byMode(mode = 'artist', { limit = 60 } = {}) {
+export function byMode(mode = 'artist', { limit = 60, from = null, to = null } = {}) {
   const buckets = new Map();
   const add = (key, label, seconds) => {
     let b = buckets.get(key);
@@ -130,11 +301,12 @@ export function byMode(mode = 'artist', { limit = 60 } = {}) {
     b.plays++;
   };
 
-  const ids = new Set(totals.keys());
-  if (currentId) ids.add(currentId);
+  const windowed = from || to ? tracksBetween(from, to) : null;
+  const ids = new Set(windowed ? windowed.keys() : totals.keys());
+  if (!windowed && currentId) ids.add(currentId);
 
   for (const id of ids) {
-    const seconds = forTrack(id);
+    const seconds = windowed ? windowed.get(id) : forTrack(id);
     if (seconds < MIN_CREDIT) continue;
     const t = lib.getTrack(id);
     if (!t) continue;
@@ -156,11 +328,184 @@ export function byMode(mode = 'artist', { limit = 60 } = {}) {
   return out.slice(0, limit);
 }
 
+/* ------------------------------------------------------------------ habits
+ *
+ * A3: what the day log can notice about a person.
+ *
+ * With a date on every credit the app can see shape rather than just size —
+ * the record that is only ever Sunday morning, the fortnight one artist took
+ * over completely, the day of the week that is actually the listening day.
+ *
+ * Two rules govern everything below. It is an observation, never a
+ * recommendation: "you mostly play this on Sundays" describes the listener to
+ * themselves, which is a different act from selling them something, and the
+ * moment it becomes "so here's more like it" it has changed sides. And it
+ * refuses to speak from too little: every threshold here exists so that a
+ * fortnight of use does not get told what its habits are.
+ */
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** Seconds per artist per weekday over a window. */
+function artistWeekdays(from, to) {
+  const by = new Map();               // artistKey -> { label, week: [7], total }
+  for (const [day, bucket] of days) {
+    if (from && day < from) continue;
+    if (to && day > to) continue;
+    const [y, m, d] = day.split('-').map(Number);
+    const w = new Date(y, m - 1, d).getDay();
+    for (const [id, secs] of bucket) {
+      const t = lib.getTrack(id);
+      if (!t) continue;
+      const key = t.artistKey || norm(t.artist);
+      if (!key) continue;
+      let row = by.get(key);
+      if (!row) by.set(key, row = { key, label: t.albumArtist || t.artist || 'Unknown Artist', week: new Array(7).fill(0), total: 0 });
+      row.week[w] += secs;
+      row.total += secs;
+    }
+  }
+  return by;
+}
+
+/**
+ * The observations worth making, most interesting first.
+ *
+ * Returns `[{ text, href }]`. An empty array is the normal answer for a new
+ * library and is not a failure — nothing here is worth saying until there is
+ * enough of a history for it to be true.
+ */
+export function habits({ minDays = 21 } = {}) {
+  if (days.size < minDays) return [];
+  const from = daysAgo(180);
+  const to = dayKey();
+  const out = [];
+
+  /* One artist, one weekday. The interesting claim, and the one that needs
+     the most guarding: it takes at least an hour of that artist spread over at
+     least four separate days, so a single long Sunday cannot manufacture it. */
+  const artists = artistWeekdays(from, to);
+  for (const row of artists.values()) {
+    if (row.total < 3600) continue;
+    let best = 0;
+    for (let i = 1; i < 7; i++) if (row.week[i] > row.week[best]) best = i;
+    const share = row.week[best] / row.total;
+    if (share < 0.45) continue;
+    const spread = daysWithArtist(row.key, from, to);
+    if (spread < 4) continue;
+    out.push({
+      score: share * Math.log1p(row.total / 3600),
+      text: `You mostly play ${row.label} on a ${WEEKDAYS[best]}.`,
+      href: '#/artist/' + encodeURIComponent(row.key),
+    });
+  }
+
+  /* A fortnight something took over. Read over the last six months in
+     two-week steps rather than every offset — the claim is "there was a
+     fortnight", not "there was this exact fortnight", and fourteen overlapping
+     versions of the same observation is not fourteen observations. */
+  const run = dominantRun(from, to);
+  if (run) out.push(run);
+
+  /* And the plainest one: which day of the week this actually happens on.
+     Last, because it is true of nearly everybody and therefore the least
+     surprising thing here. */
+  const week = byWeekday(from, to);
+  const total = week.reduce((n, w) => n + w.seconds, 0);
+  if (total > 6 * 3600) {
+    let best = 0;
+    for (let i = 1; i < 7; i++) if (week[i].seconds > week[best].seconds) best = i;
+    const share = week[best].seconds / total;
+    if (share > 0.24) {
+      out.push({
+        score: share,
+        text: `${WEEKDAYS[best]} is your listening day — about ${Math.round(share * 100)}% of the last six months.`,
+        href: '#/circles',
+      });
+    }
+  }
+
+  out.sort((a, b) => b.score - a.score);
+  return out.map(({ text, href }) => ({ text, href }));
+}
+
+/** How many separate days an artist turned up on, which is what makes it a habit. */
+function daysWithArtist(key, from, to) {
+  let n = 0;
+  for (const [day, bucket] of days) {
+    if (from && day < from) continue;
+    if (to && day > to) continue;
+    for (const id of bucket.keys()) {
+      const t = lib.getTrack(id);
+      if (t && (t.artistKey || norm(t.artist)) === key) { n++; break; }
+    }
+  }
+  return n;
+}
+
+/** The fortnight one artist held the most of, if any held enough to mention. */
+function dominantRun(from, to) {
+  const all = byDay(from, to);
+  if (all.length < 21) return null;
+  let best = null;
+  for (let i = 0; i + 14 <= all.length; i += 7) {
+    const slice = all.slice(i, i + 14);
+    const rows = byMode('artist', { limit: 3, from: slice[0].day, to: slice[slice.length - 1].day });
+    const top = rows[0];
+    if (!top || top.seconds < 2 * 3600 || top.share < 0.4) continue;
+    if (!best || top.share > best.share) {
+      best = { share: top.share, label: top.label, key: top.key, day: slice[0].day };
+    }
+  }
+  if (!best) return null;
+  const [y, m] = best.day.split('-').map(Number);
+  const month = new Date(y, m - 1, 1).toLocaleString(undefined, { month: 'long' });
+  return {
+    score: best.share + 0.2,        // a run is more interesting than a weekday
+    text: `For a fortnight in ${month} it was mostly ${best.label} — ${Math.round(best.share * 100)}% of everything you played.`,
+    href: '#/artist/' + encodeURIComponent(best.key),
+  };
+}
+
 /** Everything this listener has ever been credited for, wiped. */
 export async function reset() {
   totals = new Map();
+  days = new Map();
   credit = 0;
   dirty = false;
-  await db.setKV(KEY, {}).catch(() => {});
+  daysDirty = false;
+  await Promise.all([
+    db.setKV(KEY, {}).catch(() => {}),
+    db.setKV(DAYS_KEY, {}).catch(() => {}),
+  ]);
   events.emit('change');
+}
+
+/**
+ * A5: the whole log, as rows.
+ *
+ * The backup carries this as an opaque blob, which is the right shape for
+ * putting it back and the wrong shape for anything else. A date, a track and a
+ * number of seconds is what a spreadsheet, a scrobbler or a graph nobody has
+ * thought of yet can actually read — and it is the same argument the M3U
+ * export won.
+ */
+export function asRows() {
+  const rows = [];
+  for (const [day, bucket] of [...days].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    for (const [id, secs] of bucket) {
+      const t = lib.getTrack(id);
+      rows.push({
+        day,
+        seconds: Math.round(secs),
+        // The names as they are now, not as they were: a correction made last
+        // month should show in a log exported today.
+        title: t ? t.title : '',
+        artist: t ? t.artist : '',
+        album: t ? t.album : '',
+        id,
+      });
+    }
+  }
+  return rows;
 }

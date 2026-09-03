@@ -20,9 +20,19 @@ export function mountPlayerBar(host) {
     <div class="pb-now">
       <div class="art art-3d art-pb"><img class="art-img" alt="" decoding="async"></div>
       <div class="pb-text">
-        <a class="pb-title" href="#"></a>
-        <a class="pb-artist" href="#"></a>
+        <!-- H3: on a coarse pointer these are covered by .pb-open, which is a
+             real 44px target that opens the now playing screen. They stay
+             links for a mouse and for the keyboard; data-small-ok tells the
+             hit-target rule it may skip them, and why. -->
+        <a class="pb-title" href="#" data-small-ok></a>
+        <a class="pb-artist" href="#" data-small-ok></a>
       </div>
+      <!-- H2: on a phone the whole of this opens the full-screen now playing.
+           A transparent button over the art and the title rather than handlers
+           on each: the titles are links to the album and the artist and those
+           must keep working on a desktop, so the phone gets a layer that only
+           exists at phone widths. -->
+      <button class="pb-open" aria-label="Open the now playing screen" tabindex="-1"></button>
       <button class="icon-btn ghost pb-fav" title="Favourite (F)" aria-label="Add to favourites" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>
       <button class="icon-btn ghost pb-more" title="More" aria-label="More">${ico('more')}</button>
     </div>
@@ -43,6 +53,7 @@ export function mountPlayerBar(host) {
             <canvas class="seek-wave seek-wave-dim" aria-hidden="true"></canvas>
             <canvas class="seek-wave seek-wave-lit" aria-hidden="true"></canvas>
             <div class="seek-fill"></div>
+            <div class="seek-hook" hidden></div>
           </div>
           <div class="seek-knob"></div>
           <div class="seek-tip"></div>
@@ -80,6 +91,7 @@ export function mountPlayerBar(host) {
   const buffer = q('.seek-buffer');
   const knob = q('.seek-knob');
   const tip = q('.seek-tip');
+  const hookMark = q('.seek-hook');
   const elapsed = q('.pb-elapsed');
   const durationEl = q('.pb-duration');
   const volFill = q('.vol-fill');
@@ -115,14 +127,31 @@ export function mountPlayerBar(host) {
     const on = player.sleepRemaining() !== null;
     const items = [
       { label: 'End of this track', onSelect: () => { player.setSleep('track'); toast('Stopping after this track'); } },
+      /* E4: the one people actually mean at midnight, and the only one the app
+         can time exactly. Offered only when the queue has a record to be at the
+         end of — on a shuffle of the whole library it would stop at the next
+         change of album, which is not what the words promise. */
+      {
+        label: 'End of this record',
+        when: sameAlbumAhead(),
+        onSelect: () => { player.setSleep('album'); toast('Stopping at the end of this record'); },
+      },
       ...[15, 30, 45, 60, 90].map((m) => ({
         label: `${m} minutes`,
         onSelect: () => { player.setSleep(m); toast(`Sleeping in ${m} minutes`); },
       })),
     ];
     if (on) items.push({ label: 'Cancel timer', onSelect: () => { player.setSleep(null); toast('Sleep timer off'); } });
-    menu(items, { anchor: e.currentTarget });
+    menu(items.filter((i) => i.when !== false), { anchor: e.currentTarget });
   });
+
+  /** Whether what is queued after this track is still the same record. */
+  function sameAlbumAhead() {
+    const st = player.state;
+    const here = lib.getTrack(st.queue[st.index]);
+    const after = lib.getTrack(st.queue[st.index + 1]);
+    return !!(here && after && here.albumKey === after.albumKey);
+  }
 
   function paintSleep() {
     const left = player.sleepRemaining();
@@ -132,6 +161,11 @@ export function mountPlayerBar(host) {
     if (!on) {
       sleepLeft.textContent = '';
       sleepBtn.title = 'Sleep timer';
+      return;
+    }
+    if (left === 'album') {
+      sleepLeft.textContent = 'LP';
+      sleepBtn.title = 'Stopping at the end of this record';
       return;
     }
     if (left === 'track') {
@@ -151,6 +185,9 @@ export function mountPlayerBar(host) {
 
   q('.pb-queue').addEventListener('click', () => document.dispatchEvent(new CustomEvent('sonora:toggle-queue')));
   q('.pb-stage').addEventListener('click', () => document.dispatchEvent(new CustomEvent('sonora:stage')));
+  q('.pb-open').addEventListener('click', () => {
+    if (player.state.current) document.dispatchEvent(new CustomEvent('sonora:stage'));
+  });
   q('.pb-mute').addEventListener('click', () => player.toggleMute());
   q('.pb-more').addEventListener('click', (e) => {
     const t = player.state.current;
@@ -273,7 +310,13 @@ export function mountPlayerBar(host) {
 
   // A waveform that arrives after the track started still belongs to it.
   peakmap.events.on('peaks', (id) => {
-    if (player.state.current && player.state.current.id === id) loadWave();
+    if (player.state.current && player.state.current.id === id) {
+      loadWave();
+      // The hook is found by the same pass that draws the waveform, so this is
+      // the moment the mark can first appear — the track was already playing
+      // when `paintTrack` ran and there was nothing to show.
+      paintHook(player.state.current);
+    }
   });
 
   /* ------------------------------------------------------------ seeking */
@@ -485,6 +528,25 @@ export function mountPlayerBar(host) {
     }
     paintArt(art, t.albumKey);
     durationEl.textContent = fmtTime(t.duration || player.state.duration || 0);
+    paintHook(t);
+  }
+
+  /* E3: the good bit, as a mark you can see coming.
+   *
+   * The analysis finds the most-repeated section of every track it has heard
+   * and stores where it starts, and the only way to reach any of it was ⌘K and
+   * typing the words. It is a fact about the song, on a bar that is already a
+   * picture of the song — so it goes on the bar, and clicking it jumps there.
+   *
+   * Absent rather than dimmed where the analysis found nothing: a mark on
+   * every track that is meaningless on half of them is worse than no mark. */
+  function paintHook(t) {
+    const hook = t && player.hookOf(t);
+    const d = t && (t.duration || player.state.duration || 0);
+    if (!hook || !d) { hookMark.hidden = true; return; }
+    hookMark.hidden = false;
+    hookMark.style.left = (Math.min(0.98, hook.at / d) * 100).toFixed(3) + '%';
+    hookMark.title = `The part that repeats — ${fmtTime(hook.at)}`;
   }
 
   function paintState() {

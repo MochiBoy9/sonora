@@ -67,11 +67,35 @@ function pick() {
   return (head ? [head] : []).concat(rest).slice(0, 40);
 }
 
-function start() {
-  if (node || !enabled) return;
-  if (lib.state.scanning) return;                    // an import is not idle
+/**
+ * F6: the shop window, on purpose.
+ *
+ * The drift is on a three-minute timer and there was no way to see what it
+ * does short of sitting still for three minutes — which means the setting for
+ * it is a setting nobody can evaluate, and there is no way to *ask* for it
+ * when you are putting the machine on a shelf for the evening, which is the
+ * one moment somebody actively wants it.
+ *
+ * `asked` is what makes those two things one feature. A drift somebody started
+ * on purpose ignores the enabled switch and the timer — they asked — but keeps
+ * every other rule, including the one where the first movement of a mouse
+ * takes it away again.
+ */
+export function show() {
+  if (node) return true;
+  const wanted = enabled;
+  enabled = true;
+  const ok = start(true);
+  enabled = wanted;
+  return ok;
+}
+
+function start(asked = false) {
+  if (node || !enabled) return false;
+  if (lib.state.scanning) return false;              // an import is not idle
   const order = pick();
-  if (!order.length) return;
+  if (!order.length) return false;
+  void asked;
 
   node = el('div', {
     class: 'idle', role: 'presentation',
@@ -87,7 +111,10 @@ function start() {
   document.body.classList.add('idle-open');
 
   let at = 0;
-  const show = () => {
+  // Named for what it does rather than `show`, which is now the exported
+  // "start one on purpose" — two functions called show in one file is a
+  // shadowing puzzle waiting to be misread.
+  const advance = () => {
     const album = order[at % order.length];
     at++;
     const face = el('div', { class: 'idle-face' },
@@ -103,8 +130,9 @@ function start() {
     caption.querySelector('.idle-artist').textContent = album.artist;
   };
 
-  show();
-  step = setInterval(show, reduceMotion.matches ? HOLD * 1.5 : HOLD);
+  advance();
+  step = setInterval(advance, reduceMotion.matches ? HOLD * 1.5 : HOLD);
+  return true;
 }
 
 export function stop() {

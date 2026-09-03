@@ -13,7 +13,7 @@ import { $, el, ico, fmtTime, clamp, formatName } from './util.js';
 import * as player from './player.js';
 import * as lib from './library.js';
 import { paintArt } from './ui.js';
-import { createVisualizer, MODES, isMode } from './visualizer.js';
+import { createVisualizer, MODES, isMode, announce as sayViz } from './visualizer.js';
 import * as lyrics from './lyrics.js';
 import * as peakmap from './peaks.js';
 import { tick, animate, spring, draggable, settled, ease, reduceMotion } from './motion.js';
@@ -44,6 +44,27 @@ export const isOpen = () => !!open;
 export function toggleStage(backdrop) {
   if (open) closeStage();
   else openStage(backdrop);
+}
+
+/**
+ * F5: the turntable, as somewhere you go.
+ *
+ * The deck was a mode of a mode — open the stage, then press D — which put the
+ * most legible object this application draws two keystrokes and one piece of
+ * folklore deep. This opens the stage already showing it, so "put the record
+ * on the deck" is one action from anywhere: a key, a palette entry, a button
+ * on the transport.
+ *
+ * It sets the stored preference on the way in, which is what an already-open
+ * stage reads — so this works whether the stage is open or not, and the deck
+ * stays the face you get next time, which is the same bargain pressing D makes.
+ */
+export function showDeck(backdrop) {
+  try { localStorage.setItem(DECK_KEY, '1'); } catch { /* private */ }
+  if (!open) return openStage(backdrop);
+  // Already open on the sleeve: turn it over rather than doing nothing.
+  if (handlers && handlers.deckOn && !handlers.deckOn()) handlers.deck();
+  return undefined;
 }
 
 export function closeStage() {
@@ -163,8 +184,18 @@ export function openStage(backdrop) {
     const extra = [];
     if (t && t.albumArtist && t.albumArtist !== t.artist) extra.push(['On a record by', t.albumArtist]);
     if (t && t.album) extra.push(['From', t.album]);
+    // B4: the two dates, where they disagree. On a remaster this is the only
+    // place in the app that says what you are actually listening to.
+    if (t && t.originalYear && t.originalYear !== t.year) {
+      extra.push(['Originally', String(t.originalYear) + (t.year ? ` · this issue ${t.year}` : '')]);
+    }
+    /* B2: the tempo, and which of the two it is. Sonora measures one and the
+       file often claims one; showing either without saying which would make
+       them look like the same number, and they routinely are not. */
+    const bpm = lib.tempoOf(t);
+    if (bpm) extra.push(['Tempo', `${Math.round(bpm)} BPM · ${lib.tempoSource(t)}`]);
 
-    creditBtn.hidden = !rows.length && !extra.length;
+    creditBtn.hidden = !rows.length && !extra.length && !(t && t.comment);
     if (creditBtn.hidden) wantCredits = false;
     creditBox.hidden = !(wantCredits && !creditBtn.hidden);
     creditBtn.setAttribute('aria-pressed', wantCredits ? 'true' : 'false');
@@ -180,6 +211,9 @@ export function openStage(backdrop) {
       dl.append(el('dt', { text: label }), el('dd', { text: String(t[key]) }));
     }
     creditBox.appendChild(dl);
+    /* B1: and the note, under the rest, as prose rather than as a field. It is
+       the one thing here somebody wrote in sentences. */
+    if (t && t.comment) creditBox.appendChild(el('p', { class: 'stage-credit-note', text: t.comment }));
   }
 
   creditBtn.addEventListener('click', () => {
@@ -242,6 +276,7 @@ export function openStage(backdrop) {
     modeBar.appendChild(el('button', {
       class: 'stage-mode' + (m.id === viz.mode ? ' is-on' : ''),
       role: 'tab', text: m.label, data: { mode: m.id },
+      'aria-selected': String(m.id === viz.mode),
       onclick: () => setMode(m.id),
     }));
   }
@@ -249,7 +284,14 @@ export function openStage(backdrop) {
   function setMode(id) {
     viz.setMode(id);
     try { localStorage.setItem(MODE_KEY, id); } catch { /* private mode */ }
-    for (const b of modeBar.children) b.classList.toggle('is-on', b.dataset.mode === id);
+    for (const b of modeBar.children) {
+      const on = b.dataset.mode === id;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-selected', String(on));
+    }
+    // H6: which of the four is running, for somebody who cannot see it.
+    const m = MODES.find((x) => x.id === id);
+    if (m) sayViz(`Visualiser: ${m.label}, reacting to the music`);
     document.dispatchEvent(new CustomEvent('sonora:viz-mode', { detail: id }));
   }
 
@@ -698,10 +740,19 @@ export function openStage(backdrop) {
     lyrics: () => (words ? (lyricBtn.click(), true) : false),
     credits: () => (creditBtn.hidden ? false : (creditBtn.click(), true)),
     deck: () => { setDeck(!deckOn); return true; },
+    // For `showDeck`, which has to know whether it is already showing.
+    deckOn: () => deckOn,
   };
 
   paint();
   paintState();
+  /* H6: and once on the way in, because the stage is nearly always opened onto
+     whichever visualiser was running last — a mode that is only announced when
+     it *changes* is a mode nobody who arrives on it ever hears about. */
+  {
+    const m = MODES.find((x) => x.id === viz.mode);
+    if (m) sayViz(`Visualiser: ${m.label}, reacting to the music`);
+  }
   /* Restored, because which face the stage shows is a way of listening rather
      than a novelty to be re-chosen on every visit. */
   try { setDeck(localStorage.getItem(DECK_KEY) === '1'); } catch { setDeck(false); }
@@ -758,7 +809,10 @@ keys.bind({
 });
 keys.bind({
   id: 'stage-deck', group: 'In the visualiser', combo: 'D',
-  label: 'The turntable',
+  /* Not "the turntable": that is now what D does from anywhere, and two rows
+     in the shortcut list with the same key and the same words is two rows
+     nobody can tell apart. In here the key turns the record over. */
+  label: 'Sleeve or turntable',
   /* Not gated on anything, unlike L: the deck is there for every track, and the
      arrow keys the arm answers to are handled on the arm itself so they only
      apply when it has the focus. */

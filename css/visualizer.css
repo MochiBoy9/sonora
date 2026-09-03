@@ -143,7 +143,7 @@
 .stage-mode:hover { color: var(--text-2); }
 .stage-mode.is-on {
   background: rgb(var(--accent-rgb) / .16);
-  color: var(--accent);
+  color: var(--accent-ink);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
 }
 
@@ -202,7 +202,7 @@
   line-height: 1.04;
   overflow-wrap: anywhere;
 }
-.stage-artist { color: var(--accent); font-size: calc(14px * var(--scale)); font-weight: 560; letter-spacing: .01em; }
+.stage-artist { color: var(--accent-ink); font-size: calc(14px * var(--scale)); font-weight: 560; letter-spacing: .01em; }
 .stage-tags { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 
 .stage-foot {
@@ -366,7 +366,7 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
 .stage.has-lyrics .stage-art-wrap { flex: 0 1 34%; opacity: .82; }
 .stage.has-lyrics .stage-meta { flex: 1 1 auto; min-width: 0; }
 
-.stage-lyric-btn[aria-pressed="true"] { color: var(--accent); background: rgb(var(--accent-rgb) / .14); }
+.stage-lyric-btn[aria-pressed="true"] { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .14); }
 
 @media (max-width: 760px) {
   .stage.has-lyrics .stage-art-wrap { display: none; }
@@ -560,4 +560,78 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
   color: var(--text-2);
   font-size: calc(13px * var(--scale));
   overflow-wrap: anywhere;
+}
+
+/* B1: the note off the file, set apart from the fields above it because it is
+   the only thing on this panel written in sentences. */
+.stage-credit-note {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: var(--hair) solid var(--line);
+  color: var(--text-3);
+  font-size: calc(12px * var(--scale));
+  line-height: 1.5;
+  font-style: italic;
+  max-height: 7.5em;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+/* H2: the now playing screen, on a phone.
+ *
+ * The transport is a desktop bar scaled down, and the stage was already almost
+ * the right thing — a cover, a title and a transport — reached by a key nobody
+ * has on a phone. So the door is a tap on the transport (see `.pb-open`), and
+ * this is the shape it opens into: the cover is the screen, the words are
+ * under it, and the controls are under those, which is what every phone player
+ * since the first one has looked like.
+ *
+ * Nothing is hidden that was not already hidden. The mode bar becomes a
+ * scroller rather than disappearing — which visualiser you are watching is
+ * exactly the choice somebody makes on a phone, sitting still. */
+@media (max-width: 560px) {
+  .stage-top { padding: 12px 12px 8px; gap: 8px; }
+  .stage-modes {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    justify-content: flex-start;
+  }
+  .stage-modes::-webkit-scrollbar { display: none; }
+  .stage-mode { padding: 9px 12px; flex: none; }
+
+  .stage-body {
+    align-content: start;
+    padding: 0 20px;
+    gap: 22px;
+  }
+  /* The cover is the screen: as wide as the window allows, square, and capped
+     so it cannot push the transport off the bottom of a short phone. */
+  .stage-art-wrap { width: min(100%, 62vh); }
+  .stage-art-wrap::before, .stage-art-wrap::after { display: none; }
+  .stage-title { font-size: calc(clamp(22px, 7vw, 30px) * var(--scale)); }
+  .stage-meta { gap: 6px; }
+
+  .stage-foot { padding: 6px 16px 26px; gap: 14px; }
+  .stage-transport { gap: 6px; }
+}
+
+/* A phone held in landscape has no room for a cover the width of the screen,
+   and the existing short-viewport rule already drops it. This only tightens
+   what is left so the transport is still reachable with a thumb. */
+@media (max-height: 560px) and (max-width: 900px) {
+  .stage-body { gap: 12px; }
+  .stage-foot { padding: 4px 16px 14px; }
+}
+
+/* H3: the visualiser's own controls, on a finger. */
+@media (pointer: coarse) {
+  .stage-mode { min-height: 44px; padding-top: 0; padding-bottom: 0; }
+}
+
+/* H3: the stage's own scrubber, which is the same control as the transport's
+   and needs the same target. */
+@media (pointer: coarse) {
+  .stage-seek { min-height: 44px; display: flex; align-items: center; }
 }

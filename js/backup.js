@@ -151,6 +151,147 @@ async function dataUrlToBlob(url) {
  * Nothing in the file is trusted. It names its own fields, any of them may be
  * missing or of the wrong type, and it may have been written by somebody else.
  */
+/* ------------------------------------------------------------------ I1
+ *
+ * A backup that happens without being asked.
+ *
+ * A backup you have to remember is a backup you have once. `build()` has been
+ * ready since the export landed and the only thing that ever called it was a
+ * download button — which means the copy exists exactly as often as somebody
+ * thinks of it, which for most people is never.
+ *
+ * With a directory handle already granted there is nothing else to arrange: no
+ * server, no account, no upload, and the same File System Access permission
+ * the library already holds for reading the music. A dated file beside it once
+ * a week, and the last few kept.
+ *
+ * The handle is stored in IndexedDB, which is the one place a
+ * `FileSystemDirectoryHandle` survives a reload. Permission does not survive
+ * with it — the browser may ask again — so every write checks first and a
+ * refusal switches the schedule off rather than retrying forever.
+ */
+
+const AUTO_KEY = 'backup:auto';        // { every, keep, at, dir, last, lastError }
+const NAME_RE = /^sonora-backup-(\d{4}-\d{2}-\d{2})(?:-\d+)?\.json$/;
+
+/** The automatic-backup settings, with the shipped defaults filled in. */
+export async function autoSettings() {
+  const s = await db.getKV(AUTO_KEY).catch(() => null);
+  return {
+    every: 7,                 // days; 0 is off
+    keep: 4,                  // how many dated files to leave in the folder
+    dir: null,                // FileSystemDirectoryHandle
+    at: 0,                    // when the last one was written
+    last: '',                 // what it was called
+    error: '',                // why the last attempt failed, if it did
+    ...(s && typeof s === 'object' ? s : {}),
+  };
+}
+
+export async function setAuto(patch) {
+  const next = { ...(await autoSettings()), ...patch };
+  await db.setKV(AUTO_KEY, next).catch(() => {});
+  return next;
+}
+
+/** Whether this browser can write a file to a folder you point it at. */
+export const canAutoBackup = () => typeof window !== 'undefined' &&
+  typeof window.showDirectoryPicker === 'function';
+
+/**
+ * Asks for the folder to write into. Must be called from a gesture.
+ *
+ * `readwrite` up front rather than read-then-upgrade: the whole point of this
+ * folder is being written to, and asking twice for one thing is worse than
+ * asking once for the thing you mean.
+ */
+export async function chooseAutoFolder() {
+  if (!canAutoBackup()) return null;
+  let dir;
+  try {
+    dir = await window.showDirectoryPicker({ id: 'sonora-backups', mode: 'readwrite' });
+  } catch { return null; }               // cancelled
+  await setAuto({ dir, error: '' });
+  return dir;
+}
+
+/** Whether the folder can still be written to, without asking. */
+async function stillAllowed(dir) {
+  if (!dir || !dir.queryPermission) return !!dir;
+  try { return (await dir.queryPermission({ mode: 'readwrite' })) === 'granted'; } catch { return false; }
+}
+
+/**
+ * Writes one dated backup into the chosen folder and prunes the old ones.
+ *
+ * Returns `{ ok, name }` or `{ ok: false, reason }`. Never throws: this runs
+ * unattended, and a backup that takes the application down with it is worse
+ * than a backup that did not happen.
+ */
+export async function writeAuto({ art = false } = {}) {
+  const cfg = await autoSettings();
+  if (!cfg.dir) return { ok: false, reason: 'no folder chosen' };
+  if (!(await stillAllowed(cfg.dir))) {
+    await setAuto({ error: 'permission' });
+    return { ok: false, reason: 'permission' };
+  }
+
+  try {
+    const doc = await build({ art });
+    const day = new Date().toISOString().slice(0, 10);
+    // A second backup on the same day does not overwrite the first: the
+    // interesting one is often the older of the two.
+    let name = `sonora-backup-${day}.json`;
+    for (let n = 2; n < 40; n++) {
+      let taken = true;
+      try { await cfg.dir.getFileHandle(name); } catch { taken = false; }
+      if (!taken) break;
+      name = `sonora-backup-${day}-${n}.json`;
+    }
+    const fh = await cfg.dir.getFileHandle(name, { create: true });
+    const w = await fh.createWritable();
+    await w.write(JSON.stringify(doc));
+    await w.close();
+    await prune(cfg.dir, cfg.keep);
+    await setAuto({ at: Date.now(), last: name, error: '' });
+    return { ok: true, name, counts: doc.counts };
+  } catch (err) {
+    await setAuto({ error: String((err && err.name) || err || 'failed') });
+    return { ok: false, reason: 'write failed' };
+  }
+}
+
+/** Leaves the newest `keep` dated files and removes the rest. */
+async function prune(dir, keep) {
+  if (!(keep > 0) || !dir.entries) return;
+  const mine = [];
+  try {
+    for await (const [name, handle] of dir.entries()) {
+      if (handle.kind === 'file' && NAME_RE.test(name)) mine.push(name);
+    }
+  } catch { return; }
+  // Named by date, so lexical order is chronological — which is most of why
+  // the name is shaped that way.
+  mine.sort();
+  for (const name of mine.slice(0, Math.max(0, mine.length - keep))) {
+    try { await dir.removeEntry(name); } catch { /* somebody else's to delete */ }
+  }
+}
+
+/**
+ * Writes one if it is due. Called at launch, well after everything else.
+ *
+ * Due-ness is measured from the last successful write rather than from a
+ * schedule, so a machine that is off for a fortnight gets its backup when it
+ * comes back rather than missing two.
+ */
+export async function autoBackupIfDue() {
+  const cfg = await autoSettings();
+  if (!cfg.every || !cfg.dir) return null;
+  if (Date.now() - (cfg.at || 0) < cfg.every * 24 * 3600 * 1000) return null;
+  return writeAuto();
+}
+
 export function inspect(text) {
   let doc;
   try { doc = JSON.parse(text); } catch { return { ok: false, reason: 'That is not a Sonora backup.' }; }

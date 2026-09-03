@@ -164,7 +164,59 @@ export function mountCircles(host) {
     onclick: () => host.dispatchEvent(new CustomEvent('circles:reset', { bubbles: true })),
   });
 
-  const bar = el('div', { class: 'toolbar circle-bar' }, modeBar,
+  /* A2: any period, reviewed.
+   *
+   * The same three modes over a window rather than over all time, which turns
+   * one chart into a different question every time you move it: this month,
+   * this year, the fortnight something took over completely. It is not "your
+   * year in music" once a December — that is a report, and this is an
+   * instrument.
+   *
+   * "All time" is kept and kept first, because it is the only setting that can
+   * answer for listening from before the day log existed. Every other preset
+   * reads the log, so they are offered only once there is a log to read. */
+  const PERIODS = [
+    { id: 'all', label: 'All time' },
+    { id: '7', label: 'Last 7 days', days: 6 },
+    { id: '30', label: 'Last 30 days', days: 29 },
+    { id: '90', label: 'Last 90 days', days: 89 },
+    { id: '365', label: 'Last year', days: 364 },
+  ];
+  const periodKey = 'sonora:circle-period';
+  let period = 'all';
+  try { const v = localStorage.getItem(periodKey); if (PERIODS.some((p) => p.id === v)) period = v; } catch { /* private mode */ }
+
+  const periodBar = el('div', { class: 'segmented quiet', role: 'tablist', 'aria-label': 'Over what period' });
+  for (const p of PERIODS) {
+    periodBar.appendChild(el('button', {
+      class: 'seg' + (p.id === period ? ' is-on' : ''),
+      role: 'tab', text: p.label, data: { period: p.id },
+      'aria-selected': String(p.id === period),
+      onclick: () => setPeriod(p.id),
+    }));
+  }
+
+  const windowOf = () => {
+    const p = PERIODS.find((x) => x.id === period);
+    if (!p || p.days === undefined) return { from: null, to: null };
+    return { from: stats.daysAgo(p.days), to: stats.dayKey() };
+  };
+
+  function setPeriod(next) {
+    if (next === period || !PERIODS.some((p) => p.id === next)) return;
+    period = next;
+    try { localStorage.setItem(periodKey, period); } catch { /* private mode */ }
+    for (const b of periodBar.children) {
+      const on = b.dataset.period === period;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-selected', String(on));
+    }
+    // Pins are about a chart, and this is a different chart.
+    pinned.clear();
+    build();
+  }
+
+  const bar = el('div', { class: 'toolbar circle-bar' }, modeBar, periodBar,
     el('span', {
       class: 'circle-hint label',
       text: 'Click to pin · double-click to play · drag to arrange',
@@ -293,16 +345,31 @@ export function mountCircles(host) {
   /* ---------------------------------------------------------------- build */
 
   function build() {
-    rows = stats.byMode(mode);
-    const totalSecs = stats.total();
+    const win = windowOf();
+    rows = stats.byMode(mode, win);
+    const totalSecs = rows.reduce((n, r) => n + r.seconds, 0);
+    const named = mode === 'year' ? 'years' : mode === 'genre' ? 'genres' : 'artists';
+    const over = period === 'all' ? '' : ' · ' +
+      (PERIODS.find((p) => p.id === period) || {}).label.toLowerCase();
     host.querySelector('#circle-total').textContent = rows.length
-      ? `${secondsLabel(totalSecs)} listened · ${rows.length} ${mode === 'year' ? 'years' : mode === 'genre' ? 'genres' : 'artists'}`
-      : 'No listening time recorded yet';
+      ? `${secondsLabel(totalSecs)} listened · ${rows.length} ${named}${over}`
+      /* A window with nothing in it is not the same news as an empty library,
+         and saying "no listening time recorded yet" to somebody who has been
+         listening for a year but not this week would be a lie. */
+      : period === 'all' ? 'No listening time recorded yet'
+      : 'Nothing played in that period';
+
+    // Only offered once there is a history to slice. Before that every preset
+    // gives the same empty chart, which teaches that the control is broken.
+    periodBar.hidden = stats.dayCount() < 2;
 
     const show = rows.length > 0;
     empty.hidden = show;
     stage.hidden = !show;
-    bar.hidden = !show;
+    /* The toolbar survives an empty window, because the window is set from it:
+       hiding the control that caused the emptiness leaves no way back. It only
+       goes away when there is nothing recorded at all. */
+    bar.hidden = !show && period === 'all';
     pins.hidden = !show || pinned.size === 0;
     // Nothing measured, nothing to tabulate — and the button that opens the
     // table should not be there to be pressed either.

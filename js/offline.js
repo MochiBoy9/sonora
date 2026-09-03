@@ -120,6 +120,84 @@ export async function startOffline() {
   return status();
 }
 
+/* ------------------------------------------------------------------ H5
+ *
+ * Installing it.
+ *
+ * There is a manifest, a service worker, an offline shell and an update
+ * notice — everything a progressive web app needs except the moment where it
+ * offers to become one. On a phone that moment is the difference between a
+ * bookmark and something on the home screen with no browser furniture around
+ * it, which for a full-screen music player is most of the point.
+ *
+ * The browser fires `beforeinstallprompt` once, early, and expects the page to
+ * hold onto it and call `prompt()` from inside a real gesture later. So this
+ * catches it at module load — before anything asks — and then does nothing
+ * until somebody presses a button. Nothing pops up on its own: an app that
+ * asks to be installed the first time you open it is an app you close.
+ *
+ * Firefox and desktop Safari never fire it. `canInstall()` returns false there
+ * and the button is simply absent, which is honest — an install button that
+ * explains it cannot install is worse than no button.
+ */
+
+let installEvent = null;
+let installed = false;
+
+if (typeof addEventListener === 'function') {
+  addEventListener('beforeinstallprompt', (e) => {
+    // Held rather than allowed to run: the default is a browser-chosen moment,
+    // and this app has a better one.
+    e.preventDefault();
+    installEvent = e;
+    document.dispatchEvent(new CustomEvent('sonora:installable'));
+  });
+  addEventListener('appinstalled', () => {
+    installed = true;
+    installEvent = null;
+    document.dispatchEvent(new CustomEvent('sonora:installable'));
+  });
+}
+
+/** Whether an install can be offered right now. */
+export const canInstall = () => !!installEvent && !isInstalled();
+
+/**
+ * Whether this is already the installed copy.
+ *
+ * `display-mode: standalone` is what a launched PWA reports, and iOS Safari —
+ * which has no install event at all — sets `navigator.standalone` instead.
+ */
+export function isInstalled() {
+  if (installed) return true;
+  try {
+    if (matchMedia('(display-mode: standalone)').matches) return true;
+    if (matchMedia('(display-mode: window-controls-overlay)').matches) return true;
+  } catch { /* an old browser with no matchMedia for display-mode */ }
+  return !!navigator.standalone;
+}
+
+/**
+ * Asks. Must be called from inside a user gesture or the browser refuses.
+ *
+ * Returns 'accepted', 'dismissed', or 'unavailable'. The event is single-use
+ * whatever the answer, so it is dropped either way — a second press of a
+ * button that silently does nothing is worse than the button going away.
+ */
+export async function install() {
+  if (!installEvent) return 'unavailable';
+  const e = installEvent;
+  installEvent = null;
+  document.dispatchEvent(new CustomEvent('sonora:installable'));
+  try {
+    e.prompt();
+    const { outcome } = await e.userChoice;
+    return outcome === 'accepted' ? 'accepted' : 'dismissed';
+  } catch {
+    return 'unavailable';
+  }
+}
+
 /** Removes the worker and everything it cached. For the Settings panel. */
 export async function clearOffline() {
   if (!SUPPORTED) return false;

@@ -135,6 +135,151 @@ const LEVEL_TARGET = -14;
    automatic system should decline rather than commit. */
 const LEVEL_LIMIT = 12;
 
+/* ------------------------------------------------------------------ G2
+ *
+ * Level-matching a run of tracks, rather than a signal path.
+ *
+ * The A/B match works out the difference between two chains, and the levelling
+ * above works out one track's distance from a fixed target — which is the
+ * album-versus-track problem and not the playlist one. What makes a mixed
+ * playlist listenable is that every track in it has *been measured*: a 1974
+ * master corrected to −14 next to a 2011 remaster corrected to −14 is even,
+ * and a track that has never been played has neither a tag nor a measurement
+ * and arrives at whatever level it was cut at. It is the inconsistency you
+ * hear, not the loudness.
+ *
+ * So this is not a new kind of levelling. It is the measurement, done up
+ * front, for a list somebody is about to play — and an honest count of how
+ * much of it is covered, because "level-matched" over a list where half the
+ * tracks have no figure is a claim the player cannot make.
+ */
+
+/** What is known about a list's levels, without measuring anything. */
+export function levelCoverage(tracks) {
+  let known = 0, missing = 0;
+  let lo = Infinity, hi = -Infinity;
+  for (const t of tracks) {
+    const db = knownLevelDb(t);
+    if (db == null) { missing++; continue; }
+    known++;
+    if (db < lo) lo = db;
+    if (db > hi) hi = db;
+  }
+  return {
+    known, missing, total: tracks.length,
+    // The worst mismatch the listener would actually hear across the run.
+    spreadDb: known > 1 ? +(hi - lo).toFixed(1) : 0,
+  };
+}
+
+/** The correction a track already has a source for, or null. No decoding. */
+function knownLevelDb(track) {
+  if (!track) return null;
+  if (typeof track.gainAlbum === 'number' && state.levelling === 'album') return track.gainAlbum;
+  if (typeof track.gain === 'number') return track.gain;
+  const rec = peakmap.peek(track);
+  if (rec && typeof rec.rms === 'number' && isFinite(rec.rms)) return LEVEL_TARGET - rec.rms;
+  return null;
+}
+
+/**
+ * Measures whatever in a list has no level figure yet.
+ *
+ * One decode at a time — `peaks.js` serialises them anyway, and racing them
+ * would double the peak memory for no gain. `onProgress` is called after each
+ * so a dialog can count up; the promise resolves with the coverage afterwards.
+ *
+ * Deliberately abortable: this is minutes of work on a long playlist, and
+ * something that cannot be stopped is something people will not start.
+ */
+export function levelMatch(tracks, { onProgress } = {}) {
+  const todo = tracks.filter((t) => knownLevelDb(t) == null);
+  let stopped = false;
+  const done = (async () => {
+    let n = 0;
+    for (const t of todo) {
+      if (stopped) break;
+      try { await peakmap.forTrack(t, 'wave'); } catch { /* unreadable: it stays unmeasured */ }
+      n++;
+      onProgress?.(n, todo.length);
+    }
+    /* The tracks that are already in the decks were levelled from what was
+       known when they loaded, which for a freshly measured track was nothing.
+       Re-applying is what makes the measurement audible without a reload. */
+    applyLevel(deck, state.current);
+    applyLevel(idleDeck, lib.getTrack(state.queue[state.index + 1]));
+    events.emit('state');
+    return { ...levelCoverage(tracks), measured: n, stopped };
+  })();
+  return { done, cancel: () => { stopped = true; }, needed: todo.length };
+}
+
+/* ------------------------------------------------------------------ G4
+ *
+ * The reference track.
+ *
+ * Every mastering room has one: a record you know so well that hearing it is a
+ * measurement. You put it on, you hear where the new thing sits against it,
+ * you go back. The two things that make it work rather than being a bookmark
+ * are that it is one action from anywhere, and that it is level-matched — an
+ * A/B where one side is louder is an A/B where the louder side wins, which is
+ * the whole reason the match landed last pass.
+ *
+ * `back` is what makes it a switch rather than a jump: what was playing, and
+ * where in it, so the second press puts you back exactly. Held in memory only.
+ * A reference you have to find again after a reload is a bookmark; a reference
+ * that survives one is a setting, and the id is small enough to store.
+ */
+const REF_KEY = 'referenceTrack';
+let referenceId = null;
+let back = null;                  // { id, at, playing } while the reference is on
+
+export const referenceTrack = () => (referenceId ? lib.getTrack(referenceId) : null);
+export const onReference = () => !!back;
+
+/** Pins a track as the reference, or clears it when given the one already pinned. */
+export function setReference(track) {
+  const id = track && (typeof track === 'string' ? track : track.id);
+  referenceId = id && id !== referenceId ? id : null;
+  db.setKV(REF_KEY, referenceId || '').catch(() => {});
+  events.emit('reference', referenceTrack());
+  return referenceId;
+}
+
+/**
+ * Switches to the reference, or back off it.
+ *
+ * Levelling is forced on for the comparison and put back afterwards, because
+ * the point of a reference is the difference between two records and not the
+ * difference between two volumes. If the listener had it off, they get it back.
+ */
+let levellingBefore = null;
+
+export async function toggleReference() {
+  if (back) {
+    const to = lib.getTrack(back.id);
+    const at = back.at, resume = back.playing;
+    back = null;
+    if (levellingBefore) { setLevelling(levellingBefore); levellingBefore = null; }
+    events.emit('reference', referenceTrack());
+    if (!to) return false;
+    await load(to, resume, { count: false });
+    seek(at);
+    return true;
+  }
+
+  const ref = referenceTrack();
+  if (!ref) return false;
+  const now = state.current;
+  if (now && now.id === ref.id) return false;      // already on it: nothing to compare
+
+  back = { id: now ? now.id : '', at: state.time || 0, playing: state.playing };
+  if (state.levelling === 'off') { levellingBefore = 'off'; setLevelling('track'); }
+  events.emit('reference', ref);
+  await load(ref, true, { count: false });
+  return true;
+}
+
 /** The correction for one track in dB, or 0 if levelling is off or unknown. */
 function levelDbFor(track) {
   if (!track || state.levelling === 'off') return 0;
@@ -1192,11 +1337,16 @@ export async function setSink(id) {
     await Promise.all([deckA.el.setSinkId(wanted), deckB.el.setSinkId(wanted)]);
     state.sink = wanted;
     db.setKV('sink', wanted).catch(() => {});
+    /* G6: the rack is told which room it is playing into. It has never known
+       before — the output setting drove routing and nothing else — and a rack
+       bound to the headphones should arrive when the headphones do. */
+    rack.noteOutput(wanted);
     events.emit('state');
     return { supported: true, ok: true };
   } catch {
     state.sink = '';
     db.setKV('sink', '').catch(() => {});
+    rack.noteOutput('');
     events.emit('state');
     return { supported: true, ok: false };
   }
@@ -1414,6 +1564,17 @@ function restoreOrder() {
   state.index = Math.max(0, state.queue.indexOf(currentId));
 }
 
+/**
+ * A shuffled copy, for anything outside the transport that wants the same
+ * ordering the listener has already chosen — E2's stations, in particular.
+ * The mode is theirs; a station should not have a second opinion about it.
+ */
+export function shuffled(ids) {
+  const arr = ids.slice();
+  shuffleInPlace(arr);
+  return arr;
+}
+
 function shuffleInPlace(arr) {
   if (state.shuffleMode === 'weighted') return weightedShuffle(arr);
   for (let i = arr.length - 1; i > 0; i--) {
@@ -1503,7 +1664,7 @@ let sleepFade = null;
 
 /** Seconds left, or null if no timer is running. */
 export function sleepRemaining() {
-  if (state.sleepUntil === 'track') return 'track';
+  if (state.sleepUntil === 'track' || state.sleepUntil === 'album') return state.sleepUntil;
   if (!state.sleepUntil) return null;
   return Math.max(0, (state.sleepUntil - Date.now()) / 1000);
 }
@@ -1515,8 +1676,11 @@ export function setSleep(minutes) {
 
   if (!minutes) {
     state.sleepUntil = null;
-  } else if (minutes === 'track') {
-    state.sleepUntil = 'track';
+  } else if (minutes === 'track' || minutes === 'album') {
+    // Neither of these is a clock, so neither schedules anything: `next` reads
+    // the flag when it gets there, which is the only moment either can be
+    // acted on exactly.
+    state.sleepUntil = minutes;
   } else {
     state.sleepUntil = Date.now() + minutes * 60000;
     const ms = minutes * 60000;
@@ -1588,6 +1752,28 @@ export function playNext(tracks) {
   noteOrigin(ids, 'Added');
   events.emit('queue');
   warmNext();
+}
+
+/**
+ * C2: puts tracks at a chosen place in the queue.
+ *
+ * `playNext` and `enqueue` are the two ends of this; a drop lands wherever the
+ * pointer was, which is neither. The index is clamped rather than rejected —
+ * a drop past the last row means the end, which is what it looks like.
+ */
+export function insertAt(tracks, at) {
+  const ids = tracks.map((t) => (typeof t === 'string' ? t : t.id));
+  if (!ids.length) return 0;
+  const where = Math.max(0, Math.min(state.queue.length, at | 0));
+  state.queue.splice(where, 0, ...ids);
+  baseOrder.push(...ids);
+  noteOrigin(ids, 'Added');
+  // A track inserted before the playhead moves the playhead with it, so the
+  // song that is playing carries on being the song that is playing.
+  if (where <= state.index) state.index += ids.length;
+  if (state.index < 0 && state.queue.length) jumpTo(0);
+  else { events.emit('queue'); warmNext(); }
+  return ids.length;
 }
 
 export function enqueue(tracks) {
@@ -1701,11 +1887,41 @@ function skipForward() {
 export function next(auto = false) {
   if (!state.queue.length) return;
   if (auto && state.repeat === 'one') { seek(0); play(); return; }
+
+  /* E4: stop at the end of this record.
+   *
+   * There was a sleep timer in minutes and a "stop after this track", and the
+   * one in between is the one people actually want at midnight — it is also
+   * the only one the app can time exactly, because it knows where the album
+   * changes. Checked before the advance rather than after, so the stop happens
+   * at the join rather than one track into the next record.
+   */
+  if (state.sleepUntil === 'album' && auto) {
+    const here = lib.getTrack(state.queue[state.index]);
+    const after = lib.getTrack(state.queue[state.index + 1]);
+    if (!after || !here || after.albumKey !== here.albumKey) {
+      pause();
+      seek(0);
+      setSleep(null);
+      events.emit('queue-ended', { reason: 'album' });
+      return;
+    }
+  }
+
   if (state.index + 1 < state.queue.length) return jumpTo(state.index + 1);
   if (state.repeat === 'all') return jumpTo(0);
   // End of queue: stop cleanly but keep the track loaded for replay.
   pause();
   seek(0);
+  /* E1: and say so, rather than simply going quiet.
+   *
+   * Nothing in the playback layer ever had an "and then?" — the queue ran out
+   * and the evening ended. This does not decide what happens next; it
+   * announces that nothing is happening, and lets whoever is listening offer
+   * something. `auto` matters: reaching the end because the last track
+   * finished is news, and pressing Next on the last track is a person who can
+   * see the queue for themselves. */
+  if (auto) events.emit('queue-ended', { reason: 'end', origin: state.origin });
 }
 
 export function prev() {
@@ -2023,7 +2239,15 @@ export async function init() {
   /* The device may not be there any more — a headset unplugged, an interface
      powered off — so this is attempted rather than assumed, and `setSink`
      falls back to the default when it is gone. */
+  // G4: which record the listener measures other records against.
+  db.getKV(REF_KEY).then((id) => {
+    if (typeof id === 'string' && id) { referenceId = id; events.emit('reference', referenceTrack()); }
+  }).catch(() => {});
+
   if (typeof sink === 'string' && sink) setSink(sink).catch(() => {});
+  // G6: and the rack is told where the sound is going even when it is going to
+  // the system default, so an "on the speakers" binding is a binding.
+  else rack.noteOutput('');
   applyVolume();
   // The rack owns playback speed, which is a property of the element and works
   // with or without a Web Audio graph — and the graph does not exist until the

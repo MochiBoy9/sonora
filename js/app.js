@@ -4,9 +4,10 @@ import { $, el, ico, debounce, clamp, acceptAttr, formatName, idle, fmtTime, fmt
 import * as lib from './library.js';
 import * as player from './player.js';
 import { renderView, hasLiveSelection } from './views.js';
+import { activeFilter } from './views/shared.js';
 import { mountPlayerBar } from './playerbar.js';
 import { mountQueue } from './queue.js';
-import { toast, closeMenu, promptDialog, menu, dialog, rulesDialog } from './ui.js';
+import { toast, closeMenu, promptDialog, menu, dialog, rulesDialog, watchLongPress } from './ui.js';
 import * as session from './session.js';
 import * as stats from './stats.js';
 import * as looks from './looks.js';
@@ -14,12 +15,15 @@ import * as rack from './audio.js';
 import { animate, ease, reduceMotion, startDeviceTilt, deviceTiltNeedsPermission } from './motion.js';
 import { startIntro } from './intro.js';
 import { mountBackdrop } from './backdrop.js';
-import { toggleStage, isOpen as stageOpen } from './stage.js';
+import { toggleStage, showDeck, isOpen as stageOpen } from './stage.js';
 import { startRelief } from './relief.js';
 import { startOffline } from './offline.js';
 import { togglePalette, closePalette, isOpen as paletteOpen } from './palette.js';
 import * as db from './db.js';
+import * as backup from './backup.js';
 import * as keys from './keys.js';
+import * as drag from './drag.js';
+import * as radio from './radio.js';
 import * as m3u from './m3u.js';
 import * as shopWindow from './idle.js';
 import * as peakmap from './peaks.js';
@@ -199,18 +203,38 @@ function buildSidebar() {
 
   const brand = el('a', { class: 'brand', href: '#/home', 'aria-label': 'Sonora — home' },
     el('span', { class: 'brand-mark', html: ico('logo') }),
-    el('span', { class: 'brand-name', html: 'SON<b>ORA</b>' }));
+    /* A logotype, which WCAG exempts from contrast by name: "text that is part
+       of a logo or brand name has no contrast requirement". Said out loud with
+       an attribute rather than left for somebody to rediscover, because the
+       exemption is narrow and this is the only thing in the app that has it. */
+    el('span', { class: 'brand-name', 'data-logotype': '', html: 'SON<b>ORA</b>' }));
 
   const nav = el('nav', { class: 'nav', 'aria-label': 'Library' });
   pill = el('div', { class: 'nav-pill' });
   nav.appendChild(pill);
   NAV.forEach((item, i) => {
-    nav.appendChild(el('a', {
+    const link = el('a', {
       class: 'nav-item', href: '#/' + item.route, data: { route: item.route },
     },
-      el('span', { class: 'nav-num', text: String(i + 1).padStart(2, '0') }),
+      /* Ornament, and hidden from assistive tech as such: the number is the
+         item's position in a list that already has an order, so a screen
+         reader announcing "zero two, Songs" is reading out the furniture. It
+         is also why the contrast rule skips it — a decorative number set
+         faint on purpose is not body text that has gone wrong. */
+      el('span', { class: 'nav-num', 'aria-hidden': 'true', text: String(i + 1).padStart(2, '0') }),
       el('span', { class: 'nav-ico', html: ico(item.icon) }),
-      el('span', { class: 'nav-label', text: item.label })));
+      el('span', { class: 'nav-label', text: item.label }));
+    /* C1: Favourites is a destination for a drag as well as a place to go.
+       It is the only nav entry that holds a list somebody curates, so it is the
+       only one that can be dropped on. */
+    if (item.route === 'favourites') {
+      drag.acceptTracks(link, (ids) => {
+        let n = 0;
+        for (const id of ids) if (!lib.isFavourite(id)) { lib.toggleFavourite(id, true); n++; }
+        toast(n ? `Favourited ${fmtCount(n, 'track')}` : 'Already in your favourites');
+      });
+    }
+    nav.appendChild(link);
   });
 
   const playlistHead = el('div', { class: 'side-head' },
@@ -293,6 +317,21 @@ function buildSidebar() {
       row.classList.add('is-drop');
     });
     row.addEventListener('dragleave', () => row.classList.remove('is-drop'));
+
+    /* C1: and the drop everybody expected all along — tracks onto a playlist.
+       A smart shelf refuses, because it does not hold tracks: it describes
+       them, and dropping a song on a description is a request the shelf has no
+       way to honour. Saying so beats swallowing it. */
+    drag.acceptTracks(row, async (ids) => {
+      if (p.smart) {
+        toast(`“${p.name}” describes itself — it cannot be added to`);
+        return;
+      }
+      const n = await lib.addToPlaylist(p.id, ids);
+      if (n) toast(`Added ${fmtCount(n, 'track')} to “${p.name}”`, { duration: 3600 });
+      else toast(`Already in “${p.name}”`);
+    });
+
     row.addEventListener('drop', async (e) => {
       e.preventDefault();
       row.classList.remove('is-drop');
@@ -370,6 +409,15 @@ function buildSidebar() {
       e.preventDefault();
       head.classList.remove('is-drop');
       if (dragId) await lib.movePlaylist(dragId, f.id);
+    });
+    /* Tracks dropped on a folder open it rather than being filed into it — a
+       folder holds playlists, not songs, and the useful answer to "I aimed at
+       the folder" is to show what is inside so the aim can be corrected. */
+    drag.acceptTracks(head, () => {
+      openFolders.add(f.id);
+      saveOpen();
+      paintPlaylists();
+      toast('Drop it on a playlist inside the folder');
     });
     return head;
   };
@@ -594,6 +642,31 @@ function announceImport(report) {
     toast(`Added ${report.added.toLocaleString()} ${report.added === 1 ? 'track' : 'tracks'}`);
   }
 
+  /* B7: and the ones that only appeared to be new. A rename of a folder used
+     to read as "added 400 tracks" with four hundred play counts silently gone;
+     saying so is how the listener knows it didn't happen. */
+  if (report.moved) {
+    toast(`${report.moved} ${report.moved === 1 ? 'file had' : 'files had'} moved · kept what you'd put on them`,
+      { duration: 6000 });
+  }
+
+  /* D7: and the page that exists to be read after an import like this one.
+   *
+   * "Needs attention" was added last pass and nothing in the app has ever
+   * mentioned it — the sidebar entry was the only thing that knew. The moment
+   * it is worth a line is exactly here: right after a run that brought in
+   * files with nothing in them. */
+  if (report.failed) {
+    const a = lib.attention();
+    const needing = a.untagged.length;
+    if (needing) {
+      toast(`${fmtCount(needing, 'track')} arrived with nothing in the file`, {
+        duration: 9000,
+        action: { label: 'Needs attention', onSelect: () => (location.hash = '#/attention') },
+      });
+    }
+  }
+
   /* I2: and what it could not read. A separate toast rather than a clause,
      because the two are different news and the second one is the one somebody
      may want to act on — it carries a way to see the list rather than a
@@ -795,7 +868,15 @@ function buildDropZone() {
     depth++; show();
   });
   addEventListener('dragover', (e) => { if (!overlay.hidden) e.preventDefault(); });
-  addEventListener('dragleave', () => { if (--depth <= 0) hide(); });
+  /* Only a drag that raised the counter may lower it.
+   *
+   * C1 put drags of Sonora's own rows and cards into the app, and those carry
+   * no files — so `dragenter` above ignores them while this fired on every one
+   * of their `dragleave`s and drove `depth` negative. The next real folder drag
+   * then showed the overlay and lost it again on the first boundary crossed.
+   * Guarding on the counter rather than on the event is enough, and keeps this
+   * indifferent to what other kinds of drag the app grows later. */
+  addEventListener('dragleave', () => { if (depth > 0 && --depth <= 0) hide(); });
   addEventListener('drop', async (e) => {
     if (overlay.hidden) return;
     e.preventDefault();
@@ -803,6 +884,55 @@ function buildDropZone() {
     const root = await lib.addDataTransfer(e.dataTransfer);
     if (root) toast(`Added ${root.name}`);
     else toast('No audio files in that drop');
+    depth = 0;
+  });
+}
+
+/**
+ * I4: warns once, in the app, when the browser is close to evicting the
+ * library — and only when a warning is actionable.
+ *
+ * Two conditions, both required. The storage has to be genuinely full (four
+ * fifths of the quota is where browsers begin evicting), and the origin has to
+ * be *unprotected* — with a persistence grant the browser has promised not to,
+ * and a warning would be a lie. A library of eleven tracks is not worth
+ * warning about either, however full the disk is.
+ */
+const STORAGE_WARNED = 'sonora:storage-warned';
+const WARN_EVERY = 7 * 24 * 3600 * 1000;
+
+async function checkStorage() {
+  if (lib.trackCount() < 50) return;
+  let last = 0;
+  try { last = parseInt(localStorage.getItem(STORAGE_WARNED) || '0', 10) || 0; } catch { /* private */ }
+  if (Date.now() - last < WARN_EVERY) return;
+
+  const [u, kept] = await Promise.all([db.usage(), db.persisted()]);
+  if (kept) return;                       // the browser has promised to keep it
+  if (!u || !u.quota) return;             // this browser does not say
+  if (u.used / u.quota < 0.8) return;
+
+  try { localStorage.setItem(STORAGE_WARNED, String(Date.now())); } catch { /* private */ }
+  const pct = Math.round((u.used / u.quota) * 100);
+  toast(`This browser's storage is ${pct}% full and your library is not protected`, {
+    duration: 14000,
+    action: {
+      label: 'Fix this',
+      onSelect: async () => {
+        const r = await db.requestPersist();
+        if (r.granted) {
+          toast('The browser will keep your library');
+          return;
+        }
+        /* Chromium decides from how the site is used rather than by asking, so
+           a refusal is a "not yet". The honest next move is the copy, which
+           needs nobody's permission. */
+        toast('The browser has not granted it yet — take a backup instead', {
+          duration: 9000,
+          action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
+        });
+      },
+    },
   });
 }
 
@@ -894,6 +1024,20 @@ function registerKeys() {
       run: () => { showShortcuts(); } });
   K({ id: 'search', group: 'Getting around', combo: '/', label: 'Search the library',
       run: () => { $('#search')?.focus(); } });
+  /* D6: and the other kind of search — inside what is already on screen.
+   *
+   * ⌘F overrides the browser's find-in-page, which is normally rude and here is
+   * the point: every long list in Sonora is virtualised, so the rows somebody
+   * is looking for are not in the document for the native find to find. This
+   * one can actually answer the question. Where the page has no filter the key
+   * is left alone and the browser keeps it. */
+  K({ id: 'find', group: 'Getting around', combo: 'Mod+F', label: 'Filter this page',
+      run: () => {
+        const f = activeFilter();
+        if (!f) return false;         // not ours: the browser keeps its find
+        f.focus();
+        return true;
+      } });
   /* The palette, not the search field. Cmd-K means "let me type what I want"
      everywhere else, and Sonora has forty actions that were previously only
      reachable by knowing where they lived. */
@@ -903,6 +1047,30 @@ function registerKeys() {
       run: () => { toggleQueuePane(); } });
   K({ id: 'stage', group: 'Getting around', combo: 'V', label: 'Immersive visualiser',
       run: () => { toggleStage(backdrop); } });
+  /* F5: and the turntable, from anywhere. It was a mode of a mode — open the
+     stage, then press D — and a record on a deck is the most legible thing
+     this application draws. */
+  /* G4: to the reference and back, which is one key because it is one action —
+     you are comparing, and a comparison you have to set up twice is a
+     comparison you stop making. */
+  K({ id: 'reference', group: 'Playback', combo: 'X', label: 'Compare against your reference',
+      active: () => !!player.referenceTrack(),
+      run: async () => {
+        const ref = player.referenceTrack();
+        if (!ref) { toast('No reference track — pick one from a track menu'); return; }
+        const on = player.onReference();
+        if (!(await player.toggleReference())) {
+          toast(on ? 'Nothing to go back to' : `Already on “${ref.title}”`);
+          return;
+        }
+        toast(on ? 'Back' : `Reference — “${ref.title}”`, { duration: 2400 });
+      } });
+  K({ id: 'deck', group: 'Getting around', combo: 'D', label: 'The turntable',
+      /* Explicitly, rather than by registration order: the stage registers the
+         same key for turning the record over once it is open, and which of the
+         two answers must not depend on which module happened to load first. */
+      active: () => !stageOpen(),
+      run: () => { showDeck(backdrop); } });
   K({ id: 'sound', group: 'Getting around', combo: 'E', label: 'The Sound page',
       run: () => { location.hash = '#/sound'; } });
   K({ id: 'escape', group: 'Getting around', combo: 'Escape', label: 'Close whatever is open',
@@ -1207,6 +1375,9 @@ async function boot() {
   buildSidebar();
   buildTopbar();
   buildDropZone();
+  // H4: every menu in the app opens on a long press as well as a right-click,
+  // without any of them knowing about it.
+  watchLongPress();
   const syncNotice = buildReconnectNotice();
   bindKeys();
 
@@ -1229,6 +1400,7 @@ async function boot() {
   document.addEventListener('sonora:redo', () => runUndo(true));
   document.addEventListener('sonora:theme', (e) => applyTheme(e.detail));
   document.addEventListener('sonora:stage', () => toggleStage(backdrop));
+  document.addEventListener('sonora:deck', () => showDeck(backdrop));
   document.addEventListener('sonora:setting', (e) => {
     if (e.detail.name === 'accent') applyAccent();
     if (e.detail.name === 'backdrop') backdrop?.setEnabled(e.detail.value);
@@ -1289,6 +1461,60 @@ async function boot() {
     : `Couldn't play “${t.title}”`, { duration: 4200 }));
   player.events.on('unsupported', (t) => toast(
     `No browser decodes ${formatName(t.name || '')} — “${t.title}” was skipped`, { duration: 4200 }));
+
+  /* E1: the queue ran out, and the app says so rather than simply stopping.
+   *
+   * One button, never automatic. The seed is `state.origin` — the artist page,
+   * the record, the shelf the queue came from — which has been recorded since
+   * the "from" tags landed and read back by nothing until now. Silence is a
+   * perfectly good answer, so the toast times out and takes the offer with it.
+   *
+   * A stop that was asked for gets no offer at all: somebody who set "stop at
+   * the end of this record" has already answered the question. */
+  player.events.on('queue-ended', ({ reason, origin }) => {
+    if (reason !== 'end') return;
+    const played = player.state.queue.slice();
+    const on = radio.continuation(origin, played);
+    if (!on || !on.tracks.length) return;
+    toast(`That's the end of the queue — keep going with ${on.label}?`, {
+      duration: 14000,
+      action: {
+        label: 'Keep playing',
+        onSelect: () => {
+          player.playTracks(on.tracks, 0, { type: 'radio', label: on.label });
+          toast(`Playing on — ${on.label}`);
+        },
+      },
+    });
+  });
+
+  /* I4: the browser is about to throw the library away.
+   *
+   * `usage()` and `persisted()` were read on the Settings page and nowhere
+   * else, which means the one warning that matters lived behind a door nobody
+   * opens until something has already gone wrong. It belongs in the app, once,
+   * at the moment it starts to matter — with the two buttons that actually fix
+   * it: ask the browser to keep it, and take a copy.
+   *
+   * Checked after the library has settled rather than at boot, and only when
+   * there is something to lose. Once a week at most: a warning that appears
+   * every launch is a warning people learn to dismiss. */
+  idle(() => checkStorage(), 4000);
+  /* I1: and the copy that happens without being asked, if one is due. Well
+     after everything else — it decodes the whole index and writes a file, and
+     the launch is not the moment for either. */
+  idle(() => {
+    backup.autoBackupIfDue().then((r) => {
+      if (r && r.ok) toast(`Backed up to ${r.name}`, { duration: 4200 });
+      else if (r && r.reason === 'permission') {
+        toast('Your backup folder needs permission again', {
+          duration: 9000,
+          action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
+        });
+      }
+    }).catch(() => {});
+  }, 9000);
+
   lib.events.on('art', applyAccent);
 
   await player.init();

@@ -234,6 +234,43 @@ async function handle(job) {
     if (typeof v === 'string' && v.trim()) track[k] = v.trim().slice(0, 200);
   }
 
+  /* B1: the comment, which is the one tag people actually write prose into —
+     a note about the pressing, where the rip came from, who this was for. It
+     gets a longer allowance than the credits for that reason, but still an
+     allowance: some encoders dump a whole cue sheet in here. */
+  if (typeof tags.comment === 'string' && tags.comment.trim()) {
+    track.comment = tags.comment.trim().slice(0, 1000);
+  }
+
+  /* B2: the tagged tempo. Kept apart from the measured one under its own name
+     so the two can disagree in public — a file that claims 128 and analyses at
+     127.6 is a file worth looking at, and averaging them hides that. */
+  const bpm = Math.round(parseFloat(tags.bpmTag));
+  if (isFinite(bpm) && bpm > 20 && bpm < 400) track.bpmTag = bpm;
+
+  /* B4: when the record came out, as opposed to when this copy was made. The
+     difference is the whole of a reissue, a remaster and a compilation, and it
+     is why a 1967 album sorts into 2014 without it. Only kept when it says
+     something the year doesn't. */
+  const orig = parseYear(tags.originalYear);
+  if (orig && orig !== track.year) track.originalYear = orig;
+
+  /* B3: the stars the file arrived with. A tag is a starting position — the
+     listener's own rating is written straight onto the track and a rescan does
+     not reach this line, because `handle` only runs for a file being imported.
+     Where they disagree, the person wins. */
+  const stars = Math.round(tags.rating);
+  if (isFinite(stars) && stars > 0) track.rating = Math.min(5, stars);
+
+  /* B6: MusicBrainz ids, if the tagger wrote them. Nothing in Sonora goes
+     looking them up — there is no network — but they are the one identifier
+     that survives a retag, a rename and a re-rip, which makes them the right
+     thing to match on when a library is merged or a file moves. */
+  for (const k of ['mbTrack', 'mbAlbum', 'mbArtist']) {
+    const v = tags[k];
+    if (typeof v === 'string' && v.length === 36) track[k] = v.toLowerCase();
+  }
+
   /* What the file is, as opposed to what it says it is.
    *
    * The reader already worked all of this out on its way to the duration and

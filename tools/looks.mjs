@@ -12,7 +12,7 @@
  *
  * So this asks a different question, in two ways.
  *
- * THE LINT is five rules about the gap between what the CSS says and what
+ * THE LINT is seven rules about the gap between what the CSS says and what
  * arrives on screen. Each one is a shape that a real defect took:
  *
  *   collapsed   a flex child squeezed below the height its own content needs.
@@ -29,6 +29,13 @@
  *               tracklist spilled onto.
  *   buried      an interactive control under the transport. Carried over from
  *               `layout.mjs`, which is where it was first caught.
+ *   small       H3: a tap target under 44 by 44, on a coarse-pointer sweep.
+ *               Nearly every control in the application, the first time it
+ *               ran — including a 19px record spine and a 20px scrubber.
+ *   faint       J3: text under WCAG's 4.5:1, or 3:1 where it is large.
+ *               Contrast had been measured once, by hand, on two tokens; this
+ *               measures every text node on every surface in both schemes,
+ *               which is the same walk the rules above already do.
  *
  * THE GOLDENS are the other half, because a lint can only find what somebody
  * has already been bitten by. Every surface is photographed and compared with
@@ -36,6 +43,17 @@
  * on screen fails the run and prints where. `--accept` blesses the current
  * state as the new truth, which is the only way to start and the right way to
  * take a deliberate change.
+ *
+ * J4: the goldens are committed, so the accepted appearance travels with the
+ * source rather than living on whichever machine last ran the suite. One
+ * caveat that follows from that and is worth knowing before you go hunting:
+ * a screenshot is not perfectly reproducible across machines — font hinting,
+ * GPU rasterisation and the exact Chromium build all move pixels — so a run on
+ * a different machine from the one that blessed them may disagree everywhere
+ * at once. That pattern is the tell. A real regression is one or two surfaces
+ * with a named region; a machine difference is all eighty at a fraction of a
+ * percent, and the answer to it is `--accept` on the machine you intend to
+ * work from, not a hunt through the CSS.
  *
  * Neither half needs a network, a service or a dependency the other tools do
  * not already have.
@@ -161,7 +179,7 @@ function comparePNG(a, b, tol = 12) {
 /* ------------------------------------------------------------------ lint */
 
 const LINT = () => {
-  const out = { collapsed: [], clipped: [], tiny: [], stacked: [], buried: [] };
+  const out = { collapsed: [], clipped: [], tiny: [], stacked: [], buried: [], small: [], faint: [] };
   const name = (e) => {
     const c = String(e.className?.baseVal ?? e.className ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
     return e.tagName.toLowerCase() + (c ? '.' + c : '') + (e.id ? '#' + e.id : '');
@@ -267,7 +285,11 @@ const LINT = () => {
       out.collapsed.push(`${path(e)} h=${r.height.toFixed(1)} needs ${e.scrollHeight}`);
     }
     const hasText = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
-    if (hasText) {
+    /* Text that exists only for a screen reader is not text on the screen.
+       `.sr-only` is a 1×1 clipped box by construction — measuring its font
+       against its height is measuring the wrong thing, and the rule that
+       catches unreadable type would report every live region in the app. */
+    if (hasText && !e.closest('.sr-only')) {
       const m = new DOMMatrixReadOnly(cs.transform);
       const scale = Math.min(Math.hypot(m.a, m.b) || 1, Math.hypot(m.c, m.d) || 1);
       const eff = parseFloat(cs.fontSize) * scale;
@@ -282,10 +304,32 @@ const LINT = () => {
 
   const leaves = all.filter((e) => {
     if (e.closest('.sprite, .menu, .dialog, .toast')) return false;
+    /* A face turned away from the viewer is not text on the screen.
+     *
+     * The back of a sleeve is drawn in the same place as the front and rotated
+     * out of view; its boxes are exactly where the front's are, so every one
+     * of them reads as an overlap. `aria-hidden` is already how the app says
+     * "this face is not currently the one you are looking at", which makes it
+     * the honest test rather than a special case about sleeves. */
+    if (e.closest('[aria-hidden="true"], .sr-only')) return false;
+    /* A control's own label sitting over the content it acts on is what a
+       control does. The flip and zoom buttons are drawn on the sleeve on
+       purpose; reporting them as an overlap is reporting the design. */
+    if (e.closest('button, .btn, .icon-btn')) return false;
     if (!/^(span|h1|h2|h3|h4|p|li|dd|dt|a|strong|em|label|small|time|b)$/.test(e.tagName.toLowerCase())) return false;
     if (e.children.length || !e.textContent.trim()) return false;
     const v = shown(e);
     if (!v || v.cs.position === 'fixed') return false;
+    /* An overlay covering the page is not two things overlapping.
+     *
+     * The stage and the queue pane are fixed layers drawn over whatever route
+     * is behind them, so every line of text on one reads as colliding with a
+     * line on the other. Checking the element's own position was enough while
+     * the overlays had no nested text; walking up for a fixed ancestor is what
+     * it always meant. */
+    for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (getComputedStyle(p).position === 'fixed') return false;
+    }
     return !!visible(e);
   }).map((e) => ({ e, r: visible(e) }));
   for (let i = 0; i < leaves.length; i++) {
@@ -315,6 +359,129 @@ const LINT = () => {
     }
   }
 
+  /* H3: hit targets, on a surface that is actually being touched.
+   *
+   * This suite already walks every interactive element on sixty surfaces and
+   * measures its box. One more rule turns "the phone layout is probably fine"
+   * into something that fails — which is the whole reason the suite exists.
+   *
+   * 44 by 44 is the figure both platform guidelines land on and roughly the
+   * contact patch of an adult fingertip. It is checked only where the pointer
+   * is coarse, because on a mouse a 24px button is not a problem and demanding
+   * 44 everywhere would make the desktop layout worse to satisfy a test.
+   *
+   * A link inside a run of prose is exempt: it is a word in a sentence, its
+   * height is the line height, and the fix for a small one is not to make the
+   * paragraph double-spaced. `data-small-ok` is the deliberate opt-out for the
+   * handful of controls that live inside something already finger-sized.
+   */
+  if (matchMedia('(pointer: coarse)').matches) {
+    const HIT = 44;
+    const TAPPABLE = 'button, a[href], input:not([type=hidden]), select, [role="slider"], [role="switch"], [role="tab"], [tabindex="0"]';
+    for (const e of document.querySelectorAll(TAPPABLE)) {
+      if (e.closest('.sprite, [hidden], .toast')) continue;
+      if (e.hasAttribute('data-small-ok') || e.closest('[data-small-ok]')) continue;
+      // A link in a paragraph is text. Anything laid out inline that is not a
+      // control is being read, not aimed at.
+      const cs = getComputedStyle(e);
+      if (e.tagName === 'A' && cs.display === 'inline') continue;
+      if (!shown(e)) continue;
+      /* On screen at all is checked against the clipped box; the *size* is the
+         element's own. A card half scrolled off the bottom is not a small
+         target, it is a scrolled one, and measuring the clipped rectangle
+         reported "322×12" for a control that is 322×418. */
+      if (!visible(e)) continue;
+      const r = e.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      if (r.width >= HIT && r.height >= HIT) continue;
+      out.small.push(`${name(e)} ${Math.round(r.width)}×${Math.round(r.height)}`);
+    }
+  }
+
+  /* J3: contrast, measured rather than remembered.
+   *
+   * It was fixed once, by hand, on two tokens — and nothing has re-checked
+   * them since, so the next regression arrives silently in a theme nobody was
+   * looking at. This suite already visits every surface in two schemes and
+   * already walks every element on each; computing the ratio for the text it
+   * finds is the same walk with arithmetic on the end.
+   *
+   * WCAG's 4.5:1 for body text and 3:1 for large text, which are the two
+   * numbers everybody argues about and nobody has a better answer than.
+   * "Large" is 24px, or 18.66px bold — the spec's own definition.
+   *
+   * The background is found by walking up until something is not transparent,
+   * which is what the eye does. It cannot see through an image or a gradient,
+   * so anything painted over one is skipped rather than guessed at: a wrong
+   * pass is worse than no reading, and a wrong *fail* would have somebody
+   * chasing a number that was never real.
+   */
+  const rgba = (v) => {
+    const m = String(v).match(/[\d.]+/g);
+    if (!m || m.length < 3) return null;
+    return { r: +m[0], g: +m[1], b: +m[2], a: m.length > 3 ? +m[3] : 1 };
+  };
+  const lin = (c) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+  const lum = (c) => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+  const over = (fg, bg) => ({
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1,
+  });
+
+  /** The colour actually behind an element, or null where it cannot be known. */
+  function behind(el) {
+    let acc = null;                       // layers between the text and the page
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.backgroundImage && cs.backgroundImage !== 'none') return null;
+      const c = rgba(cs.backgroundColor);
+      if (!c || !c.a) continue;
+      acc = acc ? over(acc, c) : c;
+      if (acc.a >= 0.999) return acc;
+    }
+    const root = rgba(getComputedStyle(document.documentElement).backgroundColor);
+    if (!root || !root.a) return null;
+    return acc ? over(acc, root) : root;
+  }
+
+  for (const e of all) {
+    /* Ornament and logotypes are out.
+     *
+     * `aria-hidden` is the app saying a thing carries no information — the
+     * numbers beside the nav items, the ticks on a meter — and a decorative
+     * mark set faint on purpose is not body text that has gone wrong.
+     * `data-logotype` is the one exemption WCAG grants by name: "text that is
+     * part of a logo or brand name has no contrast requirement". Both are
+     * narrow, both have to be written on the element, and neither should ever
+     * be reached for to quiet this rule about something somebody has to read. */
+    if (e.closest('.sprite, .sr-only, [aria-hidden="true"], [data-logotype]')) continue;
+    if (e.children.length) continue;                       // leaves only
+    const text = e.textContent.trim();
+    if (!text) continue;
+    const v = shown(e);
+    if (!v || !visible(e)) continue;
+
+    const fg = rgba(v.cs.color);
+    if (!fg) continue;
+    const bg = behind(e);
+    if (!bg) continue;                                     // over art, or a gradient
+
+    const opacity = parseFloat(v.cs.opacity);
+    const solid = over({ ...fg, a: fg.a * (isFinite(opacity) ? opacity : 1) }, bg);
+    const l1 = lum(solid), l2 = lum(bg);
+    const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+
+    const px = parseFloat(v.cs.fontSize);
+    const bold = parseInt(v.cs.fontWeight, 10) >= 700;
+    const large = px >= 24 || (bold && px >= 18.66);
+    const need = large ? 3 : 4.5;
+    if (ratio + 0.05 < need) {
+      out.faint.push(`${name(e)} ${ratio.toFixed(2)}:1 needs ${need} "${text.slice(0, 18)}"`);
+    }
+  }
+
   for (const k of Object.keys(out)) out[k] = [...new Set(out[k])].slice(0, 8);
   return out;
 };
@@ -329,10 +496,12 @@ const browser = await chromium.launch({
 const seenGolden = new Set();
 let shotCount = 0;
 
-async function sweep(scheme, width, height) {
+async function sweep(scheme, width, height, { touch = false } = {}) {
   const ctx = await browser.newContext({
     viewport: { width, height }, colorScheme: scheme, deviceScaleFactor: 1,
     reducedMotion: 'reduce',      // entrances mid-flight are not what is being photographed
+    // H3: a coarse pointer, so the hit-target rule has a surface to run on.
+    hasTouch: touch,
   });
   const page = await ctx.newPage();
   const errors = [];
@@ -340,6 +509,17 @@ async function sweep(scheme, width, height) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 
   await page.addInitScript(() => { delete window.showDirectoryPicker; delete window.showOpenFilePicker; });
+  /* The clock, pinned to an afternoon.
+   *
+   * Home greets by hour and the intro picks its line the same way, so a sweep
+   * that wrote its goldens in the morning disagrees with every sweep run after
+   * noon — for a reason that has nothing to do with what changed. Only
+   * `getHours` is pinned, and nothing else in the app reads it: the day log
+   * keys off the date, which stays real. */
+  await page.addInitScript(() => {
+    const real = Date.prototype.getHours;
+    Date.prototype.getHours = function () { return this === undefined ? real.call(this) : 14; };
+  });
   await page.goto('http://127.0.0.1:8123/index.html', { waitUntil: 'networkidle' });
   await page.waitForSelector('body.is-ready', { timeout: 30000 });
   await page.waitForSelector('#intro', { state: 'detached', timeout: 30000 });
@@ -347,7 +527,13 @@ async function sweep(scheme, width, height) {
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
     (async () => {
-      await page.locator('.side-foot .add-btn').click();
+      /* Whichever Add button this width actually shows. The phone layout hides
+         the one in the side rail and keeps the one in the topbar, so a sweep
+         that only knows about the first cannot import anything below 560px —
+         which is exactly the width the touch pass runs at. */
+      const side = page.locator('.side-foot .add-btn');
+      const top = page.locator('.topbar-add');
+      await (await side.isVisible() ? side : top).click();
       await page.locator('.menu-item', { hasText: 'Add a folder' }).click();
     })(),
   ]);
@@ -369,6 +555,17 @@ async function sweep(scheme, width, height) {
   await page.waitForFunction(() => !document.querySelector('.playerbar')?.classList.contains('is-playing'),
                              null, { timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(400);
+
+  /* Any toast still on screen is swept away before the sweep starts.
+   *
+   * A toast is transient by definition, so a golden that happens to contain
+   * one is a golden that depends on how long the run took to get here — and
+   * the day somebody adds a toast with a longer duration, thirty photographs
+   * disagree with the goldens for a reason that has nothing to do with what
+   * any of them are of. Observed: the import report's "needs attention" toast
+   * outlived the setup and printed itself across four pages. */
+  await page.evaluate(() => { for (const t of document.querySelectorAll('.toast')) t.remove(); });
+  await page.waitForTimeout(120);
 
   const tag = `${scheme}-${width}`;
 
@@ -528,6 +725,9 @@ async function sweep(scheme, width, height) {
 await sweep('dark', 1440, 900);
 await sweep('light', 1440, 900);
 await sweep('dark', 620, 900);
+// H3: one pass with a finger rather than a pointer. Same surfaces, same
+// goldens, plus the one rule that only means anything here.
+await sweep('dark', 390, 844, { touch: true });
 
 await browser.close();
 

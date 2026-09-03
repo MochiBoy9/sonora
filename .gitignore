@@ -4,9 +4,29 @@ node_modules/
 package.json
 package-lock.json
 
-# test artefacts
-shots/
+# Test artefacts.
+#
+# `shots/` and `shots-layout/` are reports — a picture of each step or each
+# width, useful to look at after a run and meaningless afterwards.
+#
+# `shots-looks/` is different and is *not* ignored: it is the accepted
+# appearance, the thing `tools/looks.mjs` compares against, and a regression
+# test whose truth exists only on the machine that last ran it cannot catch a
+# regression on anybody else's checkout (J4). Its `_diff/` subdirectory is per
+# run — what the app looks like *now* when something disagrees — and that part
+# stays ignored.
 shots-*/
+shots/
+# Re-included: git will not look inside a directory it has excluded, so the
+# directory itself has to be un-excluded before its contents are considered.
+!shots-looks/
+shots-looks/_diff/
+
+# Python bytecode. `make-testlib.py` is a script rather than a module, but
+# importing it to build a fixture library makes CPython write one of these
+# beside it — and one got committed that way.
+__pycache__/
+*.pyc
 
 # Windows shell metadata
 desktop.ini

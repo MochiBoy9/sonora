@@ -65,6 +65,20 @@
 
   --accent:      rgb(var(--accent-rgb));
   --accent-2:    rgb(var(--accent-2-rgb));
+  /* J3: the accent, as *ink*.
+   *
+   * `--accent` is a light: it glows, it draws rules and rims, and against a
+   * dark ground it also reads perfectly well as text. Against a light one it
+   * does not — an accent chosen to shine on black is a pale cyan on white, and
+   * the contrast pass found it at 2.02:1 on a dialog title and 2.18:1 on every
+   * selected segment, which is to say the *chosen* state was the least legible
+   * thing on the page.
+   *
+   * So text gets its own token. Here it is the accent itself, unchanged;
+   * in the light scheme it is the same hue taken down until it clears 4.5:1
+   * against every surface anything accented is ever set on — including the
+   * accent's own 16% tint, which is the hardest of them. */
+  --accent-ink:  rgb(var(--accent-rgb));
   --accent-soft: rgb(var(--accent-rgb) / .14);
   --accent-line: rgb(var(--accent-rgb) / .42);
   --accent-glow: rgb(var(--accent-rgb) / calc(.40 * var(--glow)));
@@ -180,6 +194,7 @@
 
   --accent-rgb:   0 137 179;
   --accent-2-rgb: 30 96 214;
+  --accent-ink:   #00698a;
 
   --sh-1: 0 1px 0 rgb(12 40 70 / .1);
   --sh-2: 0 12px 26px -16px rgb(12 40 70 / .4);
@@ -213,6 +228,11 @@
 
     --accent-rgb:   0 137 179;
     --accent-2-rgb: 30 96 214;
+    /* 4.8:1 on the accent's own tint over the segmented control's ground,
+       5.0:1 on a dialog's glass, 6.2:1 on white — the three surfaces accented
+       text is actually set on, measured rather than guessed. See the note in
+       the dark scheme for why text does not use `--accent` here. */
+    --accent-ink:   #00698a;
 
     --sh-1: 0 1px 0 rgb(12 40 70 / .1);
     --sh-2: 0 12px 26px -16px rgb(12 40 70 / .4);

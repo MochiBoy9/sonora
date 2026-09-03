@@ -100,7 +100,7 @@ body.is-ready .app { opacity: 1; }
   position: relative;
   width: 34px; height: 34px;
   display: grid; place-items: center;
-  color: var(--accent);
+  color: var(--accent-ink);
   background: rgb(var(--accent-rgb) / .1);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
   --k: var(--cut-sm);
@@ -111,7 +111,7 @@ body.is-ready .app { opacity: 1; }
 .brand:hover .brand-mark { background: rgb(var(--accent-rgb) / .2); }
 .brand-mark .ico { width: 17px; height: 17px; }
 .brand-name { font-family: var(--mono); letter-spacing: .16em; text-transform: uppercase; font-size: calc(13px * var(--scale)); }
-.brand-name b { font-weight: 600; color: var(--accent); }
+.brand-name b { font-weight: 600; color: var(--accent-ink); }
 
 .nav { position: relative; display: flex; flex-direction: column; }
 
@@ -149,8 +149,8 @@ body.is-ready .app { opacity: 1; }
 }
 .nav-item:hover { color: var(--text); background: var(--surface-hi); }
 .nav-item.is-active { color: var(--text); background: transparent; }
-.nav-item.is-active .nav-ico { color: var(--accent); }
-.nav-item.is-active .nav-num { color: var(--accent); opacity: 1; }
+.nav-item.is-active .nav-ico { color: var(--accent-ink); }
+.nav-item.is-active .nav-num { color: var(--accent-ink); opacity: 1; }
 
 /* Every destination is numbered, like channels on a desk. */
 .nav-num {
@@ -200,7 +200,7 @@ body.is-ready .app { opacity: 1; }
   transition: background var(--dur-1) linear, color var(--dur-1) linear, border-color var(--dur-1) linear;
 }
 .side-playlist:hover { background: var(--surface-hi); color: var(--text); border-left-color: var(--line-3); }
-.side-playlist.is-active { color: var(--accent); background: rgb(var(--accent-rgb) / .09); border-left-color: var(--accent); }
+.side-playlist.is-active { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .09); border-left-color: var(--accent-ink); }
 .side-playlist-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-playlist-count { font-family: var(--mono); color: var(--text-3); font-size: calc(11px * var(--scale)); }
 .side-empty { padding: 4px 10px; color: var(--text-3); font-size: calc(12.5px * var(--scale)); }
@@ -276,7 +276,7 @@ body.is-ready .app { opacity: 1; }
   white-space: nowrap;
   padding-left: 4px;
 }
-.route-tag b { color: var(--accent); font-weight: 500; }
+.route-tag b { color: var(--accent-ink); font-weight: 500; }
 
 .topbar-nav { display: flex; gap: 2px; }
 
@@ -336,7 +336,7 @@ body.is-ready .app { opacity: 1; }
   transition: color var(--dur-1) linear;
 }
 .pane-tab:hover { color: var(--text-2); }
-.pane-tab.is-on { color: var(--accent); }
+.pane-tab.is-on { color: var(--accent-ink); }
 .pane-tab.is-on::after {
   content: "";
   position: absolute;
@@ -393,7 +393,7 @@ body.is-ready .app { opacity: 1; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   transition: color var(--dur-1) linear;
 }
-.pb-title:hover { color: var(--accent); }
+.pb-title:hover { color: var(--accent-ink); }
 
 .pb-artist {
   color: var(--text-3);
@@ -435,7 +435,7 @@ body.is-ready .app { opacity: 1; }
 
 .playerbar.shuffle-on .pb-shuffle,
 .playerbar[data-repeat="all"] .pb-repeat,
-.playerbar[data-repeat="one"] .pb-repeat { color: var(--accent); }
+.playerbar[data-repeat="one"] .pb-repeat { color: var(--accent-ink); }
 
 .playerbar.shuffle-on .pb-shuffle::after,
 .playerbar[data-repeat="all"] .pb-repeat::after,
@@ -476,7 +476,7 @@ body.is-ready .app { opacity: 1; }
 
 /* Same swap as the row star, so the mark reads the same in both places. */
 .pb-fav [href$="star-fill"] { display: none; }
-.playerbar.is-fav .pb-fav { color: var(--accent); }
+.playerbar.is-fav .pb-fav { color: var(--accent-ink); }
 .playerbar.is-fav .pb-fav [href$="star"] { display: none; }
 .playerbar.is-fav .pb-fav [href$="star-fill"] { display: block; }
 
@@ -586,7 +586,7 @@ body.is-ready .app { opacity: 1; }
   .nav { flex-direction: row; width: auto; flex: 1 1 auto; }
   .nav-item { flex: 1 1 0; min-width: 52px; height: 100%; }
   .nav-pill { display: none; }
-  .nav-item.is-on { color: var(--accent); background: rgb(var(--accent-rgb) / .10); }
+  .nav-item.is-on { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .10); }
 
   .side-foot {
     flex-direction: row;
@@ -804,4 +804,27 @@ body.is-ready .app { opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
   .side-folder-tw { transition: none; }
+}
+
+/* H2: the tap target that opens the now playing screen.
+ *
+ * Absent on a desktop, where the transport's own links go to the album and the
+ * artist and a layer over them would take both away. On a phone those links
+ * are the wrong size for a finger anyway, and "the thing that is playing" is
+ * one target rather than two. */
+.pb-open { display: none; }
+@media (max-width: 560px) {
+  .pb-now { position: relative; }
+  .pb-open {
+    display: block;
+    position: absolute;
+    inset: 0;
+    background: none;
+    border: 0;
+    padding: 0;
+    /* Above the titles it covers, below the favourite button beside them —
+       which stays its own target because it is a different thing to do. */
+    z-index: 1;
+  }
+  .pb-now .pb-fav { position: relative; z-index: 2; }
 }

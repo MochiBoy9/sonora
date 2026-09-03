@@ -83,7 +83,7 @@
 .pb-play > .ico,
 .stage-play > .ico { grid-area: 1 / 1; }
 
-.icon-btn:hover { color: var(--accent); background: rgb(var(--accent-rgb) / .1); }
+.icon-btn:hover { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .1); }
 .icon-btn:active { transform: scale(.92); }
 .icon-btn.sm { width: 24px; height: 24px; }
 .icon-btn.sm .ico { width: 14px; height: 14px; }
@@ -99,7 +99,7 @@
   border-bottom: var(--hair) solid transparent;
   transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.link-btn:hover { color: var(--accent); border-bottom-color: var(--accent-line); }
+.link-btn:hover { color: var(--accent-ink); border-bottom-color: var(--accent-line); }
 
 /* The play trigger on artwork and headers: a chamfered block, not a pill. */
 .fab {
@@ -222,7 +222,7 @@
   display: none;
   place-items: center;
   width: 100%; height: 100%;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .trow-play .ico { width: 13px; height: 13px; stroke: none; fill: currentColor; }
 .trow:hover .trow-index .n { opacity: 0; }
@@ -263,13 +263,13 @@
 .trow-fav { opacity: 0; transition: opacity var(--dur-1) linear, color var(--dur-1) linear; }
 .trow-fav [href$="star-fill"] { display: none; }
 .trow:hover .trow-fav, .trow-fav:focus-visible { opacity: 1; }
-.trow.is-fav .trow-fav { opacity: 1; color: var(--accent); }
+.trow.is-fav .trow-fav { opacity: 1; color: var(--accent-ink); }
 .trow.is-fav .trow-fav [href$="star"] { display: none; }
 .trow.is-fav .trow-fav [href$="star-fill"] { display: block; }
 
 .trow.is-playing { background: linear-gradient(90deg, rgb(var(--accent-rgb) / .1), transparent 70%); }
 .trow.is-playing::before { transform: scaleY(1); box-shadow: 0 0 12px 0 var(--accent-glow); }
-.trow.is-playing .trow-title { color: var(--accent); }
+.trow.is-playing .trow-title { color: var(--accent-ink); }
 .trow.is-playing .trow-index .n { display: none; }
 .trow.is-missing { opacity: .4; }
 .trow.is-missing .trow-title::after { content: " · OFFLINE"; font-family: var(--mono); font-size: calc(9.5px * var(--scale)); letter-spacing: .12em; color: var(--warn); }
@@ -329,7 +329,7 @@
   transition: color var(--dur-1) linear;
 }
 .thead .sortable:hover { color: var(--text-2); }
-.thead .sortable.is-active { color: var(--accent); }
+.thead .sortable.is-active { color: var(--accent-ink); }
 .thead .sortable.is-active::after { content: " ▲"; font-size: calc(7px * var(--scale)); vertical-align: 2px; }
 .thead .sortable.is-active[data-dir="desc"]::after { content: " ▼"; }
 .thead .ico { width: 13px; height: 13px; }
@@ -537,7 +537,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   font-family: var(--mono);
   font-size: calc(10.5px * var(--scale));
   font-variant-numeric: tabular-nums;
-  color: var(--accent);
+  color: var(--accent-ink);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-1) linear;
@@ -587,7 +587,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   background: rgb(var(--surface-2-rgb) / .8);
   box-shadow: inset 0 0 0 var(--hair) var(--accent);
 }
-.search:focus-within .search-ico { color: var(--accent); }
+.search:focus-within .search-ico { color: var(--accent-ink); }
 .search-input::-webkit-search-cancel-button { -webkit-appearance: none; }
 
 /* The import readout: a live instrument line, not a spinner in a pill. */
@@ -598,7 +598,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   padding: 5px 12px;
   background: rgb(var(--accent-rgb) / .08);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-family: var(--mono);
   font-size: calc(10.5px * var(--scale));
   letter-spacing: .1em;
@@ -648,7 +648,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   border-left: 2px solid transparent;
   transition: background var(--dur-1) linear, color var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.menu-item:hover { background: rgb(var(--accent-rgb) / .1); color: var(--text); border-left-color: var(--accent); }
+.menu-item:hover { background: rgb(var(--accent-rgb) / .1); color: var(--text); border-left-color: var(--accent-ink); }
 .menu-item .ico { width: 15px; height: 15px; opacity: .8; }
 .menu-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-hint { font-family: var(--mono); color: var(--text-3); font-size: calc(10px * var(--scale)); }
@@ -674,7 +674,14 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   position: relative;
   width: 100%;
   padding: 24px;
-  background: var(--glass-2);
+  /* Opaque, where every other panel in the application is glass.
+   *
+   * A modal is the one surface whose legibility must not depend on what
+   * happens to be behind it: at 88% over a 68% scrim the dialog's own ground
+   * moved with the page, and the contrast pass caught the title sitting at
+   * 4.41:1 on one route and comfortably above it on another. The scrim below
+   * still blurs the page, which is where the effect was doing its work. */
+  background: var(--surface);
   box-shadow: var(--sh-3), inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
@@ -696,7 +703,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   font-weight: 500;
   letter-spacing: .18em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-ink);
   margin-bottom: 16px;
 }
 .dialog-body { margin-bottom: 22px; color: var(--text-2); font-size: calc(13.5px * var(--scale)); }
@@ -719,7 +726,12 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 }
 /* The same action under a second spelling — dimmer, because it is the same
    row said twice and should not read as two things you have to learn. */
-.keys-alt { opacity: .6; }
+/* The second spelling of a shortcut — ⌘Y beside ⌘⇧Z.
+   It reads as an alternative because it is set in the quiet ink and italic,
+   not because it is faded: `opacity: .6` measured 4.04:1 in dark and 2.47:1 in
+   light, which is a label somebody has to read set below the line. Fading is
+   how nearly every contrast failure in this pass happened. */
+.keys-alt { color: var(--text-3); font-style: italic; }
 
 .keys-group {
   font-family: var(--mono);
@@ -727,7 +739,11 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   font-weight: 500;
   letter-spacing: .2em;
   text-transform: uppercase;
-  color: var(--text-3);
+  /* A heading, in the middle ink rather than the quiet one. The dialog's glass
+     is a little darker than the page it floats over, which put `--text-3` at
+     4.03:1 here — and a section heading has less business being the faintest
+     thing on a panel than almost anything else on it. */
+  color: var(--text-2);
   margin: 0 0 10px;
   padding-bottom: 6px;
   border-bottom: var(--hair) solid var(--line);
@@ -792,7 +808,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   border-bottom: var(--hair) solid var(--line);
   transition: background var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.pick-item:hover { background: rgb(var(--accent-rgb) / .1); border-left-color: var(--accent); }
+.pick-item:hover { background: rgb(var(--accent-rgb) / .1); border-left-color: var(--accent-ink); }
 .pick-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick-count { font-family: var(--mono); color: var(--text-3); font-size: calc(11px * var(--scale)); }
 
@@ -860,7 +876,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 }
 .toast-action {
   font-family: var(--mono);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-weight: 500;
   font-size: calc(10.5px * var(--scale));
   letter-spacing: .14em;
@@ -951,7 +967,16 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   transition: color var(--dur-1) linear, background var(--dur-2) var(--ease);
 }
 .seg:hover { color: var(--text-2); }
-.seg.is-on { background: rgb(var(--accent-rgb) / .16); color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+.seg.is-on { background: rgb(var(--accent-rgb) / .16); color: var(--accent-ink); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+
+/* A2: a second row of choices next to the first has to read as subordinate to
+   it — what the chart is grouped by is the question, and over what period is a
+   qualifier on it. Smaller and quieter says that without a label.
+   Its own class rather than `.segmented.sm`: `sm` was already in use on the
+   Sound page's shifter picker, and styling it here silently shortened a panel
+   on a page this change has nothing to do with. */
+.segmented.quiet { padding: 2px; }
+.segmented.quiet .seg { padding: 4px 9px; font-size: calc(9px * var(--scale)); letter-spacing: .1em; }
 
 .chip {
   display: inline-flex;
@@ -1052,9 +1077,9 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   flex: none;
   background: var(--text-3);
 }
-.link-state[data-phase="connecting"] { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+.link-state[data-phase="connecting"] { color: var(--accent-ink); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
 .link-state[data-phase="connecting"] .link-dot { background: var(--accent); animation: link-blink 900ms steps(2) infinite; }
-.link-state[data-phase="resumed"] { color: var(--accent); }
+.link-state[data-phase="resumed"] { color: var(--accent-ink); }
 .link-state[data-phase="resumed"] .link-dot { background: var(--accent); box-shadow: 0 0 10px 0 var(--accent-glow); }
 .link-state[data-phase="failed"] { color: var(--warn); box-shadow: inset 0 0 0 var(--hair) rgb(255 200 87 / .4); }
 .link-state[data-phase="failed"] .link-dot { background: var(--warn); }
@@ -1076,10 +1101,10 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   font-size: calc(9px * var(--scale));
   font-weight: 600;
   letter-spacing: .04em;
-  color: var(--accent);
+  color: var(--accent-ink);
   font-variant-numeric: tabular-nums;
 }
-.playerbar.sleep-on .pb-sleep { color: var(--accent); }
+.playerbar.sleep-on .pb-sleep { color: var(--accent-ink); }
 .playerbar.sleep-on .pb-sleep .ico { opacity: .28; }
 .playerbar.sleep-on .pb-sleep-left { display: grid; }
 
@@ -1125,7 +1150,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   font-weight: 500;
   letter-spacing: .14em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-ink);
   white-space: nowrap;
   padding-right: 4px;
   font-variant-numeric: tabular-nums;
@@ -1166,7 +1191,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 }
 /* A field carrying an override is marked, so it is obvious which values came
    from the file and which came from you. */
-.edit-field.is-edited .edit-label { color: var(--accent); }
+.edit-field.is-edited .edit-label { color: var(--accent-ink); }
 .edit-field.is-edited .input { box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
 
 .edit-revert {
@@ -1178,7 +1203,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   border-bottom: var(--hair) solid transparent;
   transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.edit-revert:hover { color: var(--accent); border-bottom-color: var(--accent-line); }
+.edit-revert:hover { color: var(--accent-ink); border-bottom-color: var(--accent-line); }
 
 .edit-note {
   margin-top: 2px;
@@ -1217,7 +1242,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   font-variant-numeric: tabular-nums;
 }
 .trow-dr.is-squashed { color: var(--warn); }
-.trow-dr.is-open { color: var(--accent); }
+.trow-dr.is-open { color: var(--accent-ink); }
 .thead .trow-dr { font-size: calc(10px * var(--scale)); }
 
 @media (max-width: 860px) { .trow-dr { display: none; } }
@@ -1246,6 +1271,56 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
    when there is only room for one. */
 @media (max-width: 1180px) { .trow-played { display: none; } }
 @media (max-width: 1040px) { .trow-plays { display: none; } }
+
+/* B3: the stars.
+ *
+ * Drawn at rest as five faint outlines rather than as nothing, because a
+ * column that is invisible until you hover is a column nobody discovers. The
+ * unrated state is dim enough to read as "empty" from a metre away and solid
+ * enough to be a target. */
+.trow-rating { flex: none; width: 88px; }
+.rating {
+  display: inline-flex;
+  gap: 1px;
+  border-radius: var(--r-sm);
+  outline-offset: 2px;
+}
+.rating-star {
+  width: 16px; height: 20px;
+  display: grid; place-items: center;
+  padding: 0; border: 0; background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: .45;
+  transition: opacity .12s ease, color .12s ease, transform .12s var(--ease-out);
+}
+/* Both glyphs occupy the same cell. Hiding the `<use>` stops it painting but
+   leaves the `<svg>` its box, so without this the star sits in the top half of
+   a button twice as tall as it looks — which is what the layout suite caught. */
+.rating-star > .ico { grid-area: 1 / 1; width: 13px; height: 13px; }
+.rating-star [href$="star-fill"] { display: none; }
+.rating-star.is-on {
+  color: var(--accent-ink);
+  opacity: 1;
+}
+.rating-star.is-on [href$="star"] { display: none; }
+.rating-star.is-on [href$="star-fill"] { display: block; }
+.rating:hover .rating-star { opacity: .8; }
+.rating-star:hover { transform: scale(1.18); opacity: 1; }
+/* Hovering a star lights everything to its left, the way every rating control
+   since the beginning has — done with a sibling selector rather than script so
+   it costs nothing on a list that recycles its rows. */
+.rating:hover .rating-star:hover ~ .rating-star { opacity: .45; color: var(--text-3); }
+.rating:hover .rating-star:hover ~ .rating-star.is-on [href$="star-fill"] { display: none; }
+.rating:hover .rating-star:hover ~ .rating-star.is-on [href$="star"] { display: block; }
+.thead .trow-rating { width: 88px; }
+
+@media (max-width: 1120px) { .trow-rating { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rating-star { transition: none; }
+  .rating-star:hover { transform: none; }
+}
 
 /* Present to a screen reader, absent to everything else. Used for the live
    region that announces a queue row moving, which is not a visible event to
@@ -1299,7 +1374,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   color: var(--text-2);
   transition: color var(--dur-1) linear;
 }
-.az-key:hover { color: var(--accent); }
+.az-key:hover { color: var(--accent-ink); }
 .az-key:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 1px; }
 /* Letters the collection has nothing under stay drawn and go quiet: the gaps
    are information, and a rail that changes shape as the library grows is one
@@ -1346,7 +1421,7 @@ select.input { padding-right: 8px; }
 .rules-count {
   font-family: var(--mono);
   font-size: calc(11.5px * var(--scale));
-  color: var(--accent);
+  color: var(--accent-ink);
   line-height: 1.5;
   padding-left: 12px;
   border-left: 2px solid var(--accent-line);
@@ -1454,7 +1529,7 @@ select.input { padding-right: 8px; }
 .pal-row:hover { background: rgb(var(--accent-rgb) / .09); }
 
 .pal-row-ico { flex: none; display: grid; place-items: center; color: var(--text-3); }
-.pal-row.is-active .pal-row-ico { color: var(--accent); }
+.pal-row.is-active .pal-row-ico { color: var(--accent-ink); }
 .pal-row-ico .ico { width: 15px; height: 15px; }
 
 .pal-row-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
@@ -1503,7 +1578,7 @@ select.input { padding-right: 8px; }
 .pal-hint code {
   font-family: var(--mono);
   font-size: calc(10.5px * var(--scale));
-  color: var(--accent);
+  color: var(--accent-ink);
   background: rgb(var(--accent-rgb) / .1);
   padding: 1px 6px;
 }
@@ -1552,7 +1627,7 @@ select.input { padding-right: 8px; }
   width: 26px; height: 26px;
   margin: -13px 0 0 -13px;
   border: 2px solid rgb(var(--accent-rgb) / .3);
-  border-top-color: var(--accent);
+  border-top-color: var(--accent-ink);
   border-radius: 50%;
   animation: cover-spin .7s linear infinite;
   z-index: 3;
@@ -1600,7 +1675,7 @@ select.input { padding-right: 8px; }
 .rack-pick-row.is-on { background: rgb(var(--accent-rgb) / .14); color: var(--text); }
 .rack-pick-name { flex: 1 1 auto; min-width: 0; font-size: calc(14px * var(--scale)); }
 .rack-pick-note { color: var(--text-3); font-size: calc(11.5px * var(--scale)); }
-.rack-pick-mark { flex: none; width: 15px; display: grid; place-items: center; color: var(--accent); }
+.rack-pick-mark { flex: none; width: 15px; display: grid; place-items: center; color: var(--accent-ink); }
 .rack-pick-mark .ico { width: 14px; height: 14px; }
 
 /* The line on the Sound page saying the chain is not yours right now. Reads
@@ -1625,12 +1700,12 @@ select.input { padding-right: 8px; }
 
 /* A4: a keycap you can press to change. */
 .keys-edit { cursor: pointer; border-radius: 4px; }
-.keys-edit:hover kbd { border-color: var(--accent-line); color: var(--accent); }
+.keys-edit:hover kbd { border-color: var(--accent-line); color: var(--accent-ink); }
 .keys-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Armed: the next keystroke becomes the binding, so it says so where the
    keycap was rather than somewhere else on the sheet. */
 .keys-edit.is-capturing {
-  color: var(--accent);
+  color: var(--accent-ink);
   font-family: var(--mono);
   font-size: calc(11px * var(--scale));
   letter-spacing: .06em;
@@ -1678,3 +1753,170 @@ select.input { padding-right: 8px; }
 /* The backup preview's list of what a file would bring. */
 .backup-list { margin: 8px 0 12px 18px; padding: 0; }
 .backup-list li { margin: 3px 0; color: var(--text-2); font-size: calc(13px * var(--scale)); }
+
+/* C1/C2/C3: direct manipulation.
+ *
+ * A drop target has to say it is one *before* the drop, which is the whole
+ * difficulty with drag and drop as an interface — the affordance is invisible
+ * until you commit. `is-dragging-tracks` on the root lights every target the
+ * moment a drag starts, so the answer to "where can this go" is on screen
+ * while it can still be acted on. */
+.trow.is-dragging, .card.is-dragging { opacity: .4; }
+
+html.is-dragging-tracks .side-playlist:not(.is-smart),
+html.is-dragging-tracks .nav-item[data-route="favourites"] {
+  outline: 1px dashed rgb(var(--accent-rgb) / .38);
+  outline-offset: -2px;
+  border-radius: var(--r-sm);
+}
+html.is-dragging-tracks .side-playlist.is-smart { opacity: .45; }
+
+.is-drop-tracks {
+  background: rgb(var(--accent-rgb) / .16) !important;
+  outline: 1px solid var(--accent) !important;
+  outline-offset: -2px;
+}
+
+/* The count that follows the pointer when more than one thing is moving. Off
+   screen at the moment it is captured, so it never paints in place. */
+.drag-ghost {
+  position: fixed;
+  top: -200px; left: -200px;
+  min-width: 36px; height: 36px;
+  display: grid; place-items: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: var(--shadow-2);
+  pointer-events: none;
+}
+
+/* E3: where the good bit starts.
+ *
+ * A hairline on the scrubber, over the waveform it belongs to. Deliberately
+ * quiet — it is a thing you notice coming rather than a control competing with
+ * the playhead — and it widens on hover of the bar so it can be aimed at. */
+.seek-hook {
+  position: absolute;
+  /* The track clips its children, so this is inset rather than overhanging —
+     an overhang would simply be cut off and the mark would look ragged. */
+  top: 0; bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  opacity: .45;
+  border-radius: 1px;
+  pointer-events: none;
+  transition: opacity var(--dur-1) linear, box-shadow var(--dur-1) linear;
+}
+.seek:hover .seek-hook, .seek.is-active .seek-hook {
+  opacity: .95;
+  box-shadow: 0 0 6px 0 var(--accent-glow);
+}
+
+/* E3: the good-bit button on a row, which appears on hover like its
+   neighbours and only exists on tracks that have one. */
+.trow-hook { opacity: 0; transition: opacity var(--dur-1) linear, color var(--dur-1) linear; }
+.trow:hover .trow-hook, .trow-hook:focus-visible { opacity: 1; }
+.trow-hook:hover { color: var(--accent-ink); }
+@media (hover: none) {
+  .trow-hook { opacity: 1; }
+}
+
+/* A plain determinate progress bar, for work that takes long enough to watch.
+   Scaled rather than sized, so the fill costs no layout on a bar that updates
+   thirty times a second. */
+.progress {
+  position: relative;
+  height: 4px;
+  margin: 10px 0 6px;
+  background: rgb(var(--bg-rgb) / .7);
+  box-shadow: inset 0 0 0 var(--hair) var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  background: var(--accent);
+  transition: transform .18s linear;
+}
+@media (prefers-reduced-motion: reduce) { .progress-fill { transition: none; } }
+
+/* ------------------------------------------------------------------ H3
+ *
+ * Hit targets, where the pointer is a finger.
+ *
+ * 44 by 44 is what both platform guidelines land on and roughly the contact
+ * patch of an adult fingertip, and `tools/looks.mjs` now fails a sweep that
+ * has anything smaller on a coarse-pointer surface. This is the answer to it.
+ *
+ * Only under `(pointer: coarse)`. A 30px button under a mouse is not a
+ * problem, and growing every control to 44 everywhere would make the desktop
+ * layout worse to satisfy a rule that was never about it. The two are
+ * different instruments and this is the only place they need to disagree.
+ *
+ * Where a control is small *by design* — a switch track, a slider — the box
+ * grows and the painted part does not: the target is the finger's business,
+ * the drawing is the eye's, and they were only ever the same thing by
+ * accident.
+ */
+@media (pointer: coarse) {
+  .btn, .btn.sm { min-height: 44px; }
+  .icon-btn { width: 44px; height: 44px; }
+  .icon-btn.sm { width: 44px; height: 44px; }
+  .seg { min-height: 44px; padding-top: 0; padding-bottom: 0; }
+  .segmented.quiet .seg { min-height: 44px; }
+  .chip, .filter-chip { min-height: 44px; }
+  .input, .search-input { min-height: 44px; }
+  .link-btn { min-height: 44px; display: inline-flex; align-items: center; }
+  .preset { min-height: 44px; }
+  .rating-star { width: 30px; height: 44px; }
+
+  /* The switch keeps its 44×22 pill and gains the rest of its target as
+     padding the eye never sees. `background-clip: content-box` is what stops
+     the pill growing with the box. */
+  .switch {
+    height: 44px;
+    padding: 11px 0;
+    background-clip: content-box;
+    box-shadow: none;
+  }
+  .switch::before {
+    content: "";
+    position: absolute;
+    inset: 11px 0;
+    box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+    clip-path: var(--nick-ne);
+    border-radius: var(--radius);
+    pointer-events: none;
+  }
+  .switch.is-on::before { box-shadow: inset 0 0 0 var(--hair) var(--accent); }
+  .switch-knob { top: 14px; }
+
+  /* A range input's track is drawn by the browser inside whatever box it is
+     given and stays centred, so the box can grow without the slider getting
+     visually fatter. */
+  input[type="range"] { min-height: 44px; }
+
+  /* An icon button whose label is hidden at this width is still a button.
+     `.btn` sets a horizontal padding for a label that is no longer there. */
+  .btn { min-width: 44px; }
+  .pb-play { width: 48px; height: 48px; }
+  .trow-play { width: 44px; height: 44px; }
+  .sortable { min-height: 44px; }
+  .pane-tab { min-height: 44px; }
+
+  /* The scrubber is a slider you drag with a thumb, and 20px of it is the
+     hardest target in the application to hit. The bar it paints is drawn by
+     `.seek-track` inside, so the box grows and the hairline does not. */
+  .seek { min-height: 44px; display: flex; align-items: center; }
+  /* A shortcut's key, which is pressed to rebind it. */
+  .keys-edit { min-height: 44px; display: inline-flex; align-items: center; }
+}

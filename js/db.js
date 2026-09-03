@@ -6,7 +6,87 @@
  * filesystem at all; rescanning happens afterwards, in the background.
  */
 
-const NAME = 'sonora';
+/* ------------------------------------------------------------------ I3
+ *
+ * More than one library.
+ *
+ * One index, one set of settings and one listening history per browser
+ * profile, which is fine until two people share a machine — or until one
+ * person wants their own records kept apart from the ones on the house
+ * speakers. Everything Sonora stores goes through this file, so a library is
+ * exactly one IndexedDB database and switching is choosing a different name.
+ *
+ * The list of them lives in `localStorage` rather than in a database, because
+ * it has to be readable before any database is opened — a chicken-and-egg the
+ * other way round would need a database to find out which database to open.
+ *
+ * Switching reloads. The whole application is built from one library at boot —
+ * the index, the roots, the racks, the day log — and swapping it underneath a
+ * running app would mean re-initialising every module in the right order for
+ * no benefit over a reload that takes half a second.
+ */
+const LIBRARY_KEY = 'sonora:library';
+const LIBRARY_LIST = 'sonora:libraries';
+const BASE = 'sonora';
+
+/** The library in use, as an id. The empty string is the original one. */
+export function activeLibrary() {
+  try { return localStorage.getItem(LIBRARY_KEY) || ''; } catch { return ''; }
+}
+
+/** Every library this browser knows about, the original one first. */
+export function libraries() {
+  let extra = [];
+  try { extra = JSON.parse(localStorage.getItem(LIBRARY_LIST) || '[]'); } catch { extra = []; }
+  if (!Array.isArray(extra)) extra = [];
+  return [{ id: '', name: 'Main library' }].concat(
+    extra.filter((l) => l && typeof l.id === 'string' && l.id && typeof l.name === 'string'));
+}
+
+/** Adds one and returns it. Does not switch to it. */
+export function addLibrary(name) {
+  const id = 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const list = libraries().slice(1).concat([{ id, name: String(name || 'Library').slice(0, 60) }]);
+  try { localStorage.setItem(LIBRARY_LIST, JSON.stringify(list)); } catch { /* private */ }
+  return { id, name };
+}
+
+export function renameLibrary(id, name) {
+  if (!id) return;
+  const list = libraries().slice(1).map((l) => (l.id === id ? { ...l, name: String(name).slice(0, 60) } : l));
+  try { localStorage.setItem(LIBRARY_LIST, JSON.stringify(list)); } catch { /* private */ }
+}
+
+/**
+ * Throws one away, database and all.
+ *
+ * Refuses to delete the one in use: the application is holding it open, the
+ * delete would block until every tab closed, and the result would be a browser
+ * that appears to have hung. Switch away first.
+ */
+export async function dropLibrary(id) {
+  if (!id || id === activeLibrary()) return false;
+  const list = libraries().slice(1).filter((l) => l.id !== id);
+  try { localStorage.setItem(LIBRARY_LIST, JSON.stringify(list)); } catch { /* private */ }
+  await new Promise((resolve) => {
+    const req = indexedDB.deleteDatabase(BASE + ':' + id);
+    req.onsuccess = req.onerror = req.onblocked = () => resolve();
+  });
+  return true;
+}
+
+/** Chooses which library the *next* load will open. */
+export function useLibrary(id) {
+  try {
+    if (id) localStorage.setItem(LIBRARY_KEY, id);
+    else localStorage.removeItem(LIBRARY_KEY);
+  } catch { /* private */ }
+}
+
+const NAME = (() => {
+  const id = (() => { try { return localStorage.getItem(LIBRARY_KEY) || ''; } catch { return ''; } })();
+  return id ? BASE + ':' + id : BASE;
+})();
 /* v2 adds the `band` store for cached online lookups. v3 adds `peaks`, the
    per-track waveform and spectrogram computed on first listen. Both upgrades
    are additive and guarded, so a v1 database opens, gains two stores and keeps

@@ -132,6 +132,14 @@ const ID3_TEXT = {
   TCON: 'genre', TCO: 'genre',
   TYER: 'year', TYE: 'year', TDRC: 'year', TDRL: 'year',
   TCOM: 'composer', TCM: 'composer',
+  /* B2: the file's own tempo. Sonora measures one from the audio, which is the
+     honest number and the slow one — a fully tagged library already knows, and
+     ignoring what it says meant starting from nothing every time. */
+  TBPM: 'bpmTag', TBP: 'bpmTag',
+  /* B4: when the music was made, as against when this edition was pressed. A
+     2015 remaster of a 1971 record is a 1971 record, and filing it under 2015
+     puts it in the wrong decade on the Floor and the wrong end of every sort. */
+  TDOR: 'originalYear', TORY: 'originalYear', TOR: 'originalYear',
   /* R11: the rest of what a file actually carries. The reader was already
      walking past these frames; naming them costs nothing and they are the
      whole of what a credits panel has to show. */
@@ -195,16 +203,52 @@ async function readID3v2(reader, out, base = 0) {
     } else if (id === 'TXXX' && frame.length > 2) {
       /* A user-defined text frame: one encoding byte, a description, then the
          value. ReplayGain lives here on MP3s — the description is
-         `replaygain_track_gain` and the value is the decibels. */
+         `replaygain_track_gain` and the value is the decibels — and so do the
+         MusicBrainz identifiers, under descriptions with spaces in them. */
       const enc = frame[0];
       const descEnd = endOfString(frame, 1, enc);
       const desc = decodeText(frame.subarray(1, descEnd), enc).trim().toUpperCase();
+      const from = descEnd + (enc === 1 || enc === 2 ? 2 : 1);
       const rg = RG_FIELD[desc];
       if (rg && out[rg] == null) {
-        const from = descEnd + (enc === 1 || enc === 2 ? 2 : 1);
         const v = parseGainDb(decodeText(frame.subarray(from), enc));
         if (v != null) out[rg] = v;
+      } else if (MBID_FIELD[desc] && !out[MBID_FIELD[desc]]) {
+        const v = decodeText(frame.subarray(from), enc).trim();
+        if (isMbid(v)) out[MBID_FIELD[desc]] = v;
+      } else if ((desc === 'RATING' || desc === 'FMPS_RATING') && out.rating == null) {
+        // The taggers that refuse to write POPM write it here instead.
+        const stars = starsFrom(decodeText(frame.subarray(from), enc));
+        if (stars != null) out.rating = stars;
       }
+    } else if ((id === 'COMM' || id === 'COM') && !out.comment && frame.length > 5) {
+      /* B1: the comment. Same shape as the lyrics frame — one encoding byte,
+         three of language, a short descriptor, then the text — and the
+         descriptor is nearly always empty, which is why both halves are read
+         and the second is what is kept.
+         iTunes writes its own bookkeeping here under the descriptor "iTunNORM"
+         and friends; those are not comments anybody wrote and are skipped. */
+      const enc = frame[0];
+      const descEnd = endOfString(frame, 4, enc);
+      const desc = decodeText(frame.subarray(4, descEnd), enc).trim();
+      if (!/^iTun/i.test(desc)) {
+        const from = descEnd + (enc === 1 || enc === 2 ? 2 : 1);
+        const text = decodeText(frame.subarray(from), enc).trim();
+        if (text) out.comment = text;
+      }
+    } else if ((id === 'POPM' || id === 'POP') && out.rating == null && frame.length > 1) {
+      /* B3: the rating, as ID3 stores it — an email identifying whose opinion
+         this is, a NUL, then one byte of 0-255, then an optional play counter
+         we have no use for.
+         255 values is a false precision: nothing writes them and no listener
+         thinks in them. What actually exists in the wild is Windows Media
+         Player's five points — 1, 64, 128, 196, 255 — and everything else
+         copies those, so those are the buckets. A zero byte means "unrated",
+         not "one star", which is why it maps to nothing. */
+      const nul = frame.indexOf(0);
+      const at = nul >= 0 ? nul + 1 : 0;
+      const byte = frame[at];
+      if (byte > 0) out.rating = byte >= 224 ? 5 : byte >= 160 ? 4 : byte >= 96 ? 3 : byte >= 32 ? 2 : 1;
     } else if ((id === 'APIC' || id === 'PIC') && !out.picture && frame.length > 4) {
       out.picture = readAPIC(frame, id === 'PIC');
     } else if ((id === 'USLT' || id === 'ULT') && !out.lyrics && frame.length > 5) {
@@ -306,6 +350,7 @@ const MP4_FIELD = {
   '©nam': 'title', '©ART': 'artist', 'aART': 'albumArtist', '©alb': 'album',
   '©day': 'year', '©gen': 'genre', '©wrt': 'composer', '©lyr': 'lyrics',
   '©cpy': 'copyright', '©pub': 'publisher', '©enc': 'encodedBy', '©too': 'encoder',
+  '©cmt': 'comment', 'tmpo': 'bpmTag',
 };
 
 async function readMP4(reader, out) {
@@ -389,6 +434,50 @@ function readIlstItem(b, type, from, to, out) {
     return;
   }
 
+  /* The numeric atoms, which are integers rather than text and so miss the
+     table below entirely. `tmpo` is two bytes of BPM; `rate` is iTunes' star
+     rating out of 100, written as either an integer or — by some versions —
+     the ASCII digits of one, which is why both are read. */
+  if (type === 'tmpo') {
+    if (!out.bpmTag && payload.length >= 2) out.bpmTag = String(u16(payload, 0));
+    return;
+  }
+  if (type === 'rate') {
+    if (out.rating == null) {
+      const n = kind === 1 ? trimNul(utf8.decode(payload))
+              : payload.length >= 2 ? u16(payload, 0)
+              : payload.length === 1 ? payload[0] : '';
+      const stars = starsFrom(n);
+      if (stars != null) out.rating = stars;
+    }
+    return;
+  }
+
+  /* B6: the freeform atoms, `----`, where everything that has no four-letter
+     name of its own ends up. The payload is preceded by a `mean` (who defined
+     this) and a `name` (what they called it), and the name is the only part
+     worth reading. */
+  if (type === '----') {
+    const nameAtom = findChild(b, from, to, 'name');
+    if (!nameAtom) return;
+    const key = trimNul(utf8.decode(b.subarray(nameAtom.body + 4, nameAtom.end))).trim().toUpperCase();
+    const text = trimNul(utf8.decode(payload)).trim();
+    if (!key || !text) return;
+    const mb = MBID_FIELD[key];
+    if (mb && !out[mb]) { if (isMbid(text)) out[mb] = text; return; }
+    if ((key === 'RATING' || key === 'FMPS_RATING') && out.rating == null) {
+      const stars = starsFrom(text);
+      if (stars != null) out.rating = stars;
+      return;
+    }
+    const rg = RG_FIELD[key];
+    if (rg && out[rg] == null) {
+      const v = parseGainDb(text);
+      if (v != null) out[rg] = v;
+    }
+    return;
+  }
+
   const field = MP4_FIELD[type];
   if (field && kind === 1 && !out[field]) out[field] = trimNul(utf8.decode(payload));
 }
@@ -468,6 +557,11 @@ const VORBIS_FIELD = {
   // Every writer picks a different one of these, so all of them map to the
   // same field and the first to arrive wins.
   LYRICS: 'lyrics', UNSYNCEDLYRICS: 'lyrics', 'UNSYNCED LYRICS': 'lyrics',
+  COMMENT: 'comment', DESCRIPTION: 'comment',
+  BPM: 'bpmTag', TEMPO: 'bpmTag',
+  ORIGINALDATE: 'originalYear', ORIGINALYEAR: 'originalYear',
+  MUSICBRAINZ_TRACKID: 'mbTrack', MUSICBRAINZ_RELEASETRACKID: 'mbTrack',
+  MUSICBRAINZ_ALBUMID: 'mbAlbum', MUSICBRAINZ_ARTISTID: 'mbArtist',
 };
 
 /**
@@ -485,6 +579,44 @@ const RG_FIELD = {
   REPLAYGAIN_TRACK_GAIN: 'gain',
   REPLAYGAIN_ALBUM_GAIN: 'gainAlbum',
 };
+
+/* B6: MusicBrainz identifiers.
+ *
+ * A track's id in this application is its root plus its path, so moving a
+ * folder orphans every correction, favourite and play count attached to it —
+ * the file is the same file and there is no way to know. An MBID is a name the
+ * recording carries with it, and a great many libraries already have them.
+ *
+ * The same three identifiers are written under a different description in
+ * every format, which is why this is a table and not three string compares. */
+const MBID_FIELD = {
+  'MUSICBRAINZ TRACK ID': 'mbTrack',
+  'MUSICBRAINZ RELEASE TRACK ID': 'mbTrack',
+  'MUSICBRAINZ_TRACKID': 'mbTrack',
+  'MUSICBRAINZ ALBUM ID': 'mbAlbum',
+  'MUSICBRAINZ_ALBUMID': 'mbAlbum',
+  'MUSICBRAINZ ARTIST ID': 'mbArtist',
+  'MUSICBRAINZ_ARTISTID': 'mbArtist',
+};
+
+/** A UUID, and nothing else — a malformed one is worse than none. */
+const isMbid = (v) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || '').trim());
+
+/**
+ * Stars, from whichever scale the tagger happened to believe in.
+ *
+ * A fraction is FMPS (0.0-1.0), a number over five is a percentage, and
+ * anything else is already stars. Nothing rounds up from nothing: a value that
+ * is present but zero is "unrated", which is a different statement from "one
+ * star" and the one people actually mean.
+ */
+function starsFrom(text) {
+  const n = parseFloat(String(text || '').replace(',', '.'));
+  if (!isFinite(n) || n <= 0) return null;
+  const stars = n <= 1 ? n * 5 : n <= 5 ? n : n / 20;
+  return Math.max(1, Math.min(5, Math.round(stars)));
+}
 
 function parseGainDb(text) {
   if (!text) return null;
@@ -515,6 +647,14 @@ function readVorbisComment(b, out, p) {
           const v = parseGainDb(trimNul(utf8.decode(b.subarray(eq + 1, p + len))));
           if (v != null) out[rg] = v;
         }
+      } else if ((key === 'RATING' || key === 'FMPS_RATING') && out.rating == null) {
+        /* B3: the rating, and the reason this needs a function rather than a
+           table entry. There are three conventions in circular use — 0-5,
+           0-100, and FMPS's 0.0-1.0 — and no way to declare which one you
+           meant, so the value itself has to say. `4` is four stars; `0.8` is
+           four stars; `80` is four stars. */
+        out.rating = starsFrom(trimNul(utf8.decode(b.subarray(eq + 1, p + len))));
+        if (out.rating == null) delete out.rating;
       } else if (key === 'METADATA_BLOCK_PICTURE' && !out.picture) {
         try {
           const raw = atob(latin1.decode(b.subarray(eq + 1, p + len)));
@@ -586,7 +726,10 @@ async function readOgg(reader, out) {
 
 /* ------------------------------------------------------------------ RIFF */
 
-const RIFF_FIELD = { INAM: 'title', IART: 'artist', IPRD: 'album', ICRD: 'year', IGNR: 'genre', ITRK: 'track' };
+const RIFF_FIELD = {
+  INAM: 'title', IART: 'artist', IPRD: 'album', ICRD: 'year', IGNR: 'genre',
+  ITRK: 'track', ICMT: 'comment',
+};
 
 async function readWAV(reader, out) {
   const head = await reader.at(0, 12);
@@ -694,6 +837,11 @@ const MKV_TAG_FIELD = {
   DATE_RELEASED: 'year', DATE_RELEASE: 'year', GENRE: 'genre', COMPOSER: 'composer',
   LYRICIST: 'lyricist', CONDUCTOR: 'conductor', PUBLISHER: 'publisher',
   COPYRIGHT: 'copyright', ISRC: 'isrc', ENCODER: 'encoder',
+  COMMENT: 'comment', DESCRIPTION: 'comment', BPM: 'bpmTag',
+  ORIGINALDATE: 'originalYear', ORIGINAL_DATE: 'originalYear',
+  DATE_ORIGINAL: 'originalYear', 'ORIGINAL DATE': 'originalYear',
+  MUSICBRAINZ_TRACKID: 'mbTrack', MUSICBRAINZ_RELEASETRACKID: 'mbTrack',
+  MUSICBRAINZ_ALBUMID: 'mbAlbum', MUSICBRAINZ_ARTISTID: 'mbArtist',
 };
 
 /** EBML variable-length integer. Element ids keep their marker bit, sizes don't. */
@@ -744,7 +892,12 @@ function walkEBML(b, out, from, to, ctx, depth = 0) {
       case MKV.SIMPLE: {
         const tag = { name: '', value: '' };
         walkEBML(b, out, body, end, tag, depth + 1);
-        const field = MKV_TAG_FIELD[tag.name.toUpperCase()];
+        const upper = tag.name.toUpperCase();
+        if ((upper === 'RATING' || upper === 'FMPS_RATING') && out.rating == null) {
+          const stars = starsFrom(tag.value);
+          if (stars != null) out.rating = stars;
+        }
+        const field = MKV_TAG_FIELD[upper];
         if (field && tag.value && !out[field]) out[field] = tag.value;
         break;
       }

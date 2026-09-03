@@ -27,7 +27,7 @@
   align-items: center;
   gap: 10px;
   font-family: var(--mono);
-  color: var(--accent);
+  color: var(--accent-ink);
   font-size: calc(10.5px * var(--scale));
   font-weight: 500;
   letter-spacing: .24em;
@@ -143,7 +143,7 @@
   width: 198px;
   height: 198px;
   margin: -8px -4px -8px 0;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .bloom svg { width: 100%; height: 100%; overflow: visible; }
 .bloom-ring { stroke: rgb(var(--accent-rgb) / .34); stroke-width: 1; fill: none; }
@@ -349,7 +349,7 @@
   font-size: calc(9.5px * var(--scale));
   letter-spacing: .2em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .back-title {
@@ -447,6 +447,23 @@
 .back-spec dt { color: var(--text-3); text-transform: uppercase; letter-spacing: .16em; }
 .back-spec dd { margin: 0; color: var(--text-2); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* B1: the note off the file, set as a note is set on a real sleeve — small,
+   italic, and clamped to three lines so a rip log cannot push the catalogue
+   number off the bottom of the card. */
+.back-note {
+  flex: none;
+  margin: 5px 0 0;
+  font-size: calc(9px * var(--scale));
+  line-height: 1.42;
+  font-style: italic;
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .back-cat {
   flex: none;
   display: flex;
@@ -496,7 +513,7 @@
 .flip-btn .ico { width: 13px; height: 13px; }
 .hero-show:hover .flip-btn, .flip-btn:focus-visible, .flip-btn[aria-pressed="true"] { opacity: 1; }
 .hero-show:hover .zoom-btn, .zoom-btn:focus-visible { opacity: 1; }
-.flip-btn:hover { color: var(--accent); background: rgb(var(--accent-rgb) / .12); }
+.flip-btn:hover { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .12); }
 /* No pointer means no hover to reveal it with. */
 @media (hover: none) { .flip-btn { opacity: 1; } }
 
@@ -542,6 +559,32 @@
   .back-cat { padding-top: 4px; }
 }
 
+/* On a phone the crate's sleeve is 155px square and the guarantees above were
+   written for 168. They are floors, not contents — "at least two tracks and
+   three rows of spec" — and at this size the sum of the floors is taller than
+   the card. So the floors go: what is printed is whatever fits, running out
+   under the fade the back already has, which is what a real sleeve photographed
+   small looks like anyway. */
+@media (max-width: 560px) {
+  .sleeve-back { gap: 4px; padding: 8px 9px 6px; }
+  .back-head { padding-bottom: 3px; }
+  /* The tracklist is the part that gives: it already runs out under a fade, so
+     it can be asked to take whatever is left. The spec block and the catalogue
+     number keep their content height — a `min-height: 0` on both let the spec
+     collapse to four pixels, which is a row of print squashed to a line rather
+     than a row of print that stopped early. */
+  /* Basis zero, not auto: with `auto` the list claims its content height first
+     and then grows, which pushes the catalogue number off the bottom of the
+     card. At zero it only ever takes what is left over, which is what "the
+     tracklist is the part that gives" actually means. */
+  .back-list { min-height: 0; flex: 1 1 0; overflow: hidden; }
+  /* The spec gives too, after the list has. `flex: none` kept all eight of its
+     rows and pushed the catalogue number off the card; shrinking it prints as
+     many rows as fit and stops, which is what a sleeve photographed small
+     actually looks like. */
+  .back-spec { min-height: 0; flex: 0 1 auto; overflow: hidden; padding-top: 3px; }
+}
+
 .hero-meta { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding-bottom: 4px; }
 .hero-title {
   font-size: calc(clamp(28px, 3.6vw, 50px) * var(--scale));
@@ -564,8 +607,34 @@
    can break is after the artist — a wrapping row of dot-separated spans
    otherwise ends a line on a bare separator, which reads as a truncation. */
 .hero-facts { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+
+/* On a phone the facts are five items on one unwrappable line, which at 390px
+   overhangs the window by about 160 pixels. `nowrap` exists so a fact and its
+   separator never break apart — that is still true of each fact, so the wrap
+   moves to the run rather than being switched off: `.dot` keeps its neighbours
+   and the line breaks between pairs. */
+@media (max-width: 560px) {
+  .hero-facts { flex-wrap: wrap; row-gap: 4px; white-space: normal; }
+  .hero-facts > span { white-space: nowrap; }
+
+  /* And the hero itself stacks.
+   *
+   * At 390px a 168px sleeve beside its title leaves about 130 pixels for the
+   * words, and flexbox spends that by shrinking the meta column to its
+   * min-content width — which is one word wide, with the action row hanging
+   * 25 pixels off the side of the page. A phone has one column; the record
+   * goes at the top of it, which is where a phone player puts it anyway. */
+  .hero-show { flex-direction: column; align-items: flex-start; }
+  .hero-show .hero-meta { width: 100%; }
+  .hero-show .sleeve-stage { --sleeve-size: 200px; align-self: center; }
+}
 .hero-link { color: var(--text); font-weight: 500; transition: color var(--dur-1) linear; }
-.hero-link:hover { color: var(--accent); }
+.hero-link:hover { color: var(--accent-ink); }
+/* D1: a link that sits among facts rather than among names. It has to read as
+   part of the run of small print and still be plainly clickable, so it takes
+   the weight of the facts and keeps the underline on hover. */
+.hero-link.subtle { color: var(--text-2); font-weight: 400; }
+.hero-link.subtle:hover { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 3px; }
 .dot { width: 3px; height: 3px; background: currentColor; opacity: .45; }
 
 /* Wrapping rather than squeezing. Four controls and three gaps come to
@@ -579,6 +648,10 @@
 .sort-btn .sort-dir { font-family: var(--mono); opacity: .7; margin-left: -3px; }
 
 .hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+/* The row wraps, so its buttons must not also shrink: a `.btn` with no
+   `flex` basis gives up its padding first and clips its own label rather than
+   moving to the next line. Five actions in 390px is exactly that case. */
+.hero-actions > .btn, .hero-actions > .icon-btn, .hero-actions > .fab { flex: none; }
 
 /* ------------------------------------------------------------------ grids */
 
@@ -668,7 +741,7 @@
   display: grid;
   place-items: center;
   background: var(--glass-2);
-  color: var(--accent);
+  color: var(--accent-ink);
   box-shadow: var(--sh-2), inset 0 0 0 var(--hair) var(--accent-line);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
@@ -703,7 +776,7 @@
   display: grid;
   place-items: center;
   width: 66px; height: 66px;
-  color: var(--accent);
+  color: var(--accent-ink);
   background: rgb(var(--accent-rgb) / .07);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
   margin-bottom: 6px;
@@ -736,7 +809,7 @@
   display: grid;
   place-items: center;
   width: 34px; height: 34px;
-  color: var(--accent);
+  color: var(--accent-ink);
   background: rgb(var(--accent-rgb) / .08);
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   flex: none;
@@ -842,7 +915,7 @@
 .np-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .np-title { font-size: calc(18px * var(--scale)); letter-spacing: -.02em; overflow-wrap: anywhere; }
 .np-artist { color: var(--text); font-size: calc(13px * var(--scale)); font-weight: 550; transition: color var(--dur-1) linear; }
-.np-artist:hover { color: var(--accent); }
+.np-artist:hover { color: var(--accent-ink); }
 .np-album {
   color: var(--text-3);
   font-family: var(--mono);
@@ -868,7 +941,7 @@
   text-align: left;
   transition: background var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.np-next-row:hover { background: rgb(var(--accent-rgb) / .1); border-left-color: var(--accent); }
+.np-next-row:hover { background: rgb(var(--accent-rgb) / .1); border-left-color: var(--accent-ink); }
 .np-next-label {
   font-family: var(--mono);
   color: var(--text-3);
@@ -901,21 +974,66 @@
 
 .qrow {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 12px;
   height: 56px;
-  padding: 0 14px;
   cursor: pointer;
   contain: layout style;
+  /* H1: the swipe layer slides off the edges, and the labels behind it must
+     not be visible until it does. */
+  overflow: hidden;
   border-bottom: var(--hair) solid rgb(120 200 255 / .06);
   border-left: 2px solid transparent;
   transition: background var(--dur-1) linear, opacity var(--dur-2) linear, border-color var(--dur-1) linear;
 }
+/* Everything that used to be laid out by the row is laid out by the layer that
+   moves; the row itself is now the frame the layer moves inside. */
+.qrow-slide {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 100%;
+  padding: 0 14px;
+  /* Springs back when the finger lifts short of the threshold. Suppressed
+     while the finger is down, so the row tracks it exactly. */
+  transition: transform .22s var(--ease-out);
+}
+/* Transparent at rest, so the row's own state tints — playing, played — show
+   through as they always have; opaque only while it is moving, or the labels
+   behind would read straight through the row that is covering them. */
+.qrow.is-swiping .qrow-slide { transition: none; background: var(--surface); }
+
+/* H1: what the two directions do, printed behind the row.
+ *
+ * Revealed as the row slides off them rather than fading in, so the gesture
+ * teaches itself: you see the word before you have gone far enough to commit,
+ * and the colour comes up as you cross the threshold. */
+.qrow-act {
+  position: absolute;
+  top: 0; bottom: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  pointer-events: none;
+}
+.qrow-act-next { left: 0; }
+.qrow-act-remove { right: 0; }
+.qrow[data-swipe="next"] .qrow-act-next,
+.qrow[data-swipe="remove"] .qrow-act-remove { color: var(--accent-ink); }
+.qrow[data-swipe="remove"] .qrow-act-remove { color: var(--warn); }
+/* Only the direction being swiped is lit; the other stays dim behind the row
+   it has not moved off. */
+.qrow:not(.is-swiping) .qrow-act { opacity: 0; }
+.qrow.is-swiping .qrow-act { opacity: calc(.35 + .65 * var(--swipe, 0)); }
 .qrow:hover { background: rgb(var(--accent-rgb) / .07); border-left-color: var(--line-3); }
 .qrow.is-past { opacity: .4; }
-.qrow.is-current { background: rgb(var(--accent-rgb) / .12); border-left-color: var(--accent); }
-.qrow.is-current .qrow-title { color: var(--accent); }
+.qrow.is-current { background: rgb(var(--accent-rgb) / .12); border-left-color: var(--accent-ink); }
+.qrow.is-current .qrow-title { color: var(--accent-ink); }
 .qrow.is-dragging { opacity: .35; }
 .qrow.is-drop { box-shadow: inset 0 2px 0 var(--accent); }
 
@@ -939,7 +1057,7 @@
   font-size: calc(9px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-ink);
   opacity: .75;
 }
 /* The fold. A link rather than a button with a box, because it belongs to the
@@ -1042,7 +1160,7 @@
 }
 .circle-tip[hidden] { display: none; }
 .circle-tip strong { font-size: calc(13.5px * var(--scale)); }
-.circle-tip-value { font-family: var(--mono); color: var(--accent); font-size: calc(12px * var(--scale)); letter-spacing: .06em; }
+.circle-tip-value { font-family: var(--mono); color: var(--accent-ink); font-size: calc(12px * var(--scale)); letter-spacing: .06em; }
 .circle-tip-share { color: var(--text-3); font-size: calc(11.5px * var(--scale)); }
 
 .circle-pins {
@@ -1078,7 +1196,7 @@
   background: var(--accent);
 }
 .circle-pin-name { font-size: calc(12.5px * var(--scale)); font-weight: 540; }
-.circle-pin-value { color: var(--accent); font-size: calc(11px * var(--scale)); letter-spacing: .06em; }
+.circle-pin-value { color: var(--accent-ink); font-size: calc(11px * var(--scale)); letter-spacing: .06em; }
 .circle-compare { margin-left: 4px; }
 .circle-empty { padding-top: 40px; }
 
@@ -1116,7 +1234,7 @@
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
-.band-card-title { display: block; margin-bottom: 12px; color: var(--accent); }
+.band-card-title { display: block; margin-bottom: 12px; color: var(--accent-ink); }
 .band-text { font-size: calc(13px * var(--scale)); line-height: 1.6; color: var(--text-2); }
 .band-text + .link-btn { margin-top: 10px; display: inline-block; }
 .band-facts { grid-template-columns: 92px minmax(0, 1fr); }
@@ -1133,10 +1251,10 @@
 }
 .band-row-year { color: var(--text-3); font-size: calc(11px * var(--scale)); width: 34px; flex: none; }
 .band-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.band-row.is-owned .band-row-title { color: var(--accent); }
+.band-row.is-owned .band-row-title { color: var(--accent-ink); }
 .band-row-detail { width: 100%; padding-left: 44px; }
 .band-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.band-link:hover { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+.band-link:hover { color: var(--accent-ink); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
 .band-source { grid-column: 1 / -1; margin-top: 2px; }
 .band-consent { margin: 12px 0; padding-left: 18px; color: var(--text-2); font-size: calc(13px * var(--scale)); line-height: 1.7; list-style: square; }
 .band-consent li { margin-bottom: 4px; }
@@ -1325,7 +1443,7 @@
 
 .settings-range {
   width: clamp(120px, 22vw, 220px);
-  accent-color: var(--accent);
+  accent-color: var(--accent-ink);
   cursor: pointer;
 }
 .settings-range:disabled { opacity: .4; cursor: default; }
@@ -1335,7 +1453,7 @@
   font-family: var(--mono);
   font-size: calc(11.5px * var(--scale));
   letter-spacing: .06em;
-  color: var(--accent);
+  color: var(--accent-ink);
   font-variant-numeric: tabular-nums;
 }
 .settings-range:disabled + .settings-value { color: var(--text-3); }
@@ -1376,7 +1494,7 @@
 
 .file-ico { flex: none; display: grid; place-items: center; color: var(--text-3); }
 .file-ico .ico { width: 15px; height: 15px; }
-.file-row.is-open > .file-ico { color: var(--accent); }
+.file-row.is-open > .file-ico { color: var(--accent-ink); }
 
 .file-name {
   flex: 1 1 auto;
@@ -1433,7 +1551,7 @@
 }
 /* An identical file is a fact; the same recording in two files is a judgement.
    Only the fact gets the accent. */
-.dupe-reason.is-hard { color: var(--accent); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
+.dupe-reason.is-hard { color: var(--accent-ink); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); }
 
 .dupe-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .dupe-size { flex: none; font-family: var(--mono); font-size: calc(11px * var(--scale)); color: var(--text-3); font-variant-numeric: tabular-nums; }
@@ -1498,12 +1616,23 @@
   scrollbar-width: thin;
 }
 
+/* How wide a record is, seen edge-on.
+ *
+ * Declared here and read by `mountShelf` through `getComputedStyle`, because
+ * the shelf is virtualised: it computes every spine's x position from these
+ * numbers without measuring anything, so a width the stylesheet changes and
+ * the script does not is a shelf whose records overlap. That is exactly what
+ * happened when the coarse-pointer rule below widened them.
+ *
+ * `--spine-base` plus `--spine-thick` × thickness: 14px for a single, half
+ * again for a double — the same curve the sleeve's edge plane uses, so the two
+ * views agree about how big a record is. */
+.shelf-run { --spine-base: 13px; --spine-thick: 11px; }
+
 .spine {
   position: relative;
   flex: none;
-  /* 14px for a single, half again for a double — the same curve the sleeve's
-     edge plane uses, so the two views agree about how big a record is. */
-  width: calc(13px + 11px * var(--thick, 1));
+  width: calc(var(--spine-base) + var(--spine-thick) * var(--thick, 1));
   height: 268px;
   display: block;
   transform-style: preserve-3d;
@@ -1774,7 +1903,7 @@
   font-family: var(--mono);
   font-size: calc(12px * var(--scale));
   letter-spacing: .03em;
-  color: var(--accent);
+  color: var(--accent-ink);
   padding-left: 12px;
   border-left: 2px solid var(--accent-line);
 }
@@ -1845,7 +1974,7 @@
   transition: color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
 }
 .floor-rail-btn:hover { color: var(--text); }
-.floor-rail-btn.is-on { color: var(--accent); border-right-color: var(--accent); }
+.floor-rail-btn.is-on { color: var(--accent-ink); border-right-color: var(--accent-ink); }
 .floor-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ------------------------------------------ the record that is playing (R1) */
@@ -1860,7 +1989,7 @@
     0 0 26px 2px rgb(var(--accent-rgb) / .34),
     0 14px 30px rgb(0 0 0 / .4);
 }
-.floor-card.is-playing .floor-text b { color: var(--accent); }
+.floor-card.is-playing .floor-text b { color: var(--accent-ink); }
 .floor-card:focus-visible { outline: none; }
 .floor-card:focus-visible .floor-art { outline: 2px solid var(--accent); outline-offset: 3px; }
 
@@ -1951,7 +2080,7 @@
   cursor: pointer;
   text-align: left;
 }
-.linkish:hover { color: var(--accent); text-decoration: underline; }
+.linkish:hover { color: var(--accent-ink); text-decoration: underline; }
 
 /* The circle that stands for all the rest. Drawn as an outline rather than a
    disc, so it does not read as one more artist. */
@@ -2076,7 +2205,7 @@
   font-family: var(--mono);
   font-size: calc(17px * var(--scale));
   font-variant-numeric: tabular-nums;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .attn-head[aria-expanded="true"] { background: var(--surface-hi); }
 .attn-actions { padding: 0 16px 12px; }
@@ -2132,7 +2261,7 @@
   max-height: 34vh;
   overflow-y: auto;
 }
-.replace-count { color: var(--accent); font-size: calc(13px * var(--scale)); margin-bottom: 6px; }
+.replace-count { color: var(--accent-ink); font-size: calc(13px * var(--scale)); margin-bottom: 6px; }
 .replace-list { list-style: none; margin: 0; padding: 0; }
 .replace-list li {
   display: flex;
@@ -2172,7 +2301,7 @@
   text-decoration: none;
   font-size: calc(11.5px * var(--scale));
 }
-.over-chip:hover { border-color: var(--accent-line); color: var(--accent); }
+.over-chip:hover { border-color: var(--accent-line); color: var(--accent-ink); }
 
 
 /* R6: the cover, looked at.
@@ -2424,3 +2553,299 @@ body.lb-open { overflow: hidden; }
 .analysis-cell.is-warn .analysis-value { color: var(--warn); }
 .analysis-note { color: var(--text-3); font-size: calc(11.5px * var(--scale)); line-height: 1.35; }
 .analysis-foot { margin-top: 10px; font-size: calc(11.5px * var(--scale)); }
+
+/* D2: why a record is on the "Near this one" shelf. Printed under the card
+   rather than in a tooltip — the reason is the point of the shelf, and a claim
+   you have to hover to read is a claim nobody checks. */
+.card-why {
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: calc(9.5px * var(--scale));
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A3: what the day log noticed.
+ *
+ * Set as a remark rather than as a card: no panel, no heading, no dismiss
+ * button. It is one sentence with a mark beside it and a link under it, and it
+ * should be possible to read the whole page without ever noticing that it is
+ * there — which is the right weight for something describing you to yourself. */
+.home-noticed { margin: 6px 0 2px; }
+.noticed {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  border-left: 2px solid rgb(var(--accent-rgb) / .5);
+  color: var(--text-2);
+  font-size: calc(13.5px * var(--scale));
+  line-height: 1.5;
+  transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
+}
+.noticed:hover { color: var(--text); border-left-color: var(--accent-ink); }
+.noticed-mark { color: var(--accent-ink); opacity: .7; align-self: center; }
+.noticed-mark svg { width: 14px; height: 14px; display: block; }
+
+/* D3: the filter language, made pressable.
+ *
+ * A wrapping row rather than a scroller: all seventeen should be visible at
+ * once on a desktop, because the whole point is that somebody who did not know
+ * they existed sees them. On a phone it becomes three or four rows, which is
+ * still better than a horizontal scroller that hides half of them. */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -4px 0 18px;
+}
+.filter-chip {
+  cursor: pointer;
+  transition: color var(--dur-1) linear, background var(--dur-2) var(--ease), box-shadow var(--dur-1) linear;
+}
+.filter-chip:hover { color: var(--text); background: rgb(var(--surface-2-rgb) / .9); }
+.filter-chip.is-on {
+  background: rgb(var(--accent-rgb) / .16);
+  color: var(--accent-ink);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
+}
+
+/* What the box actually understood. Printed rather than implied, because a
+   search that quietly drops a word you typed is a search you stop trusting. */
+.search-reading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -10px 0 18px;
+}
+.search-token {
+  font-family: var(--mono);
+  font-size: calc(10.5px * var(--scale));
+  padding: 2px 7px;
+  color: var(--accent-ink);
+  background: rgb(var(--accent-rgb) / .1);
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
+  border-radius: var(--r-sm);
+}
+
+/* D6: search inside what you are looking at.
+ *
+ * Pushed to the right end of the toolbar it lives in, so it reads as a
+ * qualifier on the page rather than as a second global search — the one in the
+ * topbar is the global one, and two identical fields on one screen would be a
+ * question about which is which. */
+.page-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+}
+.page-filter-ico { display: grid; place-items: center; color: var(--text-3); }
+.page-filter-ico svg { width: 14px; height: 14px; }
+.page-filter-input {
+  width: clamp(140px, 22vw, 240px);
+  height: 30px;
+  padding: 0 10px;
+  font-size: calc(12.5px * var(--scale));
+}
+.page-filter-input::-webkit-search-cancel-button { filter: grayscale(1); opacity: .5; }
+.page-filter-count {
+  font-family: var(--mono);
+  font-size: calc(10px * var(--scale));
+  letter-spacing: .1em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+/* A toolbar that holds nothing but the field does not need a toolbar's height. */
+.toolbar-thin { min-height: 0; margin-bottom: 10px; }
+
+@media (max-width: 560px) {
+  .page-filter { margin-left: 0; width: 100%; }
+  .page-filter-input { width: 100%; }
+}
+
+/* F1: a record being dropped into a place on the wall.
+ *
+ * The mark goes on the *left edge* of the card you are hovering, because that
+ * is where the record will land — "before this one" is a position between two
+ * things, and a highlight over the whole card would say "into this one". */
+.is-arranging .card { cursor: grab; }
+.card.is-drop-before { position: relative; }
+.card.is-drop-before::after {
+  content: "";
+  position: absolute;
+  inset: -6px auto -6px -11px;
+  width: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px 0 var(--accent-glow);
+  pointer-events: none;
+}
+
+/* F2: the records left out.
+ *
+ * A pile beside the crate rather than a shelf above it: overlapping, each one
+ * at its own slight angle, the newest on top. It is meant to read as objects
+ * that were put down rather than as a row of results. */
+.crate-pile {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 0 0 14px;
+  min-height: 62px;
+}
+.crate-pile-label { flex: none; color: var(--text-3); }
+.crate-pile-stack {
+  display: flex;
+  align-items: center;
+  /* Negative gap is the pile. Each sleeve covers most of the one under it, the
+     way they actually settle. */
+  padding-left: 4px;
+}
+.crate-pile-card {
+  flex: none;
+  width: 52px; height: 52px;
+  margin-left: -20px;
+  padding: 0;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--surface-2);
+  box-shadow: 0 2px 8px rgb(0 0 0 / .35), inset 0 0 0 var(--hair) var(--line);
+  transform: rotate(var(--tilt, 0deg));
+  /* Later cards sit on top, so the pile reads newest-first from the left. */
+  z-index: calc(20 - var(--i, 0));
+  position: relative;
+  transition: transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) linear;
+  cursor: pointer;
+}
+.crate-pile-card:first-child { margin-left: 0; }
+.crate-pile-card:hover, .crate-pile-card:focus-visible {
+  transform: rotate(var(--tilt, 0deg)) translateY(-6px) scale(1.06);
+  z-index: 30;
+  box-shadow: 0 8px 18px rgb(0 0 0 / .45), inset 0 0 0 var(--hair) var(--accent-line);
+}
+.crate-pile-card .art-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* F4: which axis the room is walked along, on the HUD with the decade rail. */
+.floor-axis {
+  position: absolute;
+  top: 14px; left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  z-index: 4;
+}
+@media (max-width: 780px) {
+  .floor-axis { position: static; transform: none; margin: 0 auto 8px; }
+  .crate-pile { gap: 10px; }
+  .crate-pile-label { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crate-pile-card { transition: none; }
+  .crate-pile-card:hover, .crate-pile-card:focus-visible { transform: rotate(var(--tilt, 0deg)); }
+}
+
+/* F7: the inner sleeve.
+ *
+ * Set the way the back of a record is: small, generously leaded, and given the
+ * space between the tracklist and the catalogue number rather than crowding
+ * either. It only exists when the files carry something, so it never leaves a
+ * heading over an empty panel. */
+.gate-notes {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  margin-top: 4px;
+  border-top: var(--hair) solid var(--line);
+}
+.gate-note {
+  margin: 0;
+  font-size: calc(8.5px * var(--scale));
+  line-height: 1.5;
+  font-style: italic;
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.gate-credits {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 8px;
+  margin: 0;
+  font-size: calc(8px * var(--scale));
+  min-height: 0;
+  overflow: hidden;
+}
+.gate-credits dt {
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  white-space: nowrap;
+}
+.gate-credits dd {
+  margin: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* H3: the last few targets, which live in this file rather than in the
+   component sheet. Same rule, same reason — see the note in components.css. */
+@media (pointer: coarse) {
+  .flip-btn { min-height: 44px; padding-left: 14px; padding-right: 14px; }
+  .file-twist { width: 44px; height: 44px; }
+  .card-fab { width: 44px; height: 44px; }
+  .crate-pile-card { width: 56px; height: 56px; }
+  /* The nav bar along the bottom of a phone scrolls, so its items can afford
+     the width — and 26px each across twelve is not a bar anybody can hit. */
+  .sidebar .nav-item { min-width: 56px; }
+  /* The transport's title and artist are links to the album and the artist. On
+     a phone they sit under `.pb-open`, a 44px target that opens the now
+     playing screen — so they are not the thing being aimed at, and growing
+     them would push the transport apart for no gain. */
+  .pb-title, .pb-artist { pointer-events: none; }
+}
+
+/* H3, the rest of it — the controls that are shaped like the objects they
+   represent, where "make it 44 wide" would stop them being that object. */
+@media (pointer: coarse) {
+  .floor-rail-btn { min-height: 44px; }
+  /* The now-playing panel's links to the artist and the record. Two lines of
+     text one above the other, so the target comes from the space between them
+     rather than from making either line taller. */
+  .np-artist, .np-album { padding: 15px 0; display: block; }
+  /* A record seen edge-on is 14 pixels wide, and that is the whole idea of a
+     shelf. It cannot be widened without becoming a row of cards — so the
+     *spine* keeps its width and gains its target sideways, where the gap
+     between records is space nothing else is using. */
+  /* A record seen edge-on is 14 pixels wide on a desktop, which is a shelf you
+     read rather than one you touch. Widened rather than padded: negative
+     margins made neighbouring spines overlap, so their titles collided — and a
+     shelf where the records stand a little further apart is still a shelf,
+     where one where they intersect is not. */
+  /* A record seen edge-on is 14 pixels wide on a desktop, which is a shelf you
+     read rather than one you touch. Widened rather than padded: negative
+     margins made neighbouring spines overlap, so their titles collided — and a
+     shelf where the records stand a little further apart is still a shelf,
+     where one whose records intersect is not.
+     Set on the run, not on the spine, so the script that lays the shelf out
+     reads the same two numbers the stylesheet does. */
+  .shelf-run { --spine-base: 40px; --spine-thick: 12px; }
+  /* The hero's own links: text in a run of small print, which on a finger has
+     to be reachable without the line becoming double-spaced. Padding rather
+     than height, so the run still reads as one line. */
+  .hero-link { padding: 15px 0; }
+}

@@ -39,6 +39,56 @@ export const MODES = [
 
 export const isMode = (id) => MODES.some((m) => m.id === id);
 
+/* ------------------------------------------------------------------ H6
+ *
+ * What the visualiser is doing, said out loud.
+ *
+ * Four canvases, a 3D backdrop and a spectrogram, and to a screen reader this
+ * application is completely silent about all of it — the canvases are
+ * `aria-hidden` and nothing else mentions them, so somebody using one has no
+ * way to know a visualiser exists, let alone which of the four is running.
+ *
+ * What is announced is *what is being shown*, not what the pixels look like.
+ * "Radial, reacting to the music" is a fact somebody can act on; a running
+ * description of a waveform would be a nuisance that never stopped talking. It
+ * is announced when it changes and at no other time, on a polite live region,
+ * so it never interrupts.
+ *
+ * The other half of the same idea: it can be turned off. That is the switch
+ * somebody on a slow machine wants as well, which is why it is one switch and
+ * not two — "describe the visualiser" and "draw the visualiser" being separate
+ * settings would be an accessibility feature nobody could find.
+ */
+const SAY_KEY = 'sonora:say-viz';
+let sayNode = null;
+
+/** Whether the visualiser announces itself. On by default; it costs nothing. */
+export const announces = () => {
+  try { return localStorage.getItem(SAY_KEY) !== '0'; } catch { return true; }
+};
+
+export function setAnnounces(on) {
+  try { localStorage.setItem(SAY_KEY, on ? '1' : '0'); } catch { /* private */ }
+  if (!on && sayNode) sayNode.textContent = '';
+}
+
+/** Says what is on screen now. Called on a change of mode, never per frame. */
+export function announce(what) {
+  if (!announces() || typeof document === 'undefined') return;
+  if (!sayNode) {
+    sayNode = document.createElement('div');
+    sayNode.className = 'sr-only';
+    sayNode.setAttribute('role', 'status');
+    sayNode.setAttribute('aria-live', 'polite');
+    document.body.appendChild(sayNode);
+  }
+  // Cleared first, because a live region handed the same string twice says it
+  // once — and "the visualiser is still bars" is exactly the case where a
+  // listener has just switched away and back.
+  sayNode.textContent = '';
+  setTimeout(() => { if (sayNode) sayNode.textContent = what; }, 40);
+}
+
 const DEFAULT_ACCENT = [0, 209, 255];
 
 /* ------------------------------------------------------------------ colour */
