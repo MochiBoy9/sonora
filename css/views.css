@@ -131,6 +131,38 @@
 .plain-list.no-sub .trow-sub { display: none; }
 .plain-list.no-sub .trow-title { font-size: calc(14px * var(--scale)); }
 
+
+/* ------------------------------------------------------------ album body
+
+   A tracklist is a reading surface, and a line of text has a width past which
+   it stops being one. The rows are flex, the title cell is the elastic one, so
+   an album page on a wide monitor set the number and the title hard against
+   the left edge and the duration hard against the right with nine hundred
+   pixels of nothing in between — two facts about the same track, placed as far
+   apart as the window allows.
+
+   So the list gets a partner. Where the record has been listened to and there
+   is an analysis to print, the panel takes the second column and the measure
+   is bounded by having a neighbour. Where there is not, the list is capped on
+   its own: a bound is still worth having, and an empty second column would
+   only move the problem rather than solve it. Below 1080px both collapse to
+   one column, which is what a phone and a tablet already wanted. */
+.album-body {
+  display: grid;
+  gap: 26px;
+  align-items: start;
+}
+
+@media (min-width: 1080px) {
+  .album-body {
+    grid-template-columns: minmax(0, 760px);
+    gap: 26px 34px;
+  }
+  .album-body.has-aside {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
+  }
+}
+
 /* ------------------------------------------------------------------ home */
 
 .home-hero {
@@ -551,7 +583,7 @@
 .flip-btn .ico { width: 13px; height: 13px; }
 .hero-show:hover .flip-btn, .flip-btn:focus-visible, .flip-btn[aria-pressed="true"] { opacity: 1; }
 .hero-show:hover .zoom-btn, .zoom-btn:focus-visible { opacity: 1; }
-.flip-btn:hover { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .12); }
+.flip-btn:hover { color: var(--hover-ink); background: var(--hover-fill); }
 /* No pointer means no hover to reveal it with. */
 @media (hover: none) { .flip-btn { opacity: 1; } }
 
@@ -897,7 +929,7 @@
   border-left: 2px solid transparent;
   transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
 }
-.settings-row:hover { background: rgb(var(--surface-2-rgb) / .5); border-left-color: var(--accent-line); }
+.settings-row:hover { background: var(--hover-fill); border-left-color: var(--hover-line); }
 .settings-ico {
   display: grid;
   place-items: center;
@@ -1038,7 +1070,7 @@
   text-align: left;
   transition: background var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.np-next-row:hover { background: rgb(var(--accent-rgb) / .1); border-left-color: var(--accent-ink); }
+.np-next-row:hover { background: var(--hover-fill); border-left-color: var(--hover-line); }
 .np-next-label {
   font-family: var(--mono);
   color: var(--text-3);
@@ -1131,7 +1163,7 @@
    it has not moved off. */
 .qrow:not(.is-swiping) .qrow-act { opacity: 0; }
 .qrow.is-swiping .qrow-act { opacity: calc(.35 + .65 * var(--swipe, 0)); }
-.qrow:hover { background: rgb(var(--accent-rgb) / .07); border-left-color: var(--line-3); }
+.qrow:hover { background: var(--hover-fill); border-left-color: var(--hover-line); }
 .qrow.is-past { opacity: .4; }
 .qrow.is-current { background: rgb(var(--accent-rgb) / .12); border-left-color: var(--accent-ink); }
 .qrow.is-current .qrow-title { color: var(--accent-ink); }
@@ -1540,7 +1572,6 @@
 
 .settings-range {
   width: clamp(120px, 22vw, 220px);
-  accent-color: var(--accent-ink);
   cursor: pointer;
 }
 .settings-range:disabled { opacity: .4; cursor: default; }
@@ -1574,9 +1605,9 @@
   cursor: pointer;
   transition: background var(--dur-1) linear, color var(--dur-1) linear;
 }
-.file-row:hover { background: rgb(var(--accent-rgb) / .08); color: var(--text); }
+.file-row:hover { background: var(--hover-fill); color: var(--hover-ink); }
 .file-row.is-track { cursor: default; background: transparent; }
-.file-row.is-track:hover { background: rgb(var(--accent-rgb) / .06); }
+.file-row.is-track:hover { background: var(--hover-fill); }
 
 .file-twist {
   width: 18px; height: 18px;
@@ -2736,7 +2767,6 @@ body.lb-open { overflow: hidden; }
   color: var(--accent-ink);
   background: rgb(var(--accent-rgb) / .1);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
-  border-radius: var(--r-sm);
 }
 
 /* D6: search inside what you are looking at.

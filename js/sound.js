@@ -11,7 +11,7 @@
  * redraw from the same measurement.
  */
 
-import { el, ico } from './util.js';
+import { el, ico, paintRange } from './util.js';
 import * as rack from './audio.js';
 import * as player from './player.js';
 import { toast, promptDialog, dialog } from './ui.js';
@@ -794,7 +794,19 @@ export function mountSound(host) {
     faderCells.forEach((f, i) => {
       const v = rack.state.eq[i];
       if (document.activeElement !== f.input) f.input.value = String(v);
+      paintRange(f.input, 0);
       f.db.textContent = dbText(v);
+      /* What the number *says*, not what fraction of the range it is.
+       *
+       * A native range with no `aria-valuetext` is announced as a
+       * percentage of min..max, so a band at +7.0 dB was read out as
+       * "seventy-nine percent" — a true statement about the widget and a
+       * useless one about the sound. The formatted string was already
+       * being computed on the line above and thrown away. Spelled out
+       * rather than abbreviated because a screen reader says "d B" for
+       * dB, and the band is included so the value still stands alone when
+       * it is read out of a rotor, away from its label. */
+      f.input.setAttribute('aria-valuetext', `${hz(rack.BANDS[i])} hertz, ${dbText(v)} decibels`);
       f.cell.classList.toggle('is-boosted', v > 0.05);
       f.cell.classList.toggle('is-cut', v < -0.05);
     });
@@ -809,7 +821,13 @@ export function mountSound(host) {
       }
       const v = k.get();
       if (document.activeElement !== k.input) k.input.value = String(v);
+      paintRange(k.input, k.neutral);
       k.val.textContent = k.format ? k.format(v) : String(v);
+      /* Same again for the rack: "1.00x" rather than "thirty-three
+         percent", "Centre" rather than "zero". Where a knob has no
+         formatter its raw number already is the value, and the native
+         announcement is correct, so it is left alone. */
+      if (k.format) k.input.setAttribute('aria-valuetext', k.format(v));
       k.row.classList.toggle('is-set', k.neutral !== undefined && Math.abs(v - k.neutral) > 0.001);
     }
 

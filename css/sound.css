@@ -194,11 +194,46 @@
 }
 .fader { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
 .fader input[type="range"] {
+  /* The band faders stand up, so the slot runs bottom-to-top and the cap
+     lies across it. Chrome drives a vertical range from `writing-mode`
+     alone; everything else about the control is the drawn one in
+     components.css, including the fill that starts at 0 dB rather than at
+     the bottom of the range — which on an equaliser is the whole reading.
+     A flat band shows an empty slot, a cut shows a bar hanging below the
+     detent, a boost shows one standing above it. */
   writing-mode: vertical-lr;
   direction: rtl;
   width: 22px;
   height: 96px;
-  accent-color: var(--accent-ink);
+  padding: 0 11px;
+  margin: 0 -11px;
+  --cap-l: 20px;
+  --cap-t: 11px;
+}
+
+.fader input[type="range"]::-webkit-slider-runnable-track {
+  width: var(--slot-t);
+  height: 100%;
+  background-image:
+    linear-gradient(to top,
+      transparent calc(var(--lo) * 100%),
+      var(--slot-fill) calc(var(--lo) * 100%) calc(var(--hi) * 100%),
+      transparent calc(var(--hi) * 100%)),
+    linear-gradient(to top,
+      transparent calc(var(--n) * 100% - var(--hair)),
+      var(--line-3) calc(var(--n) * 100% - var(--hair)) calc(var(--n) * 100%),
+      transparent calc(var(--n) * 100%));
+}
+
+.fader input[type="range"]::-webkit-slider-thumb {
+  margin-top: 0;
+  margin-left: calc((var(--slot-t) - var(--cap-l)) / 2);
+  background:
+    linear-gradient(to right,
+      transparent calc(50% - var(--hair)),
+      rgb(var(--bg-rgb) / .55) calc(50% - var(--hair)) calc(50% + var(--hair)),
+      transparent calc(50% + var(--hair))),
+    linear-gradient(to bottom, var(--surface-3), var(--surface-2));
 }
 .fader-hz, .fader-db {
   font-family: var(--mono);
@@ -229,7 +264,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.rack-row input[type="range"] { width: 100%; min-width: 0; accent-color: var(--accent-ink); }
+.rack-row input[type="range"] { width: 100%; min-width: 0; }
 .rack-val {
   font-family: var(--mono);
   font-size: calc(10.5px * var(--scale));

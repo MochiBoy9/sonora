@@ -37,6 +37,31 @@ function append(node, kids) {
 export const ico = (name, cls) =>
   `<svg class="ico${cls ? ' ' + cls : ''}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
+/* ---------------------------------------------------------------- controls */
+
+/** Writes the slot geometry a drawn range input needs.
+ *
+ * The control in `css/components.css` fills from a neutral point rather than
+ * from the low end of the range, because on a +/-12 dB band what the eye reads
+ * is the distance from flat and which side of flat it is on — a fill that
+ * always starts at the bottom says "more is more", which is true of volume and
+ * of almost nothing else in the rack. CSS cannot know where neutral is, so
+ * both ends arrive here as fractions of the slot.
+ *
+ * `neutral` defaults to the minimum, which is the ordinary meaning for a
+ * control like Width or Crossfade that really does run from nothing upwards.
+ */
+export function paintRange(input, neutral) {
+  const min = Number(input.min) || 0;
+  const max = Number(input.max);
+  const span = (max - min) || 1;
+  const at = (Number(input.value) - min) / span;
+  const from = neutral == null ? 0
+    : (Math.min(Math.max(Number(neutral), min), max) - min) / span;
+  input.style.setProperty('--v', at.toFixed(4));
+  input.style.setProperty('--n', from.toFixed(4));
+}
+
 /* ---------------------------------------------------------------- formatting */
 
 export function fmtTime(sec) {
