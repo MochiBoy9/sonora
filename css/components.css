@@ -21,8 +21,7 @@
   text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
-  --k: var(--cut-sm);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
   transition: transform var(--dur-1) var(--ease-back), background var(--dur-2) var(--ease),
               color var(--dur-1) linear, box-shadow var(--dur-2) var(--ease);
@@ -68,8 +67,7 @@
   place-items: center;
   color: var(--text-3);
   flex: none;
-  --k: var(--cut-sm);
-  clip-path: var(--nick-nw);
+  clip-path: var(--nick-nw-sm);
   border-radius: var(--radius);
   transition: color var(--dur-1) linear, background var(--dur-1) linear, transform var(--dur-1) var(--ease-back);
 }
@@ -110,8 +108,7 @@
   background: var(--accent-grad);
   color: var(--on-accent);
   box-shadow: 0 12px 28px -12px var(--accent-glow);
-  --k: var(--cut-sm);
-  clip-path: var(--nick-all);
+  clip-path: var(--nick-all-sm);
   border-radius: var(--radius);
   will-change: transform;
   transition: filter var(--dur-1) linear;
@@ -132,7 +129,6 @@
   background: var(--surface-2);
   flex: none;
   isolation: isolate;
-  --k: var(--cut);
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
@@ -185,7 +181,11 @@
   padding: 0 14px;
   color: var(--text-2);
   contain: layout style;
-  border-bottom: var(--hair) solid rgb(120 200 255 / .06);
+  /* `--line`, not a pale sky blue literal. The hard-coded value lightens
+     against whatever it is set on, which on a dark ground reads as a rule and
+     on a light one measured 1.04:1 against the row it divides — a separator
+     that only separates in one theme. */
+  border-bottom: var(--hair) solid var(--line);
   transition: background var(--dur-1) linear, color var(--dur-1) linear;
 }
 .trow::before {
@@ -337,7 +337,17 @@
 /* The four-bar meter that marks the playing row. Square bars, hard edges. */
 .eq { display: none; gap: 2px; align-items: flex-end; height: 12px; width: 100%; justify-content: center; }
 .trow.is-playing .eq { display: flex; }
-.trow.is-playing:hover .eq { display: none; }
+/* Hovering the playing row used to hide the meter outright, which left accent
+   colour as the only marker on exactly the row the pointer was on — and colour
+   alone is not a marker for everyone. The bars stop and stand at a fixed
+   height instead: still a mark, and out of the way of the controls that appear
+   on hover. */
+.trow.is-playing:hover .eq i {
+  animation: none;
+  transform: none;
+  height: 70%;
+  opacity: .8;
+}
 .eq i {
   width: 2px;
   background: var(--accent);
@@ -380,7 +390,6 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   pointer-events: none;
   box-shadow: inset 0 0 0 var(--hair) transparent;
   transition: box-shadow var(--dur-2) var(--ease);
-  --k: var(--cut);
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
@@ -415,7 +424,19 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .card-tick.br { bottom: -4px; right: -4px; border-left: 0; border-top: 0; transform: translate(-5px, -5px); }
 .card:hover .card-tick, .card:focus-visible .card-tick { opacity: 1; transform: none; }
 
-.card-fab {
+/* Two classes, and the reason is worth knowing.
+ *
+ * `.fab` is in the aero sheet's `position: relative` list — the one that gives
+ * every raised control a containing block for its highlight — and aero.css
+ * loads after this file. At one class each, later wins, so this button was
+ * `relative` and sat *in flow* under the cover: 40px of empty card reserved,
+ * on every card, permanently, for a control that only appears on hover. It
+ * also took the card's bottom-right corner tick with it, leaving the tick
+ * floating 27px below the artwork it is supposed to mark the corner of.
+ *
+ * `absolute` establishes a containing block too, so the sheen is unaffected;
+ * this only has to outrank the list, which two classes does. */
+.card .card-fab {
   position: absolute;
   right: 8px;
   bottom: 8px;
@@ -542,8 +563,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   pointer-events: none;
   transition: opacity var(--dur-1) linear;
   white-space: nowrap;
-  --k: 4px;
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
 }
 .seek:hover .seek-tip, .seek.is-active .seek-tip { opacity: 1; }
@@ -577,8 +597,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   color: var(--text);
   font-size: calc(13px * var(--scale));
   outline: none;
-  --k: var(--cut-sm);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
   transition: box-shadow var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
 }
@@ -604,8 +623,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   letter-spacing: .1em;
   text-transform: uppercase;
   white-space: nowrap;
-  --k: 6px;
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
 }
 .scan[hidden] { display: none; }
@@ -629,7 +647,6 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: var(--sh-3), inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  --k: var(--cut);
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
   will-change: transform, opacity;
@@ -685,8 +702,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: var(--sh-3), inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  --k: var(--cut-lg);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-lg);
   border-radius: var(--radius);
   will-change: transform, opacity;
 }
@@ -720,18 +736,29 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   align-items: start;
   gap: 24px 30px;
-  max-height: min(64vh, 620px);
+  /* The sheet is 651px of content and this was capped at 576 of it, so the
+     last group — the one holding undo — was below a fold with nothing on
+     screen to say there was one. A shortcut sheet that hides shortcuts is
+     working against its only job. Raised until the whole list stands up in a
+     900px window; the scroller stays for the windows where it cannot. */
+  max-height: min(74vh, 700px);
   overflow-y: auto;
   padding-right: 4px;
 }
-/* The same action under a second spelling — dimmer, because it is the same
-   row said twice and should not read as two things you have to learn. */
 /* The second spelling of a shortcut — ⌘Y beside ⌘⇧Z.
-   It reads as an alternative because it is set in the quiet ink and italic,
-   not because it is faded: `opacity: .6` measured 4.04:1 in dark and 2.47:1 in
-   light, which is a label somebody has to read set below the line. Fading is
-   how nearly every contrast failure in this pass happened. */
-.keys-alt { color: var(--text-3); font-style: italic; }
+ *
+ * It used to be a row of its own repeating the label, so the sheet listed
+ * "Redo it" twice and a reader went looking for the difference. Both spellings
+ * are on the one row now, joined by the word that says what they are to each
+ * other. Set in the quiet ink and lower case, not faded: it is a word somebody
+ * has to read, and fading is how nearly every contrast failure in this project
+ * happened. */
+.keys-or {
+  color: var(--text-3);
+  font-size: calc(10.5px * var(--scale));
+  padding: 0 1px;
+  align-self: center;
+}
 
 .keys-group {
   font-family: var(--mono);
@@ -755,7 +782,11 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   gap: 8px 14px;
   margin: 0;
 }
-.keys-list dt { display: flex; gap: 4px; justify-content: flex-end; }
+/* Wrapping, for the one row that carries two spellings: it takes a second
+   line rather than widening the key column for every other row in the sheet.
+   The baseline the grid aligns on is the first line's, so the description
+   still sits against the top of the chord. */
+.keys-list dt { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
 .keys-list dd { margin: 0; color: var(--text-2); font-size: calc(13px * var(--scale)); }
 .keys kbd {
   display: inline-block;
@@ -768,8 +799,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   color: var(--text);
   background: rgb(var(--accent-rgb) / .08);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line), 0 1px 0 0 var(--line-2);
-  --k: 4px;
-  clip-path: var(--nick-nw);
+  clip-path: var(--nick-nw-sm);
   border-radius: var(--radius);
 }
 
@@ -862,7 +892,6 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
   pointer-events: auto;
-  --k: 8px;
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
   will-change: transform, opacity;
@@ -914,8 +943,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   width: 54px; height: 54px;
   background: var(--accent-grad);
   color: var(--on-accent);
-  --k: var(--cut-sm);
-  clip-path: var(--nick-all);
+  clip-path: var(--nick-all-sm);
   border-radius: var(--radius);
 }
 .dropzone-ico .ico { width: 24px; height: 24px; }
@@ -930,8 +958,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   flex: none;
   transition: box-shadow var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
-  --k: 4px;
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
 }
 .switch.is-on { background: rgb(var(--accent-rgb) / .18); box-shadow: inset 0 0 0 var(--hair) var(--accent); }
@@ -990,8 +1017,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   font-size: calc(10px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
-  --k: 4px;
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
 }
 
@@ -1067,8 +1093,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   letter-spacing: .14em;
   text-transform: uppercase;
   white-space: nowrap;
-  --k: 5px;
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
 }
 .link-state[hidden] { display: none; }
@@ -1137,8 +1162,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line), 0 18px 44px -18px rgb(0 0 0 / .7);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  --k: var(--cut-sm);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
   overflow-x: auto;
 }
@@ -1355,7 +1379,12 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   align-items: stretch;
   gap: 1px;
   padding: 6px 3px;
-  opacity: .34;
+  /* Quiet, not absent. At .34 over `--text-2` a letter measured 1.06:1 against
+     the page in the light scheme, which is a control you cannot find until you
+     have already found it. The rail is a shortcut, so it may be understated —
+     but it has to be legible enough to aim at, and it strengthens rather than
+     appears when you approach it. */
+  opacity: .62;
   transition: opacity var(--dur-2) var(--ease);
 }
 .az-rail:hover, .az-rail:focus-within { opacity: 1; }
@@ -1379,7 +1408,10 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 /* Letters the collection has nothing under stay drawn and go quiet: the gaps
    are information, and a rail that changes shape as the library grows is one
    nobody's hand can learn. */
-.az-key.is-empty { color: var(--text-3); opacity: .35; cursor: default; }
+/* Compounding one opacity on another put these at .119 effective — drawn in
+   the markup and invisible on the screen, which is not the same as quiet. The
+   quiet ink alone is the whole difference now. */
+.az-key.is-empty { color: var(--text-3); opacity: .55; cursor: default; }
 
 /* No room beside the list, and a 16px target is not a phone control anyway. */
 @media (max-width: 900px) { .az-rail { display: none; } }
@@ -1479,7 +1511,6 @@ select.input { padding-right: 8px; }
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line), 0 32px 80px -24px rgb(0 0 0 / .8);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  --k: var(--cut);
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
   display: flex;
@@ -1690,7 +1721,6 @@ select.input { padding-right: 8px; }
   margin-bottom: 16px;
   background: rgb(var(--accent-rgb) / .1);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
-  --k: var(--cut);
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
@@ -1893,7 +1923,7 @@ html.is-dragging-tracks .side-playlist.is-smart { opacity: .45; }
     position: absolute;
     inset: 11px 0;
     box-shadow: inset 0 0 0 var(--hair) var(--line-2);
-    clip-path: var(--nick-ne);
+    clip-path: var(--nick-ne-sm);
     border-radius: var(--radius);
     pointer-events: none;
   }

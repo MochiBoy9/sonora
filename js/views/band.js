@@ -17,7 +17,7 @@ export function viewCircles(host) {
 
   const onReset = () => dialog({
     title: 'Reset listening data?',
-    body: el('p', { class: 'muted', text: 'Every second counted so far is discarded. Your library, playlists and files are untouched — only the analytics are cleared.' }),
+    body: el('p', { class: 'muted', text: 'Every second counted so far is discarded. Your library, playlists and files are untouched.' }),
     actions: [
       { label: 'Cancel' },
       { label: 'Reset', danger: true, onSelect: async () => { await stats.reset(); api.refresh(); toast('Listening data cleared'); } },

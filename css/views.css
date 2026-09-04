@@ -7,10 +7,21 @@
 
 /* ------------------------------------------------------------------ page head */
 
+/* The masthead, and how much of the window it may have.
+ *
+ * At 1440x900 the content area is 742px tall and this block was taking 163 of
+ * it before a single record appeared — 251 on Songs once the toolbar and the
+ * column heads are counted, which is a third of the window spent on saying
+ * where you are. Some of that was 46px of gap between four lines of text, and
+ * some of it was an eyebrow reading "LIBRARY" above a title reading "Songs" on
+ * a route the sidebar was already highlighting and the breadcrumb already
+ * spelling. The eyebrow now appears only where it names a *kind of thing* the
+ * title does not — ALBUM, ARTIST, SOUND — and the gaps are closed to what
+ * separates lines rather than what separates blocks. */
 .page-head {
   position: relative;
-  padding: 28px 0 20px;
-  margin-bottom: 14px;
+  padding: 20px 0 14px;
+  margin-bottom: 10px;
   border-bottom: var(--hair) solid var(--line);
 }
 .page-head::after {
@@ -32,7 +43,7 @@
   font-weight: 500;
   letter-spacing: .24em;
   text-transform: uppercase;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .eyebrow::before {
   content: "";
@@ -48,7 +59,32 @@
   font-size: calc(11px * var(--scale));
   letter-spacing: .1em;
   text-transform: uppercase;
-  margin-top: 10px;
+  margin-top: 6px;
+}
+
+/* A readout and a sentence are not the same thing, and this slot holds both.
+ *
+ * Wide mono capitals are exactly right for "50 tracks · 35 min": the figures
+ * line up, and they do not reflow as the digits change. Applied to a sentence
+ * the same treatment stops being typography and becomes an obstacle —
+ * uppercase throws away the ascenders and descenders a reader recognises a
+ * word by, wide tracking throws away the word shape that is left, and a mono
+ * face throws away the last of the difference between one letter and the next.
+ * "THE FOLDERS ON DISK, AND WHAT IS IN THEM TWICE" is not read, it is spelled
+ * out, and the app was setting six of its page subtitles that way.
+ *
+ * A modifier rather than a second class, because some of these slots print a
+ * readout on one paint and a sentence on the next: the Rack says "12 dB of
+ * bass" until it is flat and then says a sentence about it, and Needs
+ * attention counts things until there is nothing to count. */
+.page-sub.is-note {
+  font-family: var(--font);
+  font-size: calc(13.5px * var(--scale));
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-2);
+  max-width: 66ch;
 }
 
 .toolbar { display: flex; align-items: center; gap: 10px; padding-bottom: 20px; flex-wrap: wrap; }
@@ -112,8 +148,7 @@
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  --k: var(--cut-lg);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-lg);
   border-radius: var(--radius);
 }
 /* Scanline sweep across the header, once every eight seconds. */
@@ -186,8 +221,7 @@
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  --k: var(--cut-lg);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-lg);
   border-radius: var(--radius);
 }
 /* The album's own colour, kept where it belongs: behind its own artwork. */
@@ -197,8 +231,14 @@
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(120% 150% at 0% 0%, rgb(var(--hero-rgb, var(--art-rgb)) / .34), transparent 58%),
-    linear-gradient(150deg, rgb(var(--hero-rgb, var(--art-rgb)) / .14), transparent 62%);
+    /* The fallback is the brand, not `--art-rgb`.
+       `--hero-rgb` is set from this record's own cover once it has decoded, and
+       until then the fallback was the *playing* album's colour — so opening a
+       navy record while an olive one played washed the whole header olive, and
+       on a cover with no colour of its own it stayed that way. A header with
+       nothing to say about itself should say the instrument's own cyan. */
+    radial-gradient(120% 150% at 0% 0%, rgb(var(--hero-rgb, var(--accent-rgb)) / .34), transparent 58%),
+    linear-gradient(150deg, rgb(var(--hero-rgb, var(--accent-rgb)) / .14), transparent 62%);
   transition: background 600ms var(--ease);
 }
 /* Hairline grid inside the hero, so it reads as a plate. */
@@ -221,7 +261,7 @@
   height: 204px;
   flex: none;
   --cut: 14px;
-  box-shadow: var(--sh-3), 0 0 60px -22px rgb(var(--hero-rgb, var(--art-rgb)) / .8);
+  box-shadow: var(--sh-3), 0 0 60px -22px rgb(var(--hero-rgb, var(--accent-rgb)) / .8);
   transition: transform var(--dur-3) var(--ease);
 }
 .hero:hover .hero-art { transform: translateY(-3px); }
@@ -336,7 +376,6 @@
   background:
     linear-gradient(160deg, rgb(var(--surface-3-rgb) / .96), rgb(var(--surface-rgb) / .99));
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
-  --k: var(--cut);
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
@@ -502,8 +541,7 @@
   color: var(--text-2);
   background: rgb(var(--surface-2-rgb) / .72);
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
-  --k: 6px;
-  clip-path: var(--nick-nw);
+  clip-path: var(--nick-nw-sm);
   border-radius: var(--radius);
   border: 0;
   cursor: pointer;
@@ -531,7 +569,7 @@
   left: 6%; right: 6%;
   top: var(--sleeve-size);
   height: var(--hair);
-  background: linear-gradient(90deg, transparent, rgb(var(--hero-rgb, var(--art-rgb)) / .6), transparent);
+  background: linear-gradient(90deg, transparent, rgb(var(--hero-rgb, var(--accent-rgb)) / .6), transparent);
   opacity: calc(.9 * var(--parallax));
   pointer-events: none;
 }
@@ -540,7 +578,23 @@
   /* Stacked, the reflection is 52px of nothing between the record and its
      title. The object keeps its edge and its light; it just stops standing up. */
   .hero-show { gap: 22px; padding-top: 30px; }
-  .hero-show .sleeve-stage { --sleeve-size: 168px; padding-bottom: 0; margin-bottom: 0; }
+  /* The floor goes, and the band the two buttons stand on has to be put back.
+   *
+   * `.flip-btn` and `.zoom-btn` are positioned `bottom: var(--floor-h) * 0.2`
+   * — on the floor, under the record. Take the floor away without taking the
+   * measurement away and "just above the bottom of the reflection" becomes
+   * "just above the bottom of the cover", which is where they were: two
+   * controls parked across the artwork they are meant to sit beneath, hiding
+   * the lower third of every sleeve on every phone. So the floor's height goes
+   * to zero and its padding is replaced by a real band, not overflowed by a
+   * negative margin this time, because on a phone the buttons occupy it. */
+  .hero-show .sleeve-stage {
+    --sleeve-size: 168px;
+    --floor-h: 0px;
+    padding-bottom: 46px;
+    margin-bottom: 0;
+  }
+  .hero-show .flip-btn, .hero-show .zoom-btn { bottom: 0; opacity: 1; }
   .hero-show .art-floor, .hero-show .sleeve-stage::after { display: none; }
 
   /* A 168px sleeve is three quarters of a 232px one, and the back cover's
@@ -607,6 +661,8 @@
    can break is after the artist — a wrapping row of dot-separated spans
    otherwise ends a line on a bare separator, which reads as a truncation. */
 .hero-facts { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+/* A separator and the thing it introduces, as one box. See `genreLinks`. */
+.fact-pair { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
 
 /* On a phone the facts are five items on one unwrappable line, which at 390px
    overhangs the window by about 160 pixels. `nowrap` exists so a fact and its
@@ -652,14 +708,31 @@
    `flex` basis gives up its padding first and clips its own label rather than
    moving to the next line. Five actions in 390px is exactly that case. */
 .hero-actions > .btn, .hero-actions > .icon-btn, .hero-actions > .fab { flex: none; }
+/* The secondary controls, as one box. See the note in `viewAlbum`. */
+.hero-actions-more { display: inline-flex; align-items: center; gap: 12px; flex: none; }
 
 /* ------------------------------------------------------------------ grids */
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+  /* 172 gave six columns of a 148px cover at 1440 — smaller than the thumbnail
+     most people picture when they think "album art", on a page whose entire
+     subject is the covers. With the 40px of dead space under each one gone
+     there is room to spend on the artwork instead of on another column of
+     small ones. */
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 12px;
 }
+
+/* An empty state is the page's message, not one card in the wall.
+ *
+ * Playlists, Albums and Artists all append theirs into the grid they would
+ * have filled, so it was laid out as a single 172px column: a heading over a
+ * note broken six words wide, hard against the left edge of a 1,120px page.
+ * It reads as a card that failed to load rather than as a page saying it has
+ * nothing on it yet. Spanning every column is what "this is about the whole
+ * page" means in a grid. */
+.grid > .empty { grid-column: 1 / -1; }
 
 /* A shelf below the fold is not laid out at all until it is approached, which
    is the one part of the library that is not virtualised and therefore the one
@@ -749,8 +822,7 @@
   transform: scale(.9);
   transition: opacity var(--dur-2) var(--ease), transform var(--dur-2) var(--ease-back);
   z-index: 3;
-  --k: 4px;
-  clip-path: var(--nick-nw);
+  clip-path: var(--nick-nw-sm);
   border-radius: var(--radius);
 }
 .rail-nav[hidden] { display: none; }
@@ -764,11 +836,25 @@
 
 /* ------------------------------------------------------------------ empty */
 
+/* An empty page should look empty on purpose.
+ *
+ * With a fixed top padding this sat wherever the block above it happened to
+ * end — about a third of the way down a 900px window, with six hundred pixels
+ * of nothing under it. That does not read as "there is nothing here yet", it
+ * reads as a page that stopped loading. Given a band of its own to sit in the
+ * middle of, the space below becomes margin rather than absence.
+ *
+ * `align-content` is the whole of it: the rows are centred in the band as a
+ * group. `place-items` has to stay, because turning off the column track's
+ * stretch leaves it sized to its own content and the block lands against the
+ * left edge in a column six words wide. */
 .empty {
   display: grid;
   place-items: center;
+  align-content: center;
   gap: 14px;
-  padding: 72px 24px;
+  padding: 40px 24px;
+  min-height: 42vh;
   text-align: center;
   color: var(--text-2);
 }
@@ -780,7 +866,6 @@
   background: rgb(var(--accent-rgb) / .07);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
   margin-bottom: 6px;
-  --k: var(--cut);
   clip-path: var(--nick-all);
   border-radius: var(--radius);
 }
@@ -791,7 +876,15 @@
 
 /* ------------------------------------------------------------------ settings */
 
-.rows { display: flex; flex-direction: column; }
+/* The settings column has a width past which it stops being a column.
+ *
+ * Every row here is a label on the left and a control on the right, and the
+ * eye has to carry one to the other. At 1440 that trip was 990 pixels of empty
+ * surface; on a 27-inch monitor it is nearer 1,600, and by then the switch on
+ * the right belongs to no label in particular. Capped, the rail of controls
+ * stays within reach of the words it answers to, and the page simply stops
+ * growing rather than spreading. */
+.rows { display: flex; flex-direction: column; max-width: 1120px; }
 
 .settings-row {
   display: flex;
@@ -813,12 +906,16 @@
   background: rgb(var(--accent-rgb) / .08);
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   flex: none;
-  --k: 4px;
-  clip-path: var(--nick-nw);
+  clip-path: var(--nick-nw-sm);
   border-radius: var(--radius);
 }
 .settings-ico .ico { width: 17px; height: 17px; }
-.settings-text { flex: 1; min-width: 0; }
+/* And a line of prose has a length past which it stops being readable. The
+   longest note in Settings is 140 characters; run across the full row it set
+   as one 800px line, which is about twice the length an eye can return from
+   and still find the start of the next one. Two shorter lines are easier than
+   one long one, so this is a cap rather than a rewrite of the copy. */
+.settings-text { flex: 1; min-width: 0; max-width: 62ch; }
 .settings-name { color: var(--text); font-weight: 550; font-size: calc(13.5px * var(--scale)); }
 /* A number that has crossed into the part of the range where things start to
    fail, said in the warn colour so it reads before it is read. */
@@ -980,7 +1077,11 @@
   /* H1: the swipe layer slides off the edges, and the labels behind it must
      not be visible until it does. */
   overflow: hidden;
-  border-bottom: var(--hair) solid rgb(120 200 255 / .06);
+  /* `--line`, not a pale sky blue literal. The hard-coded value lightens
+     against whatever it is set on, which on a dark ground reads as a rule and
+     on a light one measured 1.04:1 against the row it divides — a separator
+     that only separates in one theme. */
+  border-bottom: var(--hair) solid var(--line);
   border-left: 2px solid transparent;
   transition: background var(--dur-1) linear, opacity var(--dur-2) linear, border-color var(--dur-1) linear;
 }
@@ -1154,7 +1255,6 @@
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
   pointer-events: none;
-  --k: 7px;
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
@@ -1183,8 +1283,7 @@
   background: rgb(var(--surface-2-rgb) / .6);
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   overflow: hidden;
-  --k: 6px;
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
 }
 .circle-pin::before {
@@ -1230,7 +1329,6 @@
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  --k: var(--cut);
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
@@ -1287,8 +1385,7 @@
   height: 8px;
   background: rgb(var(--surface-3-rgb) / .7);
   box-shadow: inset 0 0 0 var(--hair) var(--line);
-  --k: 3px;
-  clip-path: var(--nick-nw);
+  clip-path: var(--nick-nw-sm);
 }
 .census-bar i {
   position: absolute;
@@ -1524,8 +1621,7 @@
   margin-bottom: 12px;
   background: rgb(var(--surface-rgb) / .4);
   box-shadow: inset 0 0 0 var(--hair) var(--line);
-  --k: var(--cut-sm);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
   overflow: hidden;
 }
@@ -1561,7 +1657,11 @@
   align-items: center;
   gap: 12px;
   padding: 8px 14px;
-  border-bottom: var(--hair) solid rgb(120 200 255 / .06);
+  /* `--line`, not a pale sky blue literal. The hard-coded value lightens
+     against whatever it is set on, which on a dark ground reads as a rule and
+     on a light one measured 1.04:1 against the row it divides — a separator
+     that only separates in one theme. */
+  border-bottom: var(--hair) solid var(--line);
 }
 .dupe-row:last-child { border-bottom: 0; }
 .dupe-path {
@@ -1798,7 +1898,6 @@
   box-shadow:
     inset 0 0 0 var(--hair) rgb(160 220 255 / .16),
     0 30px 50px -26px rgb(0 0 0 / .85);
-  --k: var(--cut);
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
@@ -2118,20 +2217,29 @@
 
 /* ------------------------------------------------------------------ L4
 
-   Genres. Weighted tiles rather than a uniform grid: a genre with four tracks
-   and one with four hundred are not the same kind of thing, and a grid of
-   equal boxes says they are. */
+   Genres. The weight is real; the geometry was not.
+
+   A genre with four tracks and one with four hundred are not the same kind of
+   thing, and `--w` is the app's honest measure of that. But it was spent on
+   `flex-grow`, and flex-grow divides the *leftover of its own row* — so a row
+   holding three tiles made them 40% wider than a row holding four, and the
+   width of a genre tile ended up encoding how many other genres happened to
+   land beside it. Seven tiles measured seven widths, and nothing on the second
+   row lined up with anything on the first. `--w` also drove the type size, so
+   "Indie Rock" and "Soul" were set at different sizes on the same screen.
+
+   The weighting stays where it can be read — the wash behind the tile, and the
+   count printed on it, which is the number itself. The geometry goes on a
+   shared grid, so a wall of genres reads as a wall. */
 .genre-wall {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 10px;
   padding-bottom: 60px;
 }
 .genre-tile {
   --w: 1;
-  flex: 1 1 calc(120px + 150px * var(--w));
-  min-width: calc(120px + 90px * var(--w));
-  min-height: calc(64px + 46px * var(--w));
+  min-height: 96px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -2140,8 +2248,7 @@
   text-decoration: none;
   border: var(--hair) solid var(--line);
   border-radius: var(--radius);
-  --k: var(--cut-sm);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   background:
     linear-gradient(150deg,
       rgb(var(--accent-rgb) / calc(.05 + .10 * var(--w))),
@@ -2152,7 +2259,7 @@
 .genre-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .genre-name {
   color: var(--text);
-  font-size: calc((13px + 5px * var(--w)) * var(--scale));
+  font-size: calc(15px * var(--scale));
   font-weight: 600;
   letter-spacing: -.01em;
 }
@@ -2531,8 +2638,7 @@ body.lb-open { overflow: hidden; }
   padding: 12px 14px;
   border: var(--hair) solid var(--line);
   border-radius: var(--radius);
-  --k: var(--cut-sm);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   background: rgb(var(--surface-rgb) / .5);
 }
 .analysis-cell.is-warn { border-color: rgb(var(--accent-rgb) / .3); background: rgb(255 200 87 / .06); }
@@ -2807,7 +2913,9 @@ body.lb-open { overflow: hidden; }
 @media (pointer: coarse) {
   .flip-btn { min-height: 44px; padding-left: 14px; padding-right: 14px; }
   .file-twist { width: 44px; height: 44px; }
-  .card-fab { width: 44px; height: 44px; }
+  /* Two classes, to match the rule in components.css that had to take two to
+     outrank aero's `position: relative` list. A finger still needs 44. */
+  .card .card-fab { width: 44px; height: 44px; }
   .crate-pile-card { width: 56px; height: 56px; }
   /* The nav bar along the bottom of a phone scrolls, so its items can afford
      the width — and 26px each across twelve is not a bar anybody can hit. */

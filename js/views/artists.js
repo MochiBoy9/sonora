@@ -16,14 +16,17 @@ import { albumCard, artistCard, artistOf, decode, notFound, pageFilter, playAll,
 export function viewArtists(host) {
   const artists = lib.state.artists;
   const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Artists' }),
     el('p', { class: 'page-sub', text: fmtCount(artists.length, 'artist') }));
   host.appendChild(head);
   decode(head.querySelector('.page-title'), 'Artists');
 
   if (!artists.length) {
-    host.appendChild(emptyState({ icon: 'artist', title: 'No artists yet' }));
+    host.appendChild(emptyState({
+      icon: 'artist', title: 'No artists yet',
+      note: 'Artists are read from your files. Add a folder of music and they appear here.',
+      action: { label: 'Add music folder', onSelect: () => document.dispatchEvent(new CustomEvent('sonora:add')) },
+    }));
     return () => {};
   }
 
@@ -72,7 +75,7 @@ export function viewArtist(host, key) {
   meta.appendChild(el('div', { class: 'hero-actions' },
     playFab(() => playAll(artist.tracks, 0, origin)),
     el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(artist.tracks, origin) }),
-    el('button', { class: 'icon-btn', html: ico('more'), onclick: (e) => menu(trackMenu(artist.tracks, { origin }), { anchor: e.currentTarget }) })));
+    el('button', { class: 'icon-btn', html: ico('more'), title: 'More for this artist', 'aria-label': 'More for this artist', onclick: (e) => menu(trackMenu(artist.tracks, { origin }), { anchor: e.currentTarget }) })));
   hero.append(art, meta);
   host.appendChild(hero);
   if (first) applyHeroTint(hero, first.key);

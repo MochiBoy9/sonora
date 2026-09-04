@@ -20,7 +20,6 @@ export function viewRecent(host) {
   const tracks0 = get();
 
   const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Recently played' }),
     el('p', { class: 'page-sub' }));
   host.appendChild(head);
@@ -71,7 +70,6 @@ export function viewRecent(host) {
 
 export function viewPlaylists(host) {
   const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Playlists' }),
     el('p', { class: 'page-sub', text: fmtCount(lib.state.playlists.length, 'playlist') }));
   host.appendChild(head);
@@ -126,13 +124,13 @@ export function viewPlaylists(host) {
         e.preventDefault();
         menu([
           { label: 'Rename', icon: 'edit', onSelect: () => promptDialog({ title: 'Rename playlist', label: 'Name', value: p.name, onConfirm: (n) => n && lib.updatePlaylist(p.id, { name: n }) }) },
-          { label: 'Delete', icon: 'trash', danger: true, onSelect: () => lib.removePlaylist(p.id) },
+          { label: 'Delete playlist', icon: 'trash', danger: true, onSelect: () => lib.removePlaylist(p.id) },
         ], { event: e });
       });
       grid.appendChild(card);
     }
     if (!lib.state.playlists.length) {
-      grid.appendChild(emptyState({ icon: 'playlist', title: 'No playlists yet', note: 'Right-click any track to add it to one.' }));
+      grid.appendChild(emptyState({ icon: 'playlist', title: 'No playlists yet', note: 'A playlist is a list you keep by hand. Press New playlist above to start one, or select tracks anywhere and choose “Add to playlist”.' }));
     }
     enter(grid.children, { each: 24, y: 12 });
   };
@@ -179,7 +177,6 @@ export function viewFavourites(host) {
   };
 
   const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Favourites' }),
     el('p', { class: 'page-sub' }));
   host.appendChild(head);
@@ -313,7 +310,7 @@ export function viewPlaylist(host, id) {
     playFab(() => playAll(lib.playlistTracks(p), 0, origin)),
     el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(lib.playlistTracks(p), origin) }),
     el('button', {
-      class: 'icon-btn', html: ico('more'), onclick: (e) => menu([
+      class: 'icon-btn', html: ico('more'), title: 'More for this playlist', 'aria-label': 'More for this playlist', onclick: (e) => menu([
         { label: 'Rename', icon: 'edit', onSelect: () => promptDialog({ title: 'Rename playlist', label: 'Name', value: p.name, onConfirm: (n) => n && lib.updatePlaylist(p.id, { name: n }) }) },
         p.smart && {
           label: 'Edit the rules…', icon: 'sliders',
@@ -342,7 +339,7 @@ export function viewPlaylist(host, id) {
     host.appendChild(emptyState(p.smart
       ? { icon: 'sparkle', title: 'Nothing matches yet',
           note: `This shelf describes ${rules.describe(p)}. Edit the rules, or give the library time to catch up.` }
-      : { icon: 'playlist', title: 'This playlist is empty', note: 'Right-click a track anywhere and choose “Add to playlist”.' }));
+      : { icon: 'playlist', title: 'This playlist is empty', note: 'Drag tracks onto it from anywhere, or select some and choose “Add to playlist”.' }));
     enter([hero], { y: 14 });
     const off = lib.events.on('playlists', () =>
       document.dispatchEvent(new CustomEvent('sonora:refresh')));

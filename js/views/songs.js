@@ -13,7 +13,6 @@ export function viewSongs(host) {
   const columns = ['index', 'art', 'title', 'album', 'dr', 'plays', 'played', 'rating', 'duration'];
   const all = lib.allTracks();
   const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Songs' }),
     el('p', { class: 'page-sub', text: `${fmtCount(all.length, 'track')} · ${fmtTotal(all.reduce((s, t) => s + (t.duration || 0), 0))}` }));
   /* D6: the list, narrowed to whatever is typed in the toolbar. Play all and

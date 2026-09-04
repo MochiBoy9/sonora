@@ -31,10 +31,17 @@ function genreLinks(tracks) {
      a record is rarely worth a line of its own — the genre page it links to
      lists the rest. */
   const top = [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 1);
+  /* The separator travels with the genre rather than beside it.
+     `.hero-facts` may wrap on a phone, and a bare `.dot` pushed in as its own
+     flex item is free to be the last thing on a line — which prints as
+     "2020 · 4 tracks · 2 min ·" with the genre stranded underneath, and a line
+     ending in a separator reads as a sentence that was cut off. Paired inside
+     one nowrap box, the break can only happen in front of the pair. */
   const out = [];
   for (const [name] of top) {
-    out.push(el('span', { class: 'dot' }));
-    out.push(el('a', { class: 'hero-link subtle', href: '#/genre/' + encodeURIComponent(name), text: name }));
+    out.push(el('span', { class: 'fact-pair' },
+      el('span', { class: 'dot' }),
+      el('a', { class: 'hero-link subtle', href: '#/genre/' + encodeURIComponent(name), text: name })));
   }
   return out;
 }
@@ -73,21 +80,31 @@ export function viewAlbum(host, key) {
          * link in the app and it was plain text. */
         ...genreLinks(album.tracks))));
 
+  /* Two things you do to a record, and three you might.
+   *
+   * Five controls and their gaps come to 295px; a 390px phone gives the hero
+   * 242. So the row wraps, and the only question is where. Left to flexbox it
+   * broke wherever it ran out — play, shuffle and the queue icon on one line,
+   * two loose icons underneath, which reads as a layout that got cut off
+   * rather than one that was arranged. Boxed, the three secondary controls
+   * move as a unit: they sit inline when there is room and drop to a line of
+   * their own when there is not, and both readings are deliberate. */
   const actions = el('div', { class: 'hero-actions' },
     playFab(() => playAll(album.tracks, 0, origin)),
     el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(album.tracks, origin) }),
-    el('button', { class: 'icon-btn', html: ico('queue'), title: 'Add to queue', onclick: () => { player.enqueue(album.tracks); toast('Added to queue'); } }),
-    /* E2: this record, then the ones that measure out near it. Offered on the
-       album page rather than buried in a menu because the album page is where
-       somebody stands when they have just finished a record and want another
-       one like it. */
-    el('button', {
-      class: 'icon-btn', html: ico('circles'), title: 'Start a station from this record',
-      'aria-label': 'Start a station from this record',
-      onclick: () => startStation(key),
-    }),
-    el('button', { class: 'icon-btn', html: ico('more'), title: 'More',
-      onclick: (e) => menu(coverMenu(key, album).concat(trackMenu(album.tracks, { origin })), { anchor: e.currentTarget }) }));
+    el('div', { class: 'hero-actions-more' },
+      el('button', { class: 'icon-btn', html: ico('queue'), title: 'Add to queue', onclick: () => { player.enqueue(album.tracks); toast('Added to queue'); } }),
+      /* E2: this record, then the ones that measure out near it. Offered on the
+         album page rather than buried in a menu because the album page is where
+         somebody stands when they have just finished a record and want another
+         one like it. */
+      el('button', {
+        class: 'icon-btn', html: ico('circles'), title: 'Start a station from this record',
+        'aria-label': 'Start a station from this record',
+        onclick: () => startStation(key),
+      }),
+      el('button', { class: 'icon-btn', html: ico('more'), title: 'More',
+        onclick: (e) => menu(coverMenu(key, album).concat(trackMenu(album.tracks, { origin })), { anchor: e.currentTarget }) })));
   meta.appendChild(actions);
 
   hero.append(art, meta);
@@ -136,9 +153,9 @@ export function viewAlbum(host, key) {
    * is a page that has traded discoverability for a trick — and the sleeve
    * already tilts, turns and accepts a dropped cover. */
   const zoomBtn = el('button', {
-    class: 'flip-btn zoom-btn', title: 'Look at the cover',
-    'aria-label': 'Look at the cover, full size',
-    html: ico('expand') + '<span>Look</span>',
+    class: 'flip-btn zoom-btn', title: 'See the cover full size',
+    'aria-label': 'See the cover full size',
+    html: ico('expand') + '<span>Full size</span>',
     onclick: () => lightbox(key, { title: album.title, artist: album.artist }),
   });
   art.appendChild(zoomBtn);

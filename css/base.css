@@ -84,6 +84,12 @@
   --accent-glow: rgb(var(--accent-rgb) / calc(.40 * var(--glow)));
   --accent-grad: linear-gradient(115deg, rgb(var(--accent-rgb)), rgb(var(--accent-2-rgb)));
 
+  /* Both of these are *ink* as well as fill — `.btn.danger` sets `--danger` as
+     its text colour, and the NO DECODER badge sets `--warn` as its. Chosen for
+     a near-black ground they measure 13.05:1 and fine; the same two on white
+     measure 1.54:1 and 3.22:1, so the light scheme redefines them below. The
+     amber was the worse of the two by far: the one piece of text on the page
+     whose whole job is to warn you was the least legible thing on it. */
   --danger: #ff4d6a;
   --warn:   #ffc857;
 
@@ -94,19 +100,53 @@
   --hair:   1px;
   --radius: 0px;                  /* non-zero only in the rounded corner mode */
 
-  /* The three chamfer shapes the whole interface is cut from. Each reads
-     `--k` off the element that uses it, so one shape token serves every size:
-     set `--k` and ask for the family you want. Setting a family to `none`
-     turns every chamfer in the app square at once, which is how the corner
-     style becomes a preference rather than a rewrite. */
-  --nick-ne: polygon(0 0, calc(100% - var(--k)) 0, 100% var(--k),
-                     100% 100%, var(--k) 100%, 0 calc(100% - var(--k)));
-  --nick-nw: polygon(var(--k) 0, 100% 0, 100% calc(100% - var(--k)),
-                     calc(100% - var(--k)) 100%, 0 100%, 0 var(--k));
-  --nick-all: polygon(var(--k) 0, calc(100% - var(--k)) 0, 100% var(--k),
-                      100% calc(100% - var(--k)), calc(100% - var(--k)) 100%,
-                      var(--k) 100%, 0 calc(100% - var(--k)), 0 var(--k));
-  --k: 0px;
+  /* The chamfer. Three families, three sizes, nine shapes — and not one of
+     them reads a variable off the element that uses it.
+   *
+   * This used to be three tokens holding `var(--k)`, with each element setting
+   * its own `--k` before asking for a family. It could never have worked. A
+   * custom property's `var()` references are substituted when *that property*
+   * is computed, which for a token declared on `:root` means they are resolved
+   * against `:root` — where `--k` was `0px`. What inherited down to all
+   * forty-nine sites was the already-substituted string, so every chamfer in
+   * the application computed to
+   *
+   *     polygon(0 0, 100% 0, 100% 0, 100% 100%, 0 100%, 0 100%)
+   *
+   * which is a rectangle. The corners were square everywhere, in both themes,
+   * at every size, for as long as the token has existed — the defining rule of
+   * the whole design, doing nothing. Nothing caught it because the geometry
+   * lint asks whether boxes fit and the goldens compare each screenshot with
+   * the last equally-square one.
+   *
+   * Resolving the size here instead means the substitution happens where
+   * `--cut*` actually live. It also turns ten arbitrary corner sizes into a
+   * three-step scale, which is what the rest of the system already assumed.
+   * `js/looks.js` still owns all three `--cut*` values, so Settings → Look
+   * moves every corner in the app at once, and `square` zeroes them. */
+  --nick-ne:     polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut),
+                         100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
+  --nick-ne-sm:  polygon(0 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
+                         100% 100%, var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)));
+  --nick-ne-lg:  polygon(0 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg),
+                         100% 100%, var(--cut-lg) 100%, 0 calc(100% - var(--cut-lg)));
+
+  --nick-nw:     polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)),
+                         calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+  --nick-nw-sm:  polygon(var(--cut-sm) 0, 100% 0, 100% calc(100% - var(--cut-sm)),
+                         calc(100% - var(--cut-sm)) 100%, 0 100%, 0 var(--cut-sm));
+  --nick-nw-lg:  polygon(var(--cut-lg) 0, 100% 0, 100% calc(100% - var(--cut-lg)),
+                         calc(100% - var(--cut-lg)) 100%, 0 100%, 0 var(--cut-lg));
+
+  --nick-all:    polygon(var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut),
+                         100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%,
+                         var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut));
+  --nick-all-sm: polygon(var(--cut-sm) 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm),
+                         100% calc(100% - var(--cut-sm)), calc(100% - var(--cut-sm)) 100%,
+                         var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)), 0 var(--cut-sm));
+  --nick-all-lg: polygon(var(--cut-lg) 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg),
+                         100% calc(100% - var(--cut-lg)), calc(100% - var(--cut-lg)) 100%,
+                         var(--cut-lg) 100%, 0 calc(100% - var(--cut-lg)), 0 var(--cut-lg));
 
   --sidebar-w: 252px;
   --pane-w:    352px;
@@ -122,6 +162,14 @@
   --frost:  24px;                 /* how far glass blurs what is behind it */
   --glow:   1;                    /* bloom multiplier */
   --grid-a: 1;                    /* graph-paper opacity */
+  /* The 44px grid, as a colour rather than as an expression buried in the rule
+     that paints it. On the dark ground it is the accent at almost nothing,
+     which is all a glowing cyan needs on near-black. On white the same value
+     is not faint, it is absent — 3.4% of a pale cyan over #eef3f8 is a colour
+     no screen can show — so the light scheme redraws it in ink instead. The
+     graph paper is what tells you the interface is drawn rather than
+     assembled; a theme without it is missing the premise. */
+  --grid-line: rgb(var(--accent-rgb) / calc(.034 * var(--grid-a)));
   --parallax: .6;
   --aero-rgb: 64 224 255;         /* the lighter, greener partner to the accent */
   --aero: rgb(var(--aero-rgb));
@@ -158,11 +206,14 @@
 /* Two of the three corner styles have no chamfer at all. Blanking the shape
    families is the whole switch — every clip-path in the app reads one of
    these three, so nothing else has to know. */
+/* `square` reaches zero through `--cut` on its own, so this is really about
+   `round`: there the chamfer has to be switched off entirely or it would clip
+   the radius it was replaced by. */
 :root[data-corner="round"],
 :root[data-corner="square"] {
-  --nick-ne: none;
-  --nick-nw: none;
-  --nick-all: none;
+  --nick-ne: none;    --nick-ne-sm: none;    --nick-ne-lg: none;
+  --nick-nw: none;    --nick-nw-sm: none;    --nick-nw-lg: none;
+  --nick-all: none;   --nick-all-sm: none;   --nick-all-lg: none;
 }
 
 /* ------------------------------------------------------------------ light */
@@ -176,14 +227,31 @@
   --surface-2-rgb: 243 247 251;
   --surface-3-rgb: 229 237 245;
 
-  --surface-hi: rgb(10 60 100 / .05);
-  --line:   rgb(12 60 100 / .16);
-  --line-2: rgb(12 60 100 / .30);
-  --line-3: rgb(12 60 100 / .48);
+  --surface-hi: rgb(10 60 100 / .07);
+  /* Ink, and enough of it to be a line.
+     At .16 a rule on white is about two per cent of contrast — present in
+     the stylesheet, absent on the screen — and a scheme that separates its
+     surfaces with hairlines instead of shadows cannot afford hairlines
+     nobody can see. The dark scheme gets away with less because a light
+     line on near-black carries itself. */
+  --line:   rgb(12 60 100 / .22);
+  --line-2: rgb(12 60 100 / .36);
+  --line-3: rgb(12 60 100 / .52);
 
-  --glass:     rgb(var(--surface-rgb) / .72);
-  --glass-2:   rgb(var(--surface-2-rgb) / .88);
-  --glass-bar: rgb(var(--bg-rgb) / .74);
+  /* The chrome is the frame; the content is the paper.
+   *
+   * These read `--surface-rgb`, which is white, and so painted the sidebar,
+   * the queue pane and the transport *lighter* than the page they border —
+   * the three surfaces the eye navigates by collapsed into one sheet and the
+   * whole scheme went flat. On a drafting table the board is darker than the
+   * sheet pinned to it. `--surface-3` is the deepest step of the ramp and
+   * sits just under the page, which puts the chrome behind the work instead
+   * of in front of it. A dialog is still paper: it floats above everything,
+   * so it keeps the lightest step. */
+  --glass:     rgb(var(--surface-3-rgb) / .80);
+  --glass-2:   rgb(var(--surface-rgb) / .92);
+  --glass-bar: rgb(var(--surface-3-rgb) / .84);
+  --grid-line: rgb(12 60 100 / calc(.075 * var(--grid-a)));
 
   --text:   #06131f;
   --text-2: #3f5771;
@@ -192,14 +260,18 @@
   --text-3: #55697f;
   --on-accent: #001620;
 
+  /* 5.9:1 and 5.4:1 on white, same hues, same meanings. */
+  --danger: #c2143a;
+  --warn:   #8a5a00;
+
   --accent-rgb:   0 137 179;
   --accent-2-rgb: 30 96 214;
   --accent-ink:   #00698a;
 
-  --sh-1: 0 1px 0 rgb(12 40 70 / .1);
-  --sh-2: 0 12px 26px -16px rgb(12 40 70 / .4);
-  --sh-3: 0 26px 56px -26px rgb(12 40 70 / .45);
-  --sh-art: 0 20px 40px -22px rgb(12 40 70 / .45);
+  --sh-1: 0 1px 0 rgb(12 40 70 / .12);
+  --sh-2: 0 12px 26px -14px rgb(12 40 70 / .5);
+  --sh-3: 0 26px 56px -24px rgb(12 40 70 / .55);
+  --sh-art: 0 20px 40px -20px rgb(12 40 70 / .55);
 
   color-scheme: light;
 }
@@ -212,19 +284,40 @@
     --surface-2-rgb: 243 247 251;
     --surface-3-rgb: 229 237 245;
 
-    --surface-hi: rgb(10 60 100 / .05);
-    --line:   rgb(12 60 100 / .16);
-    --line-2: rgb(12 60 100 / .30);
-    --line-3: rgb(12 60 100 / .48);
+    --surface-hi: rgb(10 60 100 / .07);
+    /* Ink, and enough of it to be a line.
+       At .16 a rule on white is about two per cent of contrast — present in
+       the stylesheet, absent on the screen — and a scheme that separates its
+       surfaces with hairlines instead of shadows cannot afford hairlines
+       nobody can see. The dark scheme gets away with less because a light
+       line on near-black carries itself. */
+    --line:   rgb(12 60 100 / .22);
+    --line-2: rgb(12 60 100 / .36);
+    --line-3: rgb(12 60 100 / .52);
 
-    --glass:     rgb(var(--surface-rgb) / .72);
-    --glass-2:   rgb(var(--surface-2-rgb) / .88);
-    --glass-bar: rgb(var(--bg-rgb) / .74);
+    /* The chrome is the frame; the content is the paper.
+     *
+     * These read `--surface-rgb`, which is white, and so painted the sidebar,
+     * the queue pane and the transport *lighter* than the page they border —
+     * the three surfaces the eye navigates by collapsed into one sheet and the
+     * whole scheme went flat. On a drafting table the board is darker than the
+     * sheet pinned to it. `--surface-3` is the deepest step of the ramp and
+     * sits just under the page, which puts the chrome behind the work instead
+     * of in front of it. A dialog is still paper: it floats above everything,
+     * so it keeps the lightest step. */
+    --glass:     rgb(var(--surface-3-rgb) / .80);
+    --glass-2:   rgb(var(--surface-rgb) / .92);
+    --glass-bar: rgb(var(--surface-3-rgb) / .84);
+    --grid-line: rgb(12 60 100 / calc(.075 * var(--grid-a)));
 
     --text:   #06131f;
     --text-2: #3f5771;
     --text-3: #55697f;
     --on-accent: #001620;
+
+    /* 5.9:1 and 5.4:1 on white, same hues, same meanings. */
+    --danger: #c2143a;
+    --warn:   #8a5a00;
 
     --accent-rgb:   0 137 179;
     --accent-2-rgb: 30 96 214;
@@ -234,10 +327,10 @@
        the dark scheme for why text does not use `--accent` here. */
     --accent-ink:   #00698a;
 
-    --sh-1: 0 1px 0 rgb(12 40 70 / .1);
-    --sh-2: 0 12px 26px -16px rgb(12 40 70 / .4);
-    --sh-3: 0 26px 56px -26px rgb(12 40 70 / .45);
-    --sh-art: 0 20px 40px -22px rgb(12 40 70 / .45);
+    --sh-1: 0 1px 0 rgb(12 40 70 / .12);
+    --sh-2: 0 12px 26px -14px rgb(12 40 70 / .5);
+    --sh-3: 0 26px 56px -24px rgb(12 40 70 / .55);
+    --sh-art: 0 20px 40px -20px rgb(12 40 70 / .55);
 
     color-scheme: light;
   }
@@ -284,24 +377,20 @@ canvas { display: block; }
 /* The chamfer. One corner cut on every panel — bottom-right by default, which
    gives the whole interface a consistent reading direction. */
 .cut {
-  --k: var(--cut);
   clip-path: var(--nick-ne);
   border-radius: var(--radius);
 }
 .cut-sm {
-  --k: var(--cut-sm);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: var(--radius);
 }
 .cut-lg {
-  --k: var(--cut-lg);
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-lg);
   border-radius: var(--radius);
 }
 /* Cut on both diagonals — used where a shape has to read as a machined part
    rather than as a panel: the transport buttons, the artwork frames. */
 .cut-both {
-  --k: var(--cut);
   clip-path: var(--nick-all);
   border-radius: var(--radius);
 }
@@ -425,8 +514,8 @@ body::before {
   z-index: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(to right, rgb(var(--accent-rgb) / calc(.034 * var(--grid-a))) var(--hair), transparent var(--hair)),
-    linear-gradient(to bottom, rgb(var(--accent-rgb) / calc(.034 * var(--grid-a))) var(--hair), transparent var(--hair));
+    linear-gradient(to right, var(--grid-line) var(--hair), transparent var(--hair)),
+    linear-gradient(to bottom, var(--grid-line) var(--hair), transparent var(--hair));
   background-size: 44px 44px;
   mask-image: radial-gradient(120% 100% at 50% 0%, #000 20%, transparent 78%);
   -webkit-mask-image: radial-gradient(120% 100% at 50% 0%, #000 20%, transparent 78%);

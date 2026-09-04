@@ -3,7 +3,7 @@
  * Play *counts* lie: a track skipped at four seconds counts the same as one
  * played to the end. This module measures the thing that is true instead —
  * seconds of audio that actually reached the speakers — and rolls it up by
- * artist, genre and year for the Circle Analysis Center.
+ * artist, genre and year for the listening analysis page.
  *
  * The meter is driven by the shared ticker rather than by `timeupdate`, and it
  * only counts while the element is genuinely playing, so seeking, pausing and
@@ -196,7 +196,7 @@ export function total() {
 export const trackedCount = () => totals.size;
 
 export const MODES = [
-  { id: 'artist', label: 'Artists' },
+  { id: 'artist', label: 'Artist' },
   { id: 'genre', label: 'Genre' },
   { id: 'year', label: 'Year' },
 ];

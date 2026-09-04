@@ -23,14 +23,15 @@ import { albumCard, decode, letterOf, markTransition, renderAlbumCard, shelf, so
 export function viewAlbums(host) {
   const albums = lib.state.albums;
   const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Albums' }),
     el('p', { class: 'page-sub', text: fmtCount(albums.length, 'album') }));
   host.appendChild(head);
   decode(head.querySelector('.page-title'), 'Albums');
 
   if (!albums.length) {
-    host.appendChild(emptyState({ icon: 'album', title: 'No albums yet', note: 'Add a folder to get started.' }));
+    host.appendChild(emptyState({ icon: 'album', title: 'No albums yet',
+      note: 'Albums are built from the tags in your files. Point Sonora at a folder and they appear here.',
+      action: { label: 'Add music folder', onSelect: () => document.dispatchEvent(new CustomEvent('sonora:add')) } }));
     return () => {};
   }
 
@@ -101,7 +102,12 @@ export function viewAlbums(host) {
 
   function mountGrid(into) {
     const grid = new VirtualGrid({
-      viewport: host, minCell: 168, gap: 22, aspect: 1, footer: 64,
+      /* 168 gave six columns of a 148px cover on a 1440 window — smaller than the
+         thumbnail most people picture when they think "album art", on the one
+         page whose whole subject is the covers. The 40px of dead space that used
+         to sit under each one is gone, so the room it was holding can go to the
+         artwork instead of to a sixth column of small ones. */
+      viewport: host, minCell: 196, gap: 22, aspect: 1, footer: 64,
       create: () => {
         const card = albumCard(null);
         /* F1: in "However you left it", a record can be dragged to a place on

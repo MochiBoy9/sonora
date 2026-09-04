@@ -8,7 +8,6 @@ import { playAll, shelf } from './shared.js';
 
 export function viewAttention(host) {
   const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Needs attention' }),
     el('p', { class: 'page-sub', id: 'attn-sub', text: 'Looking…' }));
   host.appendChild(head);
@@ -98,9 +97,12 @@ export function viewAttention(host) {
       body.appendChild(card);
     }
 
-    host.querySelector('#attn-sub').textContent = total
+    const attnSub = host.querySelector('#attn-sub');
+    attnSub.textContent = total
       ? `${fmtCount(total, 'thing')} worth a look`
       : 'Nothing needs you. The library is as tidy as the files allow.';
+    // A tally is a readout; the all-clear is a sentence. See `.is-note`.
+    attnSub.classList.toggle('is-note', !total);
     if (!total) {
       body.appendChild(emptyState({
         icon: 'star', title: 'All clear',
@@ -190,7 +192,7 @@ function replaceDialog() {
   let matchCase = false;
   let wholeOnly = false;
   const flag = (label, hint, get, set) => {
-    const b = el('button', { class: 'switch', role: 'switch', 'aria-checked': 'false' },
+    const b = el('button', { class: 'switch', role: 'switch', 'aria-checked': 'false', 'aria-label': label },
       el('span', { class: 'switch-knob' }));
     b.addEventListener('click', () => {
       set(!get());
@@ -246,8 +248,8 @@ function replaceDialog() {
       el('label', { class: 'replace-label', text: 'Find' }), findIn),
     el('div', { class: 'replace-row' },
       el('label', { class: 'replace-label', text: 'Replace with' }), withIn),
-    flag('Match case', 'Off, “ft.” also finds “FT.”', () => matchCase, (v) => { matchCase = v; }),
-    flag('The whole field only', 'On, “Various” changes a field that says exactly that and leaves “Various Artists” alone', () => wholeOnly, (v) => { wholeOnly = v; }),
+    flag('Match case', 'When off, “ft.” also finds “FT.”', () => matchCase, (v) => { matchCase = v; }),
+    flag('Match the whole field', 'When on, “Various” changes a field that says exactly that and leaves “Various Artists” alone.', () => wholeOnly, (v) => { wholeOnly = v; }),
     out,
     el('p', { class: 'edit-note', text: 'Saved in Sonora only — your files are never modified. The whole run is one undo.' }));
 

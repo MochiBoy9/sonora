@@ -58,6 +58,7 @@ export function viewSettings(host) {
   const seamlessSwitch = el('button', {
     class: 'switch' + (player.state.seamless ? ' is-on' : ''),
     role: 'switch', 'aria-checked': String(player.state.seamless),
+    'aria-label': 'Run tracks together',
   }, el('span', { class: 'switch-knob' }));
   seamlessSwitch.addEventListener('click', () => {
     player.setSeamless(!player.state.seamless);
@@ -128,7 +129,7 @@ export function viewSettings(host) {
   const levelPick = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Loudness levelling' });
   for (const [mode, label, hint] of [
     ['off', 'Off', 'Play every file at the level it was mastered'],
-    ['track', 'Track', 'Even out every song against every other'],
+    ['track', 'Track', 'Even out every track against every other'],
     ['album', 'Album', 'Move each record as a whole, keeping its internal balance'],
   ]) {
     const b = el('button', {
@@ -179,14 +180,19 @@ export function viewSettings(host) {
     el('div', { class: 'settings-ico', html: ico('shuffle') }),
     el('div', { class: 'settings-text' },
       el('div', { class: 'settings-name', text: 'Shuffle style' }),
-      el('div', { class: 'settings-note', text: 'Learned leans gently towards what you actually play, and hard away from anything heard in the last hour.' })),
+      el('div', { class: 'settings-note', text: 'Plain is a true shuffle. Learned leans gently towards what you actually play, and hard away from anything heard in the last hour.' })),
     el('div', { class: 'settings-actions' }, shufPick)));
 
   /** A plain on/off row driven by a player setter. */
   const toggleRow = (icon, name, note, get, set) => {
+    /* The switch says what it switches.
+       Its label sits in a sibling div that nothing referenced, so the
+       accessibility tree reported a column of unnamed switches: "switch, on"
+       nine times over, with no way to tell gapless playback from crash
+       reporting. The name is already an argument to this helper. */
     const btn = el('button', {
       class: 'switch' + (get() ? ' is-on' : ''),
-      role: 'switch', 'aria-checked': String(get()),
+      role: 'switch', 'aria-checked': String(get()), 'aria-label': name,
     }, el('span', { class: 'switch-knob' }));
     btn.addEventListener('click', () => {
       set(!get());
@@ -310,7 +316,8 @@ export function viewSettings(host) {
             ? el('button', { class: 'btn ghost sm', text: 'Reconnect', onclick: () => document.dispatchEvent(new CustomEvent('sonora:add')) })
             : el('button', { class: 'btn ghost sm', text: 'Rescan', disabled: !!root.off, onclick: () => lib.scanRoot(root) }),
           el('button', {
-            class: 'icon-btn', html: ico('trash'), title: 'Remove',
+            class: 'icon-btn', html: ico('trash'), title: 'Remove this folder',
+            'aria-label': `Remove ${root.name} from the library`,
             onclick: () => dialog({
               title: `Remove “${root.name}”?`,
               body: el('p', { class: 'muted', text: 'Tracks from this folder are removed from the library. Nothing on disk is touched.' }),
@@ -324,7 +331,24 @@ export function viewSettings(host) {
   folders.appendChild(list);
   folders.appendChild(el('div', { class: 'toolbar' },
     el('button', { class: 'btn primary', html: ico('plus') + '<span>Add folder</span>', onclick: () => document.dispatchEvent(new CustomEvent('sonora:add')) }),
-    el('button', { class: 'btn ghost', html: ico('refresh') + '<span>Rescan all</span>', onclick: () => lib.rescanAll() })));
+    /* One rescan, and it lives here.
+      There were two buttons on this page calling `rescanAll` — this one, and
+      "Check for new files" under Recent imports — about 200 pixels apart under
+      different names, with no way for a reader to know they were the same
+      thing. This is where somebody looks for it, next to the list of folders
+      it walks, so this is the one that stayed; the feedback came from the
+      other. */
+    el('button', {
+      class: 'btn ghost', html: ico('refresh') + '<span>Check every folder for new files</span>',
+      title: 'Walk the folders again. Only files that changed are re-read.',
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        const r = await lib.rescanAll();
+        btn.disabled = false;
+        if (!r.ok) toast('No folders to check');
+      },
+    })));
   host.appendChild(folders);
 
   /* --- what the imports did ---
@@ -337,27 +361,14 @@ export function viewSettings(host) {
   const imports = el('section', { class: 'block' }, sectionHead('Recent imports'));
   const runList = el('div', { class: 'rows' });
   imports.appendChild(runList);
-  imports.appendChild(el('div', { class: 'toolbar' },
-    el('button', {
-      class: 'btn ghost', html: ico('refresh') + '<span>Check for new files</span>',
-      title: 'Walk the folders again. Only files that changed are re-read.',
-      onclick: async (e) => {
-        const btn = e.currentTarget;
-        btn.disabled = true;
-        const r = await lib.rescanAll();
-        btn.disabled = false;
-        if (!r.ok) toast('No folders to check');
-      },
-    })));
-
   /* I2: and the other question, which the scan does not answer.
    *
-   * "Check for new files" finds what changed and acts on it. This asks whether
-   * everything the index claims to have is still on the disk and readable —
-   * the question after a drive is unplugged, a sync goes wrong, or a folder is
-   * reorganised by something that was not Sonora. Read-only: it opens files,
-   * reports, and changes nothing, which is what makes it safe to run when you
-   * are already worried. */
+   * The rescan under Music folders finds what changed and acts on it. This
+   * asks whether everything the index claims to have is still on the disk and
+   * readable — the question after a drive is unplugged, a sync goes wrong, or
+   * a folder is reorganised by something that was not Sonora. Read-only: it
+   * opens files, reports, and changes nothing, which is what makes it safe to
+   * run when you are already worried. */
   imports.appendChild(el('div', { class: 'toolbar' },
     el('button', {
       class: 'btn ghost', html: ico('info') + '<span>Check everything is still there</span>',
@@ -584,8 +595,8 @@ export function viewSettings(host) {
     el('div', { class: 'settings-ico', html: ico('plug') }),
     el('div', { class: 'settings-text' },
       el('div', { class: 'settings-name', text: 'Reconnect on launch' }),
-      el('div', { class: 'settings-note', text: 'Re-open the folders you linked and pick up the track you left, without being asked' })),
-    el('div', { class: 'settings-actions' }, toggleSwitch('autoconnect', true))));
+      el('div', { class: 'settings-note', text: 'Re-open the folders you linked and pick up the track you left, without being asked.' })),
+    el('div', { class: 'settings-actions' }, toggleSwitch('autoconnect', true, 'Pick up where you left off'))));
 
   const stateRow = el('div', { class: 'settings-row' },
     el('div', { class: 'settings-ico', html: ico('refresh') }),
@@ -639,17 +650,17 @@ export function viewSettings(host) {
   const accentRow = el('div', { class: 'settings-row' },
     el('div', { class: 'settings-ico', html: ico('palette') }),
     el('div', { class: 'settings-text' },
-      el('div', { class: 'settings-name', text: 'Colour from artwork' }),
-      el('div', { class: 'settings-note', text: 'Tint the interface with the current album’s colour' })),
-    el('div', { class: 'settings-actions' }, toggleSwitch('accent', true)));
+      el('div', { class: 'settings-name', text: 'Colour from the cover' }),
+      el('div', { class: 'settings-note', text: 'The current record lends its colour to the panels beside it. Off keeps the fixed cyan everywhere.' })),
+    el('div', { class: 'settings-actions' }, toggleSwitch('accent', true, 'Colour from the cover')));
   appearance.appendChild(accentRow);
 
   const backdropRow = el('div', { class: 'settings-row' },
     el('div', { class: 'settings-ico', html: ico('sparkle') }),
     el('div', { class: 'settings-text' },
       el('div', { class: 'settings-name', text: 'Motion backdrop' }),
-      el('div', { class: 'settings-note', text: 'The 3D depth field behind the interface, drawn on the GPU' })),
-    el('div', { class: 'settings-actions' }, toggleSwitch('backdrop', true)));
+      el('div', { class: 'settings-note', text: 'The moving world behind the window. Turn it off on a laptop that runs hot.' })),
+    el('div', { class: 'settings-actions' }, toggleSwitch('backdrop', true, 'Motion backdrop')));
   appearance.appendChild(backdropRow);
   host.appendChild(appearance);
 
@@ -659,13 +670,13 @@ export function viewSettings(host) {
     el('div', { class: 'settings-ico', html: ico('wave') }),
     el('div', { class: 'settings-text' },
       el('div', { class: 'settings-name', text: 'Style' }),
-      el('div', { class: 'settings-note', text: 'How the spectrum is drawn, everywhere it appears' })),
+      el('div', { class: 'settings-note', text: 'How the spectrum is drawn, everywhere it appears.' })),
     el('div', { class: 'settings-actions' }, vizSwitch())));
   viz.appendChild(el('div', { class: 'settings-row' },
     el('div', { class: 'settings-ico', html: ico('expand') }),
     el('div', { class: 'settings-text' },
-      el('div', { class: 'settings-name', text: 'Immersive view' }),
-      el('div', { class: 'settings-note', text: 'Full-screen artwork and spectrum — press V at any time' })),
+      el('div', { class: 'settings-name', text: 'Full-screen visualiser' }),
+      el('div', { class: 'settings-note', text: 'Full-screen artwork and spectrum — press V at any time.' })),
     el('div', { class: 'settings-actions' },
       el('button', {
         class: 'btn ghost sm', html: ico('play') + '<span>Open</span>',
@@ -699,7 +710,7 @@ export function viewSettings(host) {
   listening.appendChild(el('div', { class: 'settings-row' },
     el('div', { class: 'settings-ico', html: ico('circles') }),
     el('div', { class: 'settings-text' },
-      el('div', { class: 'settings-name', text: 'Circle Analysis Center' }),
+      el('div', { class: 'settings-name', text: 'Listening analysis' }),
       el('div', { class: 'settings-note', text: `${fmtTotal(stats.total()) || '0 min'} counted across ${fmtCount(stats.trackedCount(), 'track')} — never leaves this device` })),
     el('div', { class: 'settings-actions' },
       el('button', { class: 'btn ghost sm', text: 'Open', onclick: () => (location.hash = '#/circles') }),
@@ -1053,7 +1064,7 @@ export function viewSettings(host) {
   paintCsv();
 
   const csvBtn = el('button', {
-    class: 'btn ghost sm', text: 'Export CSV',
+    class: 'btn ghost sm', text: 'Save as CSV',
     onclick: () => {
       const rows = stats.asRows();
       if (!rows.length) return toast('No listening recorded yet');
@@ -1107,7 +1118,7 @@ export function viewSettings(host) {
     el('div', { class: 'settings-ico', html: ico('wave') }),
     el('div', { class: 'settings-text' },
       el('div', { class: 'settings-name', text: 'Say what the visualiser is showing' }),
-      el('div', { class: 'settings-note', text: 'Announces which of the four is running when it changes, for a screen reader. It never describes the picture frame by frame.' })),
+      el('div', { class: 'settings-note', text: 'Announces which visualiser style is running when it changes, for a screen reader. It never describes the picture frame by frame.' })),
     el('div', { class: 'settings-actions' }, sayBtn)));
 
   const keepNote = el('div', { class: 'settings-note', text: 'Checking…' });
@@ -1125,7 +1136,7 @@ export function viewSettings(host) {
     }
     const on = await db.persisted();
     keepNote.textContent = on
-      ? 'Yes. Your library will not be evicted to make room.'
+      ? 'Yes. This browser will not clear your library to make room.'
       : 'Not yet — this browser may clear the library if it runs short of space.';
     keepBtn.hidden = on;
   }
@@ -1164,7 +1175,7 @@ export function viewSettings(host) {
   async function paintOffline() {
     const s = offline.status();
     if (!s.supported) {
-      offNote.textContent = 'Not available here — this needs to be served over http, not opened as a file.';
+      offNote.textContent = 'Not available here — Sonora has to be opened from a web address, not from a file on disk.';
       return;
     }
     const c = await offline.cachedBytes();
@@ -1192,7 +1203,7 @@ export function viewSettings(host) {
     onclick: async () => {
       const r = await offline.install();
       toast(r === 'accepted' ? 'Installed — look for Sonora with your applications'
-          : r === 'dismissed' ? 'Not installed'
+          : r === 'dismissed' ? 'Not installed — the offer stays here if you change your mind'
           : 'This browser did not offer an install');
       paintInstall();
     },
@@ -1501,10 +1512,15 @@ function vizSwitch() {
   return wrap;
 }
 
-function toggleSwitch(name, fallback) {
+/* `name` is the storage key, not a label — `label` is what the switch is
+   called on the screen, and without it this built an unnamed control. */
+function toggleSwitch(name, fallback, label) {
   const stored = localStorage.getItem('sonora:' + name);
   const on = stored === null ? fallback : stored === '1';
-  const btn = el('button', { class: 'switch' + (on ? ' is-on' : ''), role: 'switch', 'aria-checked': String(on) });
+  const btn = el('button', {
+    class: 'switch' + (on ? ' is-on' : ''), role: 'switch',
+    'aria-checked': String(on), 'aria-label': label,
+  });
   btn.appendChild(el('span', { class: 'switch-knob' }));
   btn.addEventListener('click', () => {
     const next = !btn.classList.contains('is-on');

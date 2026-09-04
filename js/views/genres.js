@@ -15,7 +15,6 @@ import { decode, notFound, playAll, trackTable } from './shared.js';
 export function viewGenres(host) {
   const all = lib.genres();
   const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: 'Library' }),
     el('h1', { class: 'page-title', text: 'Genres' }),
     el('p', { class: 'page-sub', text: fmtCount(all.length, 'genre') }));
   host.appendChild(head);

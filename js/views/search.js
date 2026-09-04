@@ -31,7 +31,7 @@ export function viewSearch(host, query) {
   }
 
   if (!res.tracks.length && !res.albums.length && !res.artists.length) {
-    host.appendChild(emptyState({ icon: 'search', title: 'Nothing found', note: `No matches for “${query}”.` }));
+    host.appendChild(emptyState({ icon: 'search', title: 'Nothing found', note: `Nothing matches “${query}”. Try fewer words, or one of the filters above.` }));
     return () => {};
   }
 
