@@ -104,7 +104,7 @@ export function mountSound(host) {
     onclick: () => { rack.set({ on: !rack.state.on }); paintAll(); },
   });
   const resetBtn = el('button', {
-    class: 'btn ghost sm', text: 'Reset',
+    class: 'btn ghost sm', text: 'Reset the rack',
     onclick: () => { rack.reset(); paintAll(); toast('Rack reset'); },
   });
   /* The unit's own plate and lamp. The lamp is not decoration: it is lit while
@@ -702,7 +702,7 @@ export function mountSound(host) {
     const list = await rack.savedRacks();
     rackStrip.textContent = '';
     if (!list.length) {
-      rackStrip.appendChild(el('span', { class: 'rack-note', text: 'Nothing saved yet. Build a sound and keep it.' }));
+      rackStrip.appendChild(el('span', { class: 'rack-note', text: 'Nothing saved yet. Set the rack how you want it and press Keep.' }));
       return;
     }
     for (const r of list) {
@@ -843,6 +843,8 @@ export function mountSound(host) {
         : rack.isDefault()
           ? 'Flat. Nothing between the file and the speakers.'
           : summarise();
+      // Every branch of this is a sentence, so it is set as one. See `.is-note`.
+      sub.classList.add('is-note');
     }
   }
 

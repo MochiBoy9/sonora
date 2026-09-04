@@ -182,9 +182,9 @@ export function trackTable(host, getTracks, { origin, columns, onRemove, removeL
         const p = picked(); if (p.length) player.playTracks(p, 0, origin); } }),
       el('button', { class: 'btn sm ghost', text: 'Play next', onclick: () => {
         const p = picked(); if (p.length) { player.playNext(p); toast(`${fmtCount(p.length, 'track', 'tracks')} up next`); } } }),
-      el('button', { class: 'btn sm ghost', text: 'Queue', onclick: () => {
+      el('button', { class: 'btn sm ghost', text: 'Add to queue', onclick: () => {
         const p = picked(); if (p.length) { player.enqueue(p); toast(`${fmtCount(p.length, 'track', 'tracks')} queued`); } } }),
-      el('button', { class: 'btn sm ghost', text: 'More', onclick: (e) => {
+      el('button', { class: 'btn sm ghost', text: 'More for the selection', onclick: (e) => {
         const p = picked(); if (p.length) menu(trackMenu(p, { origin }), { anchor: e.currentTarget }); } }),
       el('button', { class: 'icon-btn selbar-close', 'aria-label': 'Clear selection',
         html: ico('close'), onclick: () => selection.clear() }),
@@ -549,7 +549,12 @@ export function albumCard(album, { onOpen } = {}) {
     location.hash = '#/album/' + card.dataset.key;
   };
   card.addEventListener('click', open);
-  card.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
+  /* Space as well as Enter. A `role="button"` that ignores Space is a
+     WCAG 4.1.2 failure on its own, and here it was worse than silent: the
+     global Space binding caught it instead and started playing the library. */
+  card.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+  });
   card.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const al = albumOf(card.dataset.key);
@@ -620,7 +625,12 @@ export function artistCard(artist) {
   tilt3d(card.querySelector('.sleeve'), { max: 9, lift: 18, scale: 1.025 });
   const open = () => (location.hash = '#/artist/' + card.dataset.key);
   card.addEventListener('click', open);
-  card.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
+  /* Space as well as Enter. A `role="button"` that ignores Space is a
+     WCAG 4.1.2 failure on its own, and here it was worse than silent: the
+     global Space binding caught it instead and started playing the library. */
+  card.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+  });
   card.querySelector('.card-fab').addEventListener('click', (e) => {
     e.stopPropagation();
     const a = artistOf(card.dataset.key);
@@ -722,6 +732,6 @@ export function soundBloom() {
 }
 
 export function notFound(host, message) {
-  host.appendChild(emptyState({ icon: 'music', title: message, note: 'It may have been removed from the library.' }));
+  host.appendChild(emptyState({ icon: 'music', title: message, note: 'It may have been removed, or the folder it came from is disconnected. Settings lists your folders.' }));
   return () => {};
 }

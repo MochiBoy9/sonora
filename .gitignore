@@ -1,5 +1,10 @@
 # Sonora ships with no dependencies; playwright is installed only to run the
 # browser tests in tools/, and none of that belongs in the repository.
+# Both spellings. The trailing slash matches a directory and nothing else, so
+# a `node_modules` *symlink* — which is how you point this checkout at a
+# playwright installed somewhere else — sailed straight past it and got
+# committed, carrying an absolute path that means nothing on another machine.
+node_modules
 node_modules/
 package.json
 package-lock.json

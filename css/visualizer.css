@@ -507,8 +507,7 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
   margin-left: -7.5px;
   background: linear-gradient(180deg, #4d5765, #232a33);
   box-shadow: 0 3px 8px -3px rgb(0 0 0 / .8), inset 0 0 0 var(--hair) rgb(160 220 255 / .18);
-  --k: 4px;
-  clip-path: var(--nick-ne);
+  clip-path: var(--nick-ne-sm);
   border-radius: 2px;
 }
 /* A wider invisible grab area than the arm draws: a five-pixel tube is a

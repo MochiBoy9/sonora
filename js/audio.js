@@ -89,13 +89,13 @@ const eq = (...v) => {
 
 export const PRESETS = [
   { id: 'flat',      label: 'Flat',        eq: eq(), bass: 0, treble: 0 },
-  { id: 'bass',      label: 'Bass Boost',  eq: eq(7, 6, 4.5, 2, 0, 0, 0, 0, 0, 0), bass: 3, treble: 0 },
+  { id: 'bass',      label: 'Bass boost',  eq: eq(7, 6, 4.5, 2, 0, 0, 0, 0, 0, 0), bass: 3, treble: 0 },
   { id: 'sub',       label: 'Sub',         eq: eq(10, 7, 2, -1, -2, -1, 0, 0, 1, 2), bass: 4, treble: 1 },
   { id: 'vocal',     label: 'Vocal',       eq: eq(-3, -2, -1, 1, 3, 4, 3, 1, 0, -1), bass: -1, treble: 1 },
   { id: 'acoustic',  label: 'Acoustic',    eq: eq(3, 2, 1, 0, 1, 1, 2, 3, 3, 2), bass: 1, treble: 2 },
   { id: 'electronic',label: 'Electronic',  eq: eq(5, 4, 1, 0, -2, 1, 2, 3, 4, 4), bass: 2, treble: 2 },
   { id: 'loudness',  label: 'Loudness',    eq: eq(6, 5, 2, 0, -1, 0, 1, 3, 5, 6), bass: 2, treble: 2 },
-  { id: 'night',     label: 'Late Night',  eq: eq(-4, -3, -1, 1, 2, 2, 1, 0, -1, -2), bass: -3, treble: -1,
+  { id: 'night',     label: 'Late night',  eq: eq(-4, -3, -1, 1, 2, 2, 1, 0, -1, -2), bass: -3, treble: -1,
     comp: { on: true, threshold: -32, ratio: 6, attack: 0.006, release: 0.30, knee: 10 } },
   { id: 'podcast',   label: 'Spoken',      eq: eq(-6, -5, -2, 2, 4, 4, 3, 1, -1, -3), bass: -3, treble: 0,
     comp: { on: true, threshold: -26, ratio: 4, attack: 0.004, release: 0.18, knee: 8 } },

@@ -1,4 +1,4 @@
-/* circles.js — the Circle Analysis Center.
+/* circles.js — listening analysis.
  *
  * Listening time, drawn as area. One circle per artist, genre or year; the
  * area of each is proportional to the seconds spent there, so the picture is
@@ -139,8 +139,8 @@ export function mountCircles(host) {
   try { const v = localStorage.getItem(modeKey); if (stats.isMode(v)) mode = v; } catch { /* private mode */ }
 
   const head = el('header', { class: 'page-head' },
-    el('p', { class: 'eyebrow', text: 'Analysis' }),
-    el('h1', { class: 'page-title', text: 'Circle Analysis Center' }),
+    el('p', { class: 'eyebrow', text: 'Listening' }),
+    el('h1', { class: 'page-title', text: 'Listening analysis' }),
     el('p', { class: 'page-sub', id: 'circle-total' }));
 
   const modeBar = el('div', { class: 'segmented', role: 'tablist', 'aria-label': 'Group listening time by' });
@@ -160,7 +160,7 @@ export function mountCircles(host) {
     onclick: () => clearArrangement(),
   });
   const resetBtn = el('button', {
-    class: 'btn ghost sm', text: 'Reset data',
+    class: 'btn ghost sm', text: 'Clear listening data',
     onclick: () => host.dispatchEvent(new CustomEvent('circles:reset', { bubbles: true })),
   });
 
@@ -254,7 +254,7 @@ export function mountCircles(host) {
    * the two cannot disagree. */
   const tableBtn = el('button', {
     class: 'btn ghost sm', 'aria-expanded': 'false', 'aria-controls': 'circle-table',
-    text: 'As a table',
+    text: 'Show as a table',
     onclick: () => showTable(),
   });
   bar.appendChild(tableBtn);
@@ -282,7 +282,7 @@ export function mountCircles(host) {
     const open = force ? true : table.hidden;
     table.hidden = !open;
     tableBtn.setAttribute('aria-expanded', String(open));
-    tableBtn.textContent = open ? 'Hide the table' : 'As a table';
+    tableBtn.textContent = open ? 'Hide the table' : 'Show as a table';
     if (open) { paintTable(); find.focus(); }
   }
 
@@ -351,13 +351,16 @@ export function mountCircles(host) {
     const named = mode === 'year' ? 'years' : mode === 'genre' ? 'genres' : 'artists';
     const over = period === 'all' ? '' : ' · ' +
       (PERIODS.find((p) => p.id === period) || {}).label.toLowerCase();
-    host.querySelector('#circle-total').textContent = rows.length
+    const circleSub = host.querySelector('#circle-total');
+    circleSub.textContent = rows.length
       ? `${secondsLabel(totalSecs)} listened · ${rows.length} ${named}${over}`
       /* A window with nothing in it is not the same news as an empty library,
          and saying "no listening time recorded yet" to somebody who has been
          listening for a year but not this week would be a lie. */
       : period === 'all' ? 'No listening time recorded yet'
       : 'Nothing played in that period';
+    // A tally is a readout; either way of having none is a sentence.
+    circleSub.classList.toggle('is-note', !rows.length);
 
     // Only offered once there is a history to slice. Before that every preset
     // gives the same empty chart, which teaches that the control is broken.

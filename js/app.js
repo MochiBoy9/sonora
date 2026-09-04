@@ -52,7 +52,7 @@ function routeLabel(route) {
   if (route.name === 'artist') return 'Artist';
   if (route.name === 'playlist') return 'Playlist';
   if (route.name === 'genre') return 'Genre';
-  if (route.name === 'attention') return 'Attention';
+  if (route.name === 'attention') return 'Needs attention';
   if (route.name === 'search') return 'Search';
   if (route.name === 'settings') return 'Settings';
   if (route.name === 'circles') return 'Analysis';
@@ -646,7 +646,7 @@ function announceImport(report) {
      to read as "added 400 tracks" with four hundred play counts silently gone;
      saying so is how the listener knows it didn't happen. */
   if (report.moved) {
-    toast(`${report.moved} ${report.moved === 1 ? 'file had' : 'files had'} moved · kept what you'd put on them`,
+    toast(`${report.moved} ${report.moved === 1 ? 'file had' : 'files had'} moved · kept what you’d put on them`,
       { duration: 6000 });
   }
 
@@ -914,10 +914,10 @@ async function checkStorage() {
 
   try { localStorage.setItem(STORAGE_WARNED, String(Date.now())); } catch { /* private */ }
   const pct = Math.round((u.used / u.quota) * 100);
-  toast(`This browser's storage is ${pct}% full and your library is not protected`, {
+  toast(`This browser’s storage is ${pct}% full — it may clear your library to make room`, {
     duration: 14000,
     action: {
-      label: 'Fix this',
+      label: 'Ask it to keep it',
       onSelect: async () => {
         const r = await db.requestPersist();
         if (r.granted) {
@@ -1008,8 +1008,13 @@ function registerKeys() {
       run: () => { player.toggleMute(); } });
   K({ id: 'shuffle', group: 'Playback', combo: 'S', label: 'Shuffle',
       run: () => { player.setShuffle(); toast(player.state.shuffle ? 'Shuffle on' : 'Shuffle off'); } });
-  K({ id: 'repeat', group: 'Playback', combo: 'R', label: 'Repeat: off, all, one',
-      run: () => { player.cycleRepeat(); toast('Repeat: ' + player.state.repeat); } });
+  K({ id: 'repeat', group: 'Playback', combo: 'R', label: 'Repeat one, all or off',
+      run: () => {
+        player.cycleRepeat();
+        // Said the same way the transport says it, rather than printing the enum.
+        toast(player.state.repeat === 'off' ? 'Repeat off'
+              : player.state.repeat === 'all' ? 'Repeat all' : 'Repeat one');
+      } });
   K({ id: 'favourite', group: 'Playback', combo: 'F', label: 'Favourite what is playing',
       run: () => {
         const track = player.state.current;
@@ -1045,7 +1050,7 @@ function registerKeys() {
       run: () => { togglePalette(); } });
   K({ id: 'queue', group: 'Getting around', combo: 'Q', label: 'Queue panel',
       run: () => { toggleQueuePane(); } });
-  K({ id: 'stage', group: 'Getting around', combo: 'V', label: 'Immersive visualiser',
+  K({ id: 'stage', group: 'Getting around', combo: 'V', label: 'Full-screen visualiser',
       run: () => { toggleStage(backdrop); } });
   /* F5: and the turntable, from anywhere. It was a mode of a mode — open the
      stage, then press D — and a record on a deck is the most legible thing
@@ -1085,11 +1090,16 @@ function registerKeys() {
      handler and in neither list for two releases. "?" carries no `alt`, because
      its second form is Shift and the same physical key, which is how you type a
      question mark rather than a different shortcut. */
-  K({ id: 'redo', group: 'The library', combo: ['Mod+Shift+Z', 'Mod+Y'], label: 'Redo it',
-      alt: 'Mod+Y', run: () => { runUndo(true); } });
-  K({ id: 'undo', group: 'The library', combo: 'Mod+Z', label: 'Undo the last change',
+  /* Undo first. The sheet prints a group in the order it is registered, and
+     redo was standing in front of the thing it reverses — which is the one
+     ordering a reader will not expect. "The library" was the group's name and
+     it named the wrong thing: all three of these are about corrections you
+     have made, not about the records. */
+  K({ id: 'undo', group: 'Changes', combo: 'Mod+Z', label: 'Undo the last change',
       run: () => { runUndo(false); } });
-  K({ id: 'history', group: 'The library', combo: 'H', label: 'Everything you have changed',
+  K({ id: 'redo', group: 'Changes', combo: ['Mod+Shift+Z', 'Mod+Y'], label: 'Redo it',
+      alt: 'Mod+Y', run: () => { runUndo(true); } });
+  K({ id: 'history', group: 'Changes', combo: 'H', label: 'Everything you have changed',
       run: () => { showHistory(); } });
 
   /* Before the plain B below it, for the reason the Redo pair gives: a
@@ -1106,7 +1116,7 @@ function registerKeys() {
   K({ id: 'bypass', group: 'Sound', combo: 'B', label: 'Bypass the rack — A/B it',
       run: () => {
         rack.set({ on: !rack.state.on });
-        toast(rack.state.on ? 'Rack in' : 'Rack bypassed');
+        toast(rack.state.on ? 'Rack in circuit' : 'Rack bypassed');
       } });
 
   /* S3: mono compatibility is checked by holding a button, hearing the sum and
@@ -1198,12 +1208,18 @@ function showShortcuts() {
           if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); arm(); }
         });
       }
+      /* A second spelling is not a second shortcut.
+         `alt` was printed as its own row carrying the same label, so the sheet
+         listed "Redo it" twice — which reads as two things that do different
+         things, and sent a reader looking for the difference. Both sets of
+         keycaps belong to the one row, joined by the word that says what the
+         relationship is. */
+      if (b.alt) {
+        dt.appendChild(el('span', { class: 'keys-or', text: 'or' }));
+        for (const k of keys.caps(b.alt)) dt.appendChild(el('kbd', { text: k }));
+      }
       table.appendChild(dt);
       table.appendChild(el('dd', { text: b.label }));
-      if (b.alt) {
-        table.appendChild(el('dt', {}, keys.caps(b.alt).map((k) => el('kbd', { text: k }))));
-        table.appendChild(el('dd', { class: 'keys-alt', text: b.label }));
-      }
       if (b.note) {
         table.appendChild(el('dt', {}, b.note.slice(0, -1).map((k) => el('kbd', { text: k }))));
         table.appendChild(el('dd', { text: b.note[b.note.length - 1] }));
@@ -1298,7 +1314,7 @@ function showHistory() {
         }));
       ul.appendChild(row);
     }
-    if (h.future.length) body.appendChild(el('h4', { class: 'undo-head', text: 'Done' }));
+    if (h.future.length) body.appendChild(el('h4', { class: 'undo-head', text: 'Still in effect' }));
     body.appendChild(ul);
   };
 
@@ -1328,8 +1344,30 @@ function bindKeys() {
   registerKeys();
   addEventListener('keydown', (e) => {
     const t = e.target;
-    const typing = t instanceof HTMLElement &&
-      (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    /* "Typing" is the wrong word for what this guard is for: it is really
+     * "somebody is inside a widget that owns its own keys".
+     *
+     * Restricted to inputs, every single-key binding in the application fired
+     * while a card, a row or a slider had focus — so arrowing around the album
+     * wall silently turned the volume down instead of moving, and Space on a
+     * focused card started the library rather than opening the record. A
+     * control that takes focus takes its keys with it.
+     *
+     * The list is exactly what handles its own keys today, and nothing else:
+     * the sliders and the rating strip (`role=slider`, all three bind the
+     * arrows), the crate and the floor, which bind the arrows and call
+     * `preventDefault`, and the cards, which now answer Enter and Space.
+     *
+     * Track rows, queue rows, the pane tabs and the menus are deliberately
+     * *not* here. None of them handles a key, so guarding them would take
+     * Space and V away and give nothing back — a worse bargain than the one
+     * being fixed, and one that cost the smoke suite its stage step when the
+     * tab set was briefly on this list. Arrow navigation inside a list or a
+     * tab set is a real gap; it wants a roving tabindex, not a silenced
+     * shortcut. Add each to this list on the day it earns its keys. */
+    const WIDGET = 'input, textarea, [contenteditable=""], [contenteditable="true"],' +
+      '[role="slider"], .card, .crate-card, .floor-card';
+    const typing = t instanceof HTMLElement && !!t.closest(WIDGET);
     /* The dispatcher does not preventDefault — deciding whether the browser
        keeps a keystroke is this layer's business, not the table's. Everything
        matched here is claimed, because every one of them means something in the
@@ -1439,7 +1477,7 @@ async function boot() {
      of the one going out. `settled` fires when only one deck is making sound. */
   player.events.on('settled', async (t) => {
     const did = await rack.followTrack(t).catch(() => null);
-    if (did?.applied) toast(`Rack for “${did.label}”`);
+    if (did?.applied) toast(`The “${did.label}” rack is in circuit`);
     else if (did?.released) toast('Back to your rack');
   });
   /* Q10: a long recording picks up where it was left, and says so. Silently
@@ -1453,12 +1491,12 @@ async function boot() {
     },
   }));
 
-  player.events.on('unavailable', (t) => toast(`Can't reach “${t.title}” — reconnect its folder`, {
+  player.events.on('unavailable', (t) => toast(`Cannot reach “${t.title}” — reconnect its folder`, {
     action: { label: 'Settings', onSelect: () => (location.hash = '#/settings') },
   }));
   player.events.on('error', (t) => toast(t.undecodable
     ? `This browser can't decode ${formatName(t.name || '')} — “${t.title}” was skipped`
-    : `Couldn't play “${t.title}”`, { duration: 4200 }));
+    : `Could not play “${t.title}” — the file may have moved`, { duration: 4200 }));
   player.events.on('unsupported', (t) => toast(
     `No browser decodes ${formatName(t.name || '')} — “${t.title}” was skipped`, { duration: 4200 }));
 
@@ -1476,7 +1514,7 @@ async function boot() {
     const played = player.state.queue.slice();
     const on = radio.continuation(origin, played);
     if (!on || !on.tracks.length) return;
-    toast(`That's the end of the queue — keep going with ${on.label}?`, {
+    toast(`That’s the end of the queue — keep going with ${on.label}?`, {
       duration: 14000,
       action: {
         label: 'Keep playing',

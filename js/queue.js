@@ -317,7 +317,7 @@ function buildQueue(host) {
         '<div class="qrow-text"><div class="qrow-title"></div>' +
         '<div class="qrow-sub"><span class="qrow-artist"></span><span class="qrow-from"></span></div></div>' +
         `<div class="qrow-time"></div>` +
-        `<button class="icon-btn ghost qrow-remove" aria-label="Remove">${ico('close')}</button>` +
+        `<button class="icon-btn ghost qrow-remove" aria-label="Remove from the queue">${ico('close')}</button>` +
         '</div>';
       const slide = row.querySelector('.qrow-slide');
 

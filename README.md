@@ -787,7 +787,7 @@ your covers with whatever is playing held in front. Any input cancels it,
 including the one that would have started it; it never runs while an import
 does; and with reduced motion asked for, the covers cut rather than glide.
 
-## The Circle Analysis Center
+## Listening analysis
 
 Play counts lie. A track skipped at four seconds counts the same as one played
 to the end, so a play-count chart rewards indecision. **Analysis** in the
@@ -851,7 +851,7 @@ js/
   looks.js          nineteen visual settings and eight named looks
   session.js        reconnect and resume: what you were playing, put back
   stats.js          the listening-time meter, rolled up by artist, genre, year
-  circles.js        the Circle Analysis Center, packed by hand into one SVG
+  circles.js        the listening analysis page, packed by hand into one SVG
   band.js           the one module that talks to the internet, off by default
   lyrics.js         the words: a sidecar, then the tag, then (only if asked) online
   tags.js           ID3v2/ID3v1, MP4, FLAC, Ogg, RIFF, AIFF, Matroska reader
@@ -885,9 +885,25 @@ Sonora is drawn as an instrument rather than as a stack of cards.
 
 **Nothing is rounded by accident.** Out of the box there are no border radii at
 all: corners are square or cut on a 45° with `clip-path`. Every one of those
-chamfers is one of three shape tokens that read their size off the element
-using them, which is what lets *Settings → Look* turn the whole app rounded or
-square with one control instead of a rewrite. Surfaces are
+chamfers is one of nine shape tokens — three families at three sizes — and all
+nine resolve on `:root`, which is what lets *Settings → Look* turn the whole app
+rounded or square with one control instead of a rewrite.
+
+*Nine tokens rather than three, and the reason is worth knowing.* The shapes
+used to be three tokens holding `var(--k)`, with each element setting its own
+`--k` before asking for a family. That could never have worked: a custom
+property's `var()` references are substituted when *that property* is computed,
+so a token declared on `:root` resolves against `:root` — where `--k` was `0px`.
+What inherited down to all forty-nine sites was the already-substituted string,
+and every chamfer in the application computed to
+`polygon(0 0, 100% 0, 100% 0, 100% 100%, 0 100%, 0 100%)`, which is a
+rectangle. The corners were square everywhere, in both themes, at every size,
+for as long as the token existed — the defining rule of the whole design doing
+nothing at all, and nothing caught it because the geometry lint asks whether
+boxes fit and the goldens compared each screenshot with the last equally-square
+one. Resolving the size at `:root` puts the substitution where `--cut*` actually
+live, and it turns ten arbitrary corner sizes into the three-step scale the
+rest of the system already assumed. Surfaces are
 separated by tinted hairlines instead of shadows, panels carry corner brackets,
 and the whole window sits on a faint 44px grid — so the interface reads as
 something drawn on graph paper, which is what makes the 3D world behind it
@@ -979,15 +995,34 @@ than by a handler on the main thread. If the observer that reveals a shelf
 never reports, the shelf shows itself anyway after two seconds: an entrance is
 a nicety, and a nicety is not allowed to hold the page shut.
 
-**Numbers are monospace, labels are small caps.** Times, counts, track indices,
-sort headers and section titles are set in the mono stack with wide tracking,
-because an instrument's readouts should line up in columns and never reflow as
-the digits change.
+**Numbers are monospace, labels are small caps — and sentences are neither.**
+Times, counts, track indices, sort headers and section titles are set in the
+mono stack with wide tracking, because an instrument's readouts should line up
+in columns and never reflow as the digits change. A *sentence* set that way is
+a different matter: uppercase throws away the ascenders and descenders a reader
+recognises a word by, wide tracking throws away the word shape that is left,
+and a mono face throws away the last of the difference between one letter and
+the next. Page subtitles hold both kinds of thing — "50 tracks · 35 min" one
+minute and a sentence about what the page is the next — so `.page-sub` carries
+an `is-note` modifier the call site sets, and prose is set as prose.
 
 **Light is a drafting table, not an inversion.** The light theme is ice white
 with ink-blue hairlines and the same cyan doing the same job, and the 3D world
 paints itself as a darker tint there, because light added to white is
-invisible.
+invisible. On a drafting table the board is darker than the sheet pinned to it,
+and the chrome follows: the sidebar, the queue pane and the transport take the
+deepest step of the surface ramp, the page sits above them, and panels are the
+white paper on top. Dialogs stay paper — they float above everything. The 44px
+graph-paper grid is drawn in ink here rather than in the accent, because a
+glowing cyan at three per cent of a white ground is not faint, it is absent.
+
+**A phone transport is two rows.** A cover, a title, five buttons and a
+scrubber do not fit across 390px, and the thing the desktop layout gave up was
+the title — grid handed the fixed-width buttons what they asked for and took it
+out of the only track that would yield, leaving the name of the record two
+pixels wide. The scrubber takes a row of its own across the full width, where
+it is a better target than it has ever been on a desktop and where the times
+fit again; the row above it is what a mini player is everywhere else.
 
 **Metadata is read by hand.** `tags.js` parses ID3v2.2/2.3/2.4 (including
 unsynchronisation, all four text encodings and embedded APIC art), ID3v1, MP4
@@ -1257,7 +1292,7 @@ tab order — which is honest, and is also the reason to close it. Enter steps
 into the room, the arrows then move between records rather than walking the
 camera, and the camera follows so the focused record is never behind you.
 
-**The Circle Analysis Center is also a table.** It is a hand-packed SVG: a
+**Listening analysis is also a table.** It is a hand-packed SVG: a
 picture of numbers handed to a screen reader as one line of alt text. The same
 figures are a table now, with a search, offered to everybody — "how much more
 is the first than the fourth" is a question a sorted column answers at a glance

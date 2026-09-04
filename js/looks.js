@@ -30,6 +30,7 @@ const KEY = 'sonora:look';
  */
 export const SCHEMA = [
   { id: 'theme',    group: 'Base',    kind: 'choice', def: 'system',
+    label: 'Theme', hint: 'Follow the system, or hold this window to dark or light',
     options: [['system', 'System'], ['dark', 'Dark'], ['light', 'Light']] },
   { id: 'hue',      group: 'Colour',  kind: 'range',  def: 191, min: 0, max: 359, step: 1, unit: '°',
     label: 'Accent hue' },

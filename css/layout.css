@@ -103,8 +103,7 @@ body.is-ready .app { opacity: 1; }
   color: var(--accent-ink);
   background: rgb(var(--accent-rgb) / .1);
   box-shadow: inset 0 0 0 var(--hair) var(--accent-line);
-  --k: var(--cut-sm);
-  clip-path: var(--nick-all);
+  clip-path: var(--nick-all-sm);
   border-radius: var(--radius);
   transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease);
 }
@@ -261,10 +260,16 @@ body.is-ready .app { opacity: 1; }
   background: var(--glass-bar);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  border-bottom: var(--hair) solid transparent;
+  /* The rule is there at rest. It used to be transparent until you scrolled,
+     which meant every route *opened* with its top 62px reading as blank paper
+     with some words in it rather than as the instrument's chrome band —
+     measured 1.00:1 against the page in the light scheme, identical pixels.
+     Scrolling now strengthens a line that was always drawn, which is what the
+     shadow under it was already saying. */
+  border-bottom: var(--hair) solid var(--line);
   transition: border-color var(--dur-2) linear;
 }
-.main.is-scrolled .topbar { border-bottom-color: var(--line); }
+.main.is-scrolled .topbar { border-bottom-color: var(--line-2); }
 
 /* The route, spelled out in the corner of the instrument. */
 .route-tag {
@@ -419,8 +424,7 @@ body.is-ready .app { opacity: 1; }
   margin: 0 6px;
   color: var(--on-accent);
   background: var(--accent-grad);
-  --k: var(--cut-sm);
-  clip-path: var(--nick-all);
+  clip-path: var(--nick-all-sm);
   border-radius: var(--radius);
   transition: filter var(--dur-1) linear, transform var(--dur-1) var(--ease-back);
   will-change: transform;
@@ -489,7 +493,18 @@ body.is-ready .app { opacity: 1; }
 /* ------------------------------------------------------------------ responsive */
 
 @media (max-width: 1180px) {
-  :root { --gutter: 24px; --pane-w: 320px; }
+  /* `!important`, for the same reason `--sidebar-w` below already needs it.
+   *
+   * `js/looks.js` writes `--gutter`, `--pad`, `--row-h` and `--player-h` as
+   * *inline* styles on `documentElement` from the density preference, and an
+   * inline declaration beats any stylesheet rule however specific. Two of the
+   * four are also overridden below by width, and both of those overrides were
+   * dead: a 390px phone was laid out with the desktop's 34px gutters and a
+   * 96px transport — 44 pixels of margin and twelve pixels of bar it does not
+   * have to spare. `--pad` and `--row-h` are not overridden by width and
+   * `--pane-w` and `--topbar-h` are not written inline, so neither pair needs
+   * anything. */
+  :root { --gutter: 24px !important; --pane-w: 320px; }
 
   /* The queue leaves the grid entirely at this width and becomes an overlay.
      It has to leave whether it is open or not: a grid item whose named area no
@@ -542,11 +557,20 @@ body.is-ready .app { opacity: 1; }
 }
 
 @media (max-width: 760px) {
-  :root { --gutter: 16px; --player-h: 84px; --topbar-h: 56px; }
-  .playerbar { grid-template-columns: minmax(0, 1fr) auto minmax(0, auto); gap: 10px; padding: 0 12px; }
+  :root { --gutter: 16px !important; --player-h: 84px !important; --topbar-h: 56px; }
+  /* The right-hand cluster is icon buttons at a fixed 44px each, so
+     `minmax(0, auto)` was offering to squeeze something that cannot be
+     squeezed — under pressure it clips a button rather than yielding width.
+     `auto` holds it at its content size and lets the title column, which can
+     truncate honestly, be the one that gives. */
+  .playerbar { grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; padding: 0 12px; }
   .pb-center { gap: 4px; }
-  .pb-scrub .pb-time { display: none; }
-  .pb-scrub { gap: 0; }
+  /* The times come back. They were dropped here to buy the scrubber room, but
+     the scrubber is not what was short of it — a transport that will not tell
+     you how far into a track you are has given up the one number it exists to
+     report, and there is room for two 40px readouts at every width above a
+     phone. */
+  .pb-scrub { gap: 8px; max-width: none; }
   .playerbar .pb-volume { display: none; }
   .topbar-add span { display: none; }
   .search { flex: 1 1 auto; }
@@ -586,7 +610,11 @@ body.is-ready .app { opacity: 1; }
   .nav { flex-direction: row; width: auto; flex: 1 1 auto; }
   .nav-item { flex: 1 1 0; min-width: 52px; height: 100%; }
   .nav-pill { display: none; }
-  .nav-item.is-on { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .10); }
+  /* `is-active`, which is the class `paintNav` actually sets. This rule asked
+     for `is-on` — a class nothing in the application adds — so the phone's tab
+     bar never marked the destination you were on. Seven identical grey icons
+     and no way to tell which one you had pressed. */
+  .nav-item.is-active { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .10); }
 
   .side-foot {
     flex-direction: row;
@@ -599,8 +627,48 @@ body.is-ready .app { opacity: 1; }
   .side-foot .add-btn { display: none; }
   .side-foot .nav-item { min-width: 52px; }
 
+  /* The transport, on a phone: two rows rather than three columns.
+   *
+   * This is the bug that mattered. The phone kept the desktop's three-column
+   * bar, and at 390px the columns it could not shrink — 44px buttons, a
+   * favourite, a sleep timer, a queue — added up to more than the window. Grid
+   * gave them what they asked for and took it out of the only track that would
+   * yield, which was the one holding the cover and the name of the record. It
+   * came out two pixels wide. A transport that cannot tell you what is playing
+   * is not a transport.
+   *
+   * So the scrubber takes a row of its own across the full width — where it is
+   * a better target than it has ever been on a desktop, and where the times
+   * fit again — and the row above it is what a mini player is everywhere else:
+   * the record, what it is, and the controls you reach for without looking.
+   *
+   * `display: contents` on `.pb-center` is what lets its two children be
+   * placed in different areas of the parent grid without another wrapper. */
+  .playerbar {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "now   buttons right"
+      "scrub scrub   scrub";
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 2px;
+    padding: 4px 10px 8px;
+  }
+  .pb-center { display: contents; }
+  .pb-now { grid-area: now; }
+  .pb-buttons { grid-area: buttons; }
+  .pb-scrub { grid-area: scrub; width: 100%; }
+  .pb-right { grid-area: right; }
+
   .playerbar .pb-shuffle, .playerbar .pb-repeat { display: none; }
   .playerbar .pb-stage { display: none; }
+  /* The needle is telemetry, and telemetry is the first thing off a phone. */
+  .playerbar .vu-stack { display: none; }
+  /* An idle sleep timer is a button that does nothing you are thinking about;
+     a running one is a countdown you want in sight. It earns its place by
+     being armed, and `sleep-on` is already how the transport says so. */
+  .playerbar:not(.sleep-on) .pb-sleep { display: none; }
 
   /* The queue slides over everything and clears the tabs as well as the
      transport, or its own close button ends up under them. */
@@ -608,9 +676,24 @@ body.is-ready .app { opacity: 1; }
 }
 
 @media (max-width: 420px) {
-  :root { --gutter: 12px; }
-  .playerbar { padding: 0 8px; gap: 8px; }
-  .pb-now .art { display: none; }
+  :root { --gutter: 12px !important; }
+  .playerbar { padding: 4px 8px 8px; column-gap: 6px; }
+  /* The cover stays. It was the first thing dropped here and it is the last
+     thing that should go: at a glance across a room it is the only part of the
+     transport that says which record is on without being read. It is the
+     title's second line that gives way instead — the artist is already on the
+     screen the cover opens. */
+  .pb-now { gap: 9px; }
+  .pb-now .art { width: 38px; height: 38px; }
+  /* Previous is the button that goes, and it goes here rather than earlier.
+     Every control on this row is 44px because a finger needs 44px, so the row
+     cannot be made to fit by shrinking it — something has to leave, and the
+     choice is between a control and the name of the record. Previous is the
+     least-reached of the three and it is still on the screen a tap on the
+     cover opens, which is where a phone reaches for it anyway. Dropping it
+     hands its 44px to the title, which is the difference between "Almost…"
+     and "Almost Autumn". */
+  .playerbar .pb-prev { display: none; }
   .topbar .route-tag { display: none; }
 }
 
@@ -687,8 +770,7 @@ body.is-ready .app { opacity: 1; }
   height: 26px;
   flex: none;
   overflow: hidden;
-  --k: 4px;
-  clip-path: var(--nick-nw);
+  clip-path: var(--nick-nw-sm);
   background: rgb(var(--surface-3-rgb) / .5);
   box-shadow: inset 0 0 0 var(--hair) var(--line);
 }

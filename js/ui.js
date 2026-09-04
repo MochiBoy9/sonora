@@ -57,6 +57,27 @@ export function paintArt(img, key) {
     const rim = rimFor(key);
     if (rim === null) holder.style.removeProperty('--rim');
     else holder.style.setProperty('--rim', rim.toFixed(3));
+
+    /* This record's own colour, on this record.
+     *
+     * `--art-rgb` is one value on `documentElement`, set to whatever is
+     * *playing*. The sleeve's machined edge, the label on the disc and the
+     * bloom under a card on hover all read it — so on a wall of thirteen
+     * covers, thirteen edges and thirteen labels were painted in the colour of
+     * the one record on the turntable, and hovering any of them bloomed it in
+     * a colour taken from a different album. That is precisely the leak the
+     * two-token split exists to prevent: the brief's rule is that `--art-rgb`
+     * may only ever be used *beside the artwork it came from*.
+     *
+     * A custom property set here shadows the global for this subtree, so every
+     * rule downstream keeps reading `--art-rgb` and starts getting the right
+     * answer. The stage is the target where there is one — the edge plane is a
+     * sibling of the picture, not a child of it — and the holder otherwise.
+     * Re-run whenever the art changes, which is what keeps it true. */
+    const own = key && lib.accentFor(key);
+    const scope = holder.closest('.sleeve-stage') || holder;
+    if (own) scope.style.setProperty('--art-rgb', own.join(' '));
+    else scope.style.removeProperty('--art-rgb');
   }
   if (!key) { img.removeAttribute('src'); img.classList.remove('is-loaded'); return; }
 
@@ -360,7 +381,14 @@ export function trackRowFactory({ columns = ['index', 'title', 'album', 'duratio
       row.setAttribute('aria-selected', picked ? 'true' : 'false');
     }
     const playing = player.state.current && player.state.current.id === track.id;
+    /* Which row is playing, said rather than only shown.
+       The marker was an accent colour and an animated four-bar meter, and in
+       the accessibility tree the playing track was indistinguishable from the
+       other forty-nine. `aria-current` is the standard way to say "this one,
+       out of the set" and costs nothing to keep in sync here. */
     row.classList.toggle('is-playing', !!playing);
+    if (playing) row.setAttribute('aria-current', 'true');
+    else row.removeAttribute('aria-current');
     row.classList.toggle('is-missing', !lib.isAvailable(track.id));
     // Either a format nothing decodes, or one this browser proved it couldn't.
     row.classList.toggle('is-unsupported', !!track.undecodable || !canDecode(track.name || ''));
@@ -1328,7 +1356,15 @@ let toastHost = null;
 
 export function toast(message, { action, duration = 2600 } = {}) {
   if (!toastHost) {
-    toastHost = el('div', { class: 'toast-host' });
+    /* Toasts carry every confirmation in the application — "Updated 3
+       tracks", "Took back 2 changes", "This browser's storage is 92% full" —
+       and none of it reached a screen reader, because the host had no role and
+       no live region. Polite rather than assertive: a confirmation should wait
+       for a gap in what is being read, not cut across it. */
+    toastHost = el('div', {
+      class: 'toast-host', role: 'status',
+      'aria-live': 'polite', 'aria-atomic': 'true',
+    });
     document.body.appendChild(toastHost);
   }
   const node = el('div', { class: 'toast' }, el('span', { text: message }));
@@ -1342,6 +1378,12 @@ export function toast(message, { action, duration = 2600 } = {}) {
   let timer = setTimeout(dismiss, duration);
   node.addEventListener('pointerenter', () => clearTimeout(timer));
   node.addEventListener('pointerleave', () => { timer = setTimeout(dismiss, 900); });
+  /* The pointer could hold a toast open and the keyboard could not, so a toast
+     carrying an Undo was a two-and-a-half-second window that closed while you
+     were still tabbing towards it. Focus holds it open exactly as hovering
+     does. */
+  node.addEventListener('focusin', () => clearTimeout(timer));
+  node.addEventListener('focusout', () => { timer = setTimeout(dismiss, 900); });
 
   function dismiss() {
     clearTimeout(timer);

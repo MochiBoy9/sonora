@@ -34,7 +34,7 @@ export function mountPlayerBar(host) {
            exists at phone widths. -->
       <button class="pb-open" aria-label="Open the now playing screen" tabindex="-1"></button>
       <button class="icon-btn ghost pb-fav" title="Favourite (F)" aria-label="Add to favourites" aria-pressed="false">${ico('star')}${ico('star-fill')}</button>
-      <button class="icon-btn ghost pb-more" title="More" aria-label="More">${ico('more')}</button>
+      <button class="icon-btn ghost pb-more" title="More for this track" aria-label="More for this track">${ico('more')}</button>
     </div>
 
     <div class="pb-center">
@@ -71,7 +71,7 @@ export function mountPlayerBar(host) {
       </div>
       <button class="icon-btn pb-sleep" title="Sleep timer" aria-label="Sleep timer"><span class="pb-sleep-left"></span>${ico('clock')}</button>
       <button class="icon-btn pb-stage" title="Visualiser (V)" aria-label="Open visualiser">${ico('expand')}</button>
-      <button class="icon-btn pb-queue" title="Queue (Q)" aria-label="Queue">${ico('queue')}</button>
+      <button class="icon-btn pb-queue" title="Queue (Q)" aria-label="Show the queue">${ico('queue')}</button>
       <div class="pb-volume">
         <button class="icon-btn pb-mute" title="Mute (M)" aria-label="Mute">${ico('volume')}${ico('volume-off')}</button>
         <div class="vol" role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100">
@@ -364,6 +364,15 @@ export function mountPlayerBar(host) {
     if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { player.setVolume(player.state.volume - 0.05); e.preventDefault(); }
   });
 
+  /* Muted is a state the glyph shows and the name did not. */
+  function paintMute() {
+    const muted = !!player.state.muted;
+    const btn = q('.pb-mute');
+    btn.setAttribute('aria-pressed', String(muted));
+    btn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
+    btn.title = (muted ? 'Unmute' : 'Mute') + ' (M)';
+  }
+
   function paintVolume() {
     const v = player.state.muted ? 0 : player.state.volume;
     volFill.style.transform = `scaleX(${v})`;
@@ -554,22 +563,66 @@ export function mountPlayerBar(host) {
     host.classList.toggle('is-loading', player.state.loading);
     playBtn.setAttribute('aria-label', player.state.playing ? 'Pause' : 'Play');
     playBtn.title = player.state.playing ? 'Pause (Space)' : 'Play (Space)';
+    /* State, not just colour.
+       These three said what they were for and never what they were doing: a
+       class and a data attribute, both invisible to the accessibility tree. A
+       screen reader could not tell whether shuffle was on, which of the three
+       repeat modes was running, or whether the player was muted — nor, after
+       pressing one, which way it had gone. Repeat stays a plain button because
+       it is tri-state, and a tri-state control has to say which state in
+       words. */
     host.classList.toggle('shuffle-on', player.state.shuffle);
+    const shufBtn = q('.pb-shuffle');
+    shufBtn.setAttribute('aria-pressed', String(player.state.shuffle));
+    shufBtn.setAttribute('aria-label', player.state.shuffle ? 'Shuffle on' : 'Shuffle off');
+
     host.dataset.repeat = player.state.repeat;
+    const repBtn = q('.pb-repeat');
+    const repLabel = player.state.repeat === 'off' ? 'Repeat off'
+                   : player.state.repeat === 'all' ? 'Repeat all' : 'Repeat one';
+    repBtn.setAttribute('aria-label', repLabel);
+    repBtn.title = repLabel + ' (R)';
     const d = player.state.duration || 0;
     if (d) durationEl.textContent = fmtTime(d);
   }
 
-  player.events.on('track', () => { paintTrack(); paintFav(); ribbon.kick(); loadWave(); });
+  /* What is playing, said once when it changes.
+   *
+   * The application announced the *visualiser mode* and had nothing at all for
+   * the track — the single most important state change in a music player. The
+   * only way to learn what had come on was to navigate to the transport and
+   * read it, on every track.
+   *
+   * Debounced, because Next pressed three times should announce the record you
+   * land on rather than the two you went past, and because `track` also fires
+   * when a queue edit changes what "current" points at. Cleared first for the
+   * same reason the visualiser clears: a live region handed the same string
+   * twice says it once, and repeat-one is exactly that case. */
+  const sayNode = el('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+  host.appendChild(sayNode);
+  let sayTimer = 0;
+  function sayTrack() {
+    clearTimeout(sayTimer);
+    sayTimer = setTimeout(() => {
+      const t = player.state.current;
+      sayNode.textContent = '';
+      if (!t) return;
+      const line = t.artist ? `${t.title} — ${t.artist}` : t.title;
+      setTimeout(() => { sayNode.textContent = line; }, 40);
+    }, 400);
+  }
+
+  player.events.on('track', () => { paintTrack(); paintFav(); ribbon.kick(); loadWave(); sayTrack(); });
   player.events.on('state', () => { paintState(); paintTrack(); syncTicker(); });
   player.events.on('queue', paintState);
-  player.events.on('volume', paintVolume);
+  player.events.on('volume', () => { paintVolume(); paintMute(); });
   lib.events.on('art', () => { if (player.state.current) paintArt(art, player.state.current.albumKey); });
   lib.events.on('favourites', paintFav);
 
   paintTrack();
   paintState();
   paintVolume();
+  paintMute();
   paintFav();
   syncTicker();
   loadWave();

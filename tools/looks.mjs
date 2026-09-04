@@ -393,7 +393,18 @@ const LINT = () => {
       if (!visible(e)) continue;
       const r = e.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) continue;
-      if (r.width >= HIT && r.height >= HIT) continue;
+      /* Half a pixel of slack, because layout is floating point.
+       *
+       * The album and artist walls are fluid grids: the column width is the
+       * row's width divided by the column count, which is very rarely a whole
+       * number, and a control anchored inside a cell of 173.99998px comes back
+       * measuring 43.999969482421875 instead of the 44 its stylesheet asked
+       * for. That is not a small target, it is arithmetic — and a rule that
+       * fails on it is a rule that fails whenever a window is an awkward width,
+       * which is the kind of flake that gets a suite switched off. Nothing a
+       * finger can feel lives inside half a pixel, and no genuinely undersized
+       * control is within half a pixel of passing. */
+      if (r.width >= HIT - 0.5 && r.height >= HIT - 0.5) continue;
       out.small.push(`${name(e)} ${Math.round(r.width)}×${Math.round(r.height)}`);
     }
   }
@@ -621,7 +632,16 @@ async function sweep(scheme, width, height, { touch = false } = {}) {
     const file = `${GOLD}/${tag}-${label}.png`;
     seenGolden.add(`${tag}-${label}.png`);
     shotCount++;
-    if (ACCEPT || !existsSync(file)) { writeFileSync(file, shot); return; }
+    /* Put the canvases back on every path, not only the comparing one.
+       `still()` hides them for the shot and the restore lived after the
+       comparison, so an `--accept` run returned early and left every canvas in
+       the application hidden for the whole of the rest of the sweep. Goldens
+       blessed that way disagree with the run that checks them, on every
+       surface that draws anything — which is a suite that cannot be made to
+       pass twice in a row. */
+    const restore = () => page.evaluate(() =>
+      document.querySelectorAll('canvas').forEach((c) => { c.style.visibility = ''; }));
+    if (ACCEPT || !existsSync(file)) { writeFileSync(file, shot); await restore(); return; }
     const cmp = comparePNG(readFileSync(file), shot);
     if (cmp.diff === -1) {
       ok(`${tag}/${label} is the size it was`, false, `${cmp.size[0]}×${cmp.size[1]} -> ${cmp.size[2]}×${cmp.size[3]}`);
@@ -631,8 +651,7 @@ async function sweep(scheme, width, height, { touch = false } = {}) {
       ok(`${tag}/${label} looks like it did`, false,
          `${cmp.diff} px changed (${(100 * cmp.diff / cmp.total).toFixed(2)}%) around ${x},${y} ${w}×${h}`);
     }
-    // The canvases were hidden for the shot; put them back for the next route.
-    await page.evaluate(() => document.querySelectorAll('canvas').forEach((c) => { c.style.visibility = ''; }));
+    await restore();
   };
 
   const surface = async (label, go) => {

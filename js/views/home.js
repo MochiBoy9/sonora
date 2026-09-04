@@ -60,7 +60,9 @@ export function viewHome(host) {
   const counted = el('span');
   countLine.append(counted, ' tracks \u00b7 ',
     `${lib.state.albums.length} albums \u00b7 ${lib.state.artists.length} artists \u00b7 ` +
-    fmtTotal(all.reduce((n, t) => n + (t.duration || 0), 0)).toUpperCase());
+    // The small caps are the `.page-sub` rule's job, not this string's — applied
+    // here it survived into `.is-note` prose and shouted one figure of five.
+    fmtTotal(all.reduce((n, t) => n + (t.duration || 0), 0)));
   readout(counted, total, { duration: 1100 });
   decode(title, 'Your library', { duration: 700 });
 
@@ -122,7 +124,7 @@ export function viewHome(host) {
     if (share > 0.7) lopsided.push({ album: al, share });
   }
   lopsided.sort((a, b) => b.share - a.share);
-  const shelfOne = shelf('One song from these', lopsided.slice(0, 10).map((x) => x.album),
+  const shelfOne = shelf('You only play one song from these', lopsided.slice(0, 10).map((x) => x.album),
     (a) => albumCard(a));
   if (shelfOne) frag.appendChild(shelfOne);
 
