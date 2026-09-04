@@ -43,7 +43,7 @@ export function viewArtists(host) {
   const ordered = () => lib.sortArtists(lib.state.artists, sorter.state.key, sorter.state.dir);
 
   const grid = new VirtualGrid({
-    viewport: host, minCell: 156, gap: 22, aspect: 1, footer: 64,
+    viewport: host, minCell: () => (innerWidth <= 560 ? 138 : 176), gap: 22, aspect: 1, footer: 64,
     create: () => artistCard(null),
     render: (node, artist) => renderArtistCard(node, artist),
   });

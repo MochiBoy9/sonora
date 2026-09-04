@@ -614,9 +614,49 @@ async function sweep(scheme, width, height, { touch = false } = {}) {
     if (!pin) {
       pin = document.createElement('style');
       pin.id = 'looks-pin';
-      pin.textContent = '.deck-arm { rotate: 14deg !important; transition: none !important; }';
+      /* The instruments that are driven by the audio rather than by CSS.
+       *
+       * The tonearm was already here. The VU needle, its peak hold and the
+       * phase-correlation bar are the same kind of thing: the shared ticker
+       * writes an inline `transform` on each from the live signal, so they are
+       * not animations `finish()` can settle and they do not stop where they
+       * started. A sweep pauses playback, but where a needle happened to be
+       * when it paused is a fact about that run — which is why a fraction of a
+       * percent of whichever surface caught the transport kept disagreeing,
+       * moving between the 620 queue and the 390 album from one sweep to the
+       * next. Where each of these *should* be for a given moment is arithmetic,
+       * and `smoke.mjs` is where that is checked; a photograph is the wrong
+       * instrument for it. */
+      pin.textContent = '.deck-arm { rotate: 14deg !important; transition: none !important; }'
+        + '.vu-needle, .vu-peak { transform: rotate(-42deg) !important; transition: none !important; }'
+        + '.corr-fill { transform: scaleX(0) !important; transition: none !important; }';
       document.head.appendChild(pin);
     }
+    /* Whatever the run left focused, unless focus is the point.
+     *
+     * Chromium decides `:focus-visible` from how focus was last moved, and a
+     * sweep presses keys — Escape, "?", "v", "d" — before it clicks. After a
+     * keypress the heuristic flips, so the next click leaves a *visible* ring,
+     * and which surface catches one depends on what the surface before it
+     * happened to do. Measured, it is the accent at 42% along the top edge of
+     * the phone's tab bar, and it moved between `route-albums`, `album`,
+     * `albums-crate` and `route-files` from one sweep to the next while two
+     * consecutive captures of any one surface stayed identical to the pixel.
+     *
+     * Dialogs, menus, the palette and the stage are exempt: those are
+     * photographed *because* something in them has focus, and blurring would
+     * be photographing a state the application never shows. Everywhere else,
+     * whose turn it is to be focused is a fact about the run rather than about
+     * the design. */
+    const KEEP = '.dialog, .menu, .pal, .stage, .lightbox';
+    const held = document.activeElement;
+    if (held && held !== document.body && !held.closest(KEEP)) held.blur();
+    /* And the strip's own scroll offset, for the same reason. Twelve
+       destinations do not fit across 390px, so the bar scrolls sideways and
+       the browser scrolls it to reveal whatever last took focus. Blur first:
+       dropping focus is what can move it. */
+    const rail = document.querySelector('.sidebar');
+    if (rail && rail.scrollLeft) rail.scrollLeft = 0;
     for (const a of document.getAnimations()) {
       try {
         const it = a.effect?.getComputedTiming?.().iterations;
@@ -628,11 +668,32 @@ async function sweep(scheme, width, height, { touch = false } = {}) {
   const golden = async (label) => {
     await still();
     await page.waitForTimeout(120);
+    /* Once more, with the shutter open.
+       `still()` runs before the settle delay, and the browser can put things
+       back where it wants them during those 120ms — a focus restored, a scroll
+       re-applied. Repeating the normalisation immediately before the
+       screenshot costs nothing and asserts nothing about the design. */
+    await page.evaluate(() => {
+      const KEEP = '.dialog, .menu, .pal, .stage, .lightbox';
+      const held = document.activeElement;
+      if (held && held !== document.body && !held.closest(KEEP)) held.blur();
+      const rail = document.querySelector('.sidebar');
+      if (rail && rail.scrollLeft) rail.scrollLeft = 0;
+    });
     const shot = await page.screenshot();
     const file = `${GOLD}/${tag}-${label}.png`;
     seenGolden.add(`${tag}-${label}.png`);
     shotCount++;
-    if (ACCEPT || !existsSync(file)) { writeFileSync(file, shot); return; }
+    /* Put the canvases back on every path, not only the comparing one.
+       `still()` hides them for the shot and the restore lived after the
+       comparison, so an `--accept` run returned early and left every canvas in
+       the application hidden for the whole of the rest of the sweep. Goldens
+       blessed that way disagree with the run that checks them, on every
+       surface that draws anything — which is a suite that cannot be made to
+       pass twice in a row. */
+    const restore = () => page.evaluate(() =>
+      document.querySelectorAll('canvas').forEach((c) => { c.style.visibility = ''; }));
+    if (ACCEPT || !existsSync(file)) { writeFileSync(file, shot); await restore(); return; }
     const cmp = comparePNG(readFileSync(file), shot);
     if (cmp.diff === -1) {
       ok(`${tag}/${label} is the size it was`, false, `${cmp.size[0]}×${cmp.size[1]} -> ${cmp.size[2]}×${cmp.size[3]}`);
@@ -642,8 +703,7 @@ async function sweep(scheme, width, height, { touch = false } = {}) {
       ok(`${tag}/${label} looks like it did`, false,
          `${cmp.diff} px changed (${(100 * cmp.diff / cmp.total).toFixed(2)}%) around ${x},${y} ${w}×${h}`);
     }
-    // The canvases were hidden for the shot; put them back for the next route.
-    await page.evaluate(() => document.querySelectorAll('canvas').forEach((c) => { c.style.visibility = ''; }));
+    await restore();
   };
 
   const surface = async (label, go) => {

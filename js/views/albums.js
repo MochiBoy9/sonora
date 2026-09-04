@@ -107,7 +107,7 @@ export function viewAlbums(host) {
          page whose whole subject is the covers. The 40px of dead space that used
          to sit under each one is gone, so the room it was holding can go to the
          artwork instead of to a sixth column of small ones. */
-      viewport: host, minCell: 196, gap: 22, aspect: 1, footer: 64,
+      viewport: host, minCell: () => (innerWidth <= 560 ? 150 : 196), gap: 22, aspect: 1, footer: 64,
       create: () => {
         const card = albumCard(null);
         /* F1: in "However you left it", a record can be dragged to a place on

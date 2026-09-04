@@ -271,7 +271,13 @@ export class VirtualGrid {
   measure() {
     const width = this.sizer.clientWidth || this.viewport.clientWidth;
     if (!width) return;
-    const cols = Math.max(1, Math.floor((width + this.gap) / (this.minCell + this.gap)));
+    /* `minCell` may be a function, because the right smallest cell is not the
+       same number on a phone as on a desktop: a 196px floor that gives five
+       good columns at 1440 gives exactly one at 390, and one album per screen
+       is not a wall. Read here rather than at construction, so it answers a
+       resize as well as a reload. */
+    const min = typeof this.minCell === 'function' ? this.minCell() : this.minCell;
+    const cols = Math.max(1, Math.floor((width + this.gap) / (min + this.gap)));
     const cellW = (width - this.gap * (cols - 1)) / cols;
     const rowHeight = Math.round(cellW * this.aspect + this.footer + this.gap);
 

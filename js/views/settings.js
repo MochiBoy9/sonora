@@ -281,6 +281,9 @@ export function viewSettings(host) {
     const btn = el('button', {
       class: 'switch' + (root.off ? '' : ' is-on'),
       role: 'switch', 'aria-checked': String(!root.off),
+      // One of these per folder, so the name is the only thing that tells
+      // them apart — "switch, on" three times over says nothing.
+      'aria-label': `Include ${root.name} in the library`,
       title: root.off ? 'Bring this folder back into the library' : 'Hide this folder without forgetting anything about it',
     }, el('span', { class: 'switch-knob' }));
     btn.addEventListener('click', async () => {
@@ -622,6 +625,7 @@ export function viewSettings(host) {
     const tiltBtn = el('button', {
       class: 'switch' + (deviceTiltRunning() ? ' is-on' : ''),
       role: 'switch', 'aria-checked': String(deviceTiltRunning()),
+      'aria-label': 'Tilt with the device',
     }, el('span', { class: 'switch-knob' }));
     tiltBtn.addEventListener('click', async () => {
       if (deviceTiltRunning()) {
@@ -773,6 +777,7 @@ export function viewSettings(host) {
     text: 'Playlists, favourites, corrections, chosen covers, racks, listening totals and settings. Not the audio.' });
   const withArt = el('button', {
     class: 'switch', role: 'switch', 'aria-checked': 'false',
+    'aria-label': 'Include artwork in the backup',
     title: 'Include the artwork thumbnails. Much larger, and they can be rebuilt from your files in seconds.',
   }, el('span', { class: 'switch-knob' }));
   let artIn = false;

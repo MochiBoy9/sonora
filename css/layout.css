@@ -493,7 +493,18 @@ body.is-ready .app { opacity: 1; }
 /* ------------------------------------------------------------------ responsive */
 
 @media (max-width: 1180px) {
-  :root { --gutter: 24px; --pane-w: 320px; }
+  /* `!important`, for the same reason `--sidebar-w` below already needs it.
+   *
+   * `js/looks.js` writes `--gutter`, `--pad`, `--row-h` and `--player-h` as
+   * *inline* styles on `documentElement` from the density preference, and an
+   * inline declaration beats any stylesheet rule however specific. Two of the
+   * four are also overridden below by width, and both of those overrides were
+   * dead: a 390px phone was laid out with the desktop's 34px gutters and a
+   * 96px transport — 44 pixels of margin and twelve pixels of bar it does not
+   * have to spare. `--pad` and `--row-h` are not overridden by width and
+   * `--pane-w` and `--topbar-h` are not written inline, so neither pair needs
+   * anything. */
+  :root { --gutter: 24px !important; --pane-w: 320px; }
 
   /* The queue leaves the grid entirely at this width and becomes an overlay.
      It has to leave whether it is open or not: a grid item whose named area no
@@ -546,7 +557,7 @@ body.is-ready .app { opacity: 1; }
 }
 
 @media (max-width: 760px) {
-  :root { --gutter: 16px; --player-h: 84px; --topbar-h: 56px; }
+  :root { --gutter: 16px !important; --player-h: 84px !important; --topbar-h: 56px; }
   /* The right-hand cluster is icon buttons at a fixed 44px each, so
      `minmax(0, auto)` was offering to squeeze something that cannot be
      squeezed — under pressure it clips a button rather than yielding width.
@@ -599,7 +610,11 @@ body.is-ready .app { opacity: 1; }
   .nav { flex-direction: row; width: auto; flex: 1 1 auto; }
   .nav-item { flex: 1 1 0; min-width: 52px; height: 100%; }
   .nav-pill { display: none; }
-  .nav-item.is-on { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .10); }
+  /* `is-active`, which is the class `paintNav` actually sets. This rule asked
+     for `is-on` — a class nothing in the application adds — so the phone's tab
+     bar never marked the destination you were on. Seven identical grey icons
+     and no way to tell which one you had pressed. */
+  .nav-item.is-active { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .10); }
 
   .side-foot {
     flex-direction: row;
@@ -661,7 +676,7 @@ body.is-ready .app { opacity: 1; }
 }
 
 @media (max-width: 420px) {
-  :root { --gutter: 12px; }
+  :root { --gutter: 12px !important; }
   .playerbar { padding: 4px 8px 8px; column-gap: 6px; }
   /* The cover stays. It was the first thing dropped here and it is the last
      thing that should go: at a glance across a room it is the only part of the
