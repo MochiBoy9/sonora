@@ -197,7 +197,18 @@ export function viewAlbum(host, key) {
     list.appendChild(row);
   });
 
-  host.appendChild(list);
+  /* The tracklist and the panel about the record share a row on a wide screen.
+   *
+   * Left to itself the list is one flex row per track with `.trow-main` set to
+   * `flex: 1`, so with only an index, a title and a duration in it the title and
+   * the time finish at opposite edges of the window and the eye has to cross a
+   * thousand empty pixels to pair them up. Giving the list a partner column
+   * bounds the measure and puts something worth reading in the space that bound
+   * gives back. Where there is no analysis to show, the list is simply capped
+   * instead — a short line is easier to read than a long one, and an empty
+   * column is not a design. */
+  const body = el('div', { class: 'album-body' }, list);
+  host.appendChild(body);
 
   /* T3: what the analysis found, where the record is.
    *
@@ -211,7 +222,7 @@ export function viewAlbum(host, key) {
    * Where nothing has been measured the panel does not appear, because an
    * empty analysis panel teaches somebody that the feature is broken. */
   const analysis = analysisPanel(album);
-  if (analysis) host.appendChild(analysis);
+  if (analysis) { body.appendChild(analysis); body.classList.add('has-aside'); }
 
   /* D2: and what sits near it.
    *

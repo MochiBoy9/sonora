@@ -215,6 +215,17 @@ function buildSidebar() {
   NAV.forEach((item, i) => {
     const link = el('a', {
       class: 'nav-item', href: '#/' + item.route, data: { route: item.route },
+      /* The name, carried on the element rather than left to the label.
+       *
+       * Below 620px the rail collapses and `.nav-label` is set to
+       * `display: none`, which takes the text out of the accessible name
+       * as well as off the screen — so every one of the thirteen
+       * destinations announced itself as "link", and nothing else, on a
+       * phone. It is not only a phone: 400% zoom on a 1280px window is a
+       * 320px viewport, so the labels also vanished at exactly the
+       * magnification somebody is using because they need them most.
+       * Same string as the visible label, so Label in Name still holds. */
+      'aria-label': item.label,
     },
       /* Ornament, and hidden from assistive tech as such: the number is the
          item's position in a list that already has an order, so a screen
@@ -265,10 +276,10 @@ function buildSidebar() {
 
   const footer = el('div', { class: 'side-foot' },
     el('button', {
-      class: 'btn add-btn', html: ico('plus') + '<span>Add music</span>',
+      class: 'btn add-btn', 'aria-label': 'Add music', html: ico('plus') + '<span>Add music</span>',
       onclick: (e) => addMusicMenu(e.currentTarget),
     }),
-    el('a', { class: 'nav-item slim', href: '#/settings', data: { route: 'settings' } },
+    el('a', { class: 'nav-item slim', href: '#/settings', 'aria-label': 'Settings', data: { route: 'settings' } },
       el('span', { class: 'nav-ico', html: ico('settings') }), el('span', { class: 'nav-label', text: 'Settings' })));
 
   side.append(brand, nav, playlistHead, playlists, footer);

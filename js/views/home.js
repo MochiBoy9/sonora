@@ -124,7 +124,7 @@ export function viewHome(host) {
     if (share > 0.7) lopsided.push({ album: al, share });
   }
   lopsided.sort((a, b) => b.share - a.share);
-  const shelfOne = shelf('You only play one song from these', lopsided.slice(0, 10).map((x) => x.album),
+  const shelfOne = shelf('You only play one track from these', lopsided.slice(0, 10).map((x) => x.album),
     (a) => albumCard(a));
   if (shelfOne) frag.appendChild(shelfOne);
 

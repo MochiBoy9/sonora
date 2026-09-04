@@ -13,7 +13,7 @@ import * as session from '../session.js';
 import * as stats from '../stats.js';
 import * as shopWindow from '../idle.js';
 import { dialog, promptDialog, sectionHead, toast } from '../ui.js';
-import { el, fmtAgo, fmtBytes, fmtCount, fmtTotal, ico } from '../util.js';
+import { el, fmtAgo, fmtBytes, fmtCount, fmtTotal, ico, paintRange } from '../util.js';
 /* Named rather than a namespace import: `viz` is already a local in
    `viewSettings` — the section element for the visualiser panel — and a
    namespace by that name is shadowed inside the one function that needs it.
@@ -47,6 +47,7 @@ export function viewSettings(host) {
     const v = player.state.crossfade;
     fadeValue.textContent = v === 0 ? 'Gapless' : v.toFixed(1).replace(/\.0$/, '') + 's';
     fadeSlider.value = String(v);
+    paintRange(fadeSlider, 0);
     fadeSlider.setAttribute('aria-valuetext', fadeValue.textContent);
   };
   fadeSlider.addEventListener('input', () => {

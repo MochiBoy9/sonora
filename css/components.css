@@ -53,7 +53,7 @@
   color: var(--text-2);
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
 }
-.btn.ghost:hover { color: var(--text); box-shadow: inset 0 0 0 var(--hair) var(--accent-line); background: rgb(var(--accent-rgb) / .08); }
+.btn.ghost:hover { color: var(--hover-ink); box-shadow: inset 0 0 0 var(--hair) var(--hover-line); background: var(--hover-fill); }
 
 .btn.danger { background: rgb(255 77 106 / .12); color: var(--danger); box-shadow: inset 0 0 0 var(--hair) rgb(255 77 106 / .4); }
 .btn.danger:hover { background: rgb(255 77 106 / .2); }
@@ -81,7 +81,7 @@
 .pb-play > .ico,
 .stage-play > .ico { grid-area: 1 / 1; }
 
-.icon-btn:hover { color: var(--accent-ink); background: rgb(var(--accent-rgb) / .1); }
+.icon-btn:hover { color: var(--hover-ink); background: var(--hover-fill); }
 .icon-btn:active { transform: scale(.92); }
 .icon-btn.sm { width: 24px; height: 24px; }
 .icon-btn.sm .ico { width: 14px; height: 14px; }
@@ -198,7 +198,7 @@
   transform-origin: center;
   transition: transform var(--dur-2) var(--ease);
 }
-.trow:hover { background: linear-gradient(90deg, rgb(var(--accent-rgb) / .07), transparent 60%); color: var(--text); }
+.trow:hover { background: var(--hover-fill); color: var(--hover-ink); }
 .trow:hover::before { transform: scaleY(1); }
 
 .trow-index {
@@ -568,6 +568,136 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 }
 .seek:hover .seek-tip, .seek.is-active .seek-tip { opacity: 1; }
 
+/* ---------------------------------------------------------------- the fader
+
+   Every value you set with a pointer in this application is an
+   `input[type="range"]`, and until now the browser drew all twenty-two of
+   them: the whole equaliser, Tone, Pitch & Speed, Stereo and Dynamics, each
+   one a stock widget with a pale grey track that belongs to no scheme here,
+   sitting inside an interface whose whole premise is that it is drawn rather
+   than assembled. The transport's scrubber and volume have been hand-drawn
+   from the start. The rack — the densest screen in the product, and the one
+   people open on purpose — was the single place the default showed through.
+
+   So: `appearance: none`, and draw it. The element stays a real range input,
+   which is the entire point. The arrow keys, Home and End, Page Up and Page
+   Down, pointer drag, touch, and the `role="slider"` with its value that the
+   browser hands to assistive technology are all native, all correct, and all
+   free. Only the paint changes.
+
+   THE FILL RUNS FROM NEUTRAL, not from the low end. A native range always
+   fills from its minimum, which says "more is more" — true of volume, false
+   of every one of the ±12 dB controls in the rack, where what the eye needs
+   is the distance from flat and which side of flat it is on. So `--n` is
+   where the fill starts and `--v` is where it ends, either may be the larger,
+   and `paintRange()` in `js/util.js` writes both. A band at 0 dB draws no
+   fill at all, which is exactly what a flat band should look like.
+
+   `--v` and `--n` are fractions of the slot, 0 at the low end and 1 at the
+   high. `--lo`/`--hi` sort them so the gradient's stops never run backwards,
+   which would drop the fill entirely. */
+
+input[type="range"] {
+  --v: 0;
+  --n: 0;
+  --lo: min(var(--v), var(--n));
+  --hi: max(var(--v), var(--n));
+  --slot-t: 6px;                    /* the slot's thickness */
+  --cap-l: 11px;                    /* the cap, across the slot */
+  --cap-t: 20px;                    /* the cap, along it */
+
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  /* H3: the control is 22px of paint inside a 44px-tall pointer target, so a
+     finger gets the whole row and the eye still gets a hairline. */
+  height: 22px;
+  padding: 11px 0;
+  margin: -11px 0;
+  box-sizing: content-box;
+}
+
+/* The slot. A recess with the fill lit inside it and a detent scored at the
+   neutral point, so you can find flat again without reading the number. */
+input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--slot-t);
+  background-color: var(--slot);
+  background-image:
+    linear-gradient(to right,
+      transparent calc(var(--lo) * 100%),
+      var(--slot-fill) calc(var(--lo) * 100%) calc(var(--hi) * 100%),
+      transparent calc(var(--hi) * 100%)),
+    linear-gradient(to right,
+      transparent calc(var(--n) * 100% - var(--hair)),
+      var(--line-3) calc(var(--n) * 100% - var(--hair)) calc(var(--n) * 100%),
+      transparent calc(var(--n) * 100%));
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+}
+input[type="range"]::-moz-range-track {
+  height: var(--slot-t);
+  background-color: var(--slot);
+  background-image:
+    linear-gradient(to right,
+      transparent calc(var(--lo) * 100%),
+      var(--slot-fill) calc(var(--lo) * 100%) calc(var(--hi) * 100%),
+      transparent calc(var(--hi) * 100%));
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+}
+
+/* The cap. A machined part, not a bead: chamfered like every other corner in
+   the application, lit from above by the same `--gloss` as the rest of the
+   material, and scored across the middle where a thumb would sit. */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--cap-l);
+  height: var(--cap-t);
+  margin-top: calc((var(--slot-t) - var(--cap-t)) / 2);
+  background:
+    linear-gradient(to bottom,
+      transparent calc(50% - var(--hair)),
+      rgb(var(--bg-rgb) / .55) calc(50% - var(--hair)) calc(50% + var(--hair)),
+      transparent calc(50% + var(--hair))),
+    linear-gradient(to bottom, var(--surface-3), var(--surface-2));
+  box-shadow: inset 0 0 0 var(--hair) var(--line-3), var(--spec), var(--sh-1);
+  clip-path: var(--nick-all-sm);
+  border-radius: var(--radius);
+  transition: box-shadow var(--dur-1) var(--ease);
+}
+input[type="range"]::-moz-range-thumb {
+  width: var(--cap-l);
+  height: var(--cap-t);
+  border: 0;
+  background: linear-gradient(to bottom, var(--surface-3), var(--surface-2));
+  box-shadow: inset 0 0 0 var(--hair) var(--line-3), var(--spec), var(--sh-1);
+  border-radius: var(--radius);
+}
+
+/* Reaching for it lights the cap's edge; holding it lights the whole thing.
+   The accent arrives on the control you are actually touching, which is the
+   rule the rest of the interface follows. */
+input[type="range"]:hover::-webkit-slider-thumb {
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line), var(--spec), var(--sh-1);
+}
+input[type="range"]:active::-webkit-slider-thumb,
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: inset 0 0 0 2px var(--accent), var(--spec);
+}
+/* The ring stays an `outline` on the element, which is the floor `base.css`
+   sets for everything and the only thing that survives here: the cap is cut
+   with a `clip-path`, and a clip-path takes the outer half of every box-shadow
+   drawn on it away with the corner. A ring painted on the cap would be a ring
+   nobody can see — which is the one failure a focus ring cannot have. */
+
+input[type="range"]:disabled { cursor: default; }
+input[type="range"]:disabled::-webkit-slider-runnable-track { background-image: none; }
+input[type="range"]:disabled::-webkit-slider-thumb {
+  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  background: var(--surface-2);
+}
+
+
 /* ------------------------------------------------------------------ search */
 
 .search {
@@ -665,7 +795,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   border-left: 2px solid transparent;
   transition: background var(--dur-1) linear, color var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.menu-item:hover { background: rgb(var(--accent-rgb) / .1); color: var(--text); border-left-color: var(--accent-ink); }
+.menu-item:hover { background: var(--hover-fill); color: var(--hover-ink); border-left-color: var(--hover-line); }
 .menu-item .ico { width: 15px; height: 15px; opacity: .8; }
 .menu-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-hint { font-family: var(--mono); color: var(--text-3); font-size: calc(10px * var(--scale)); }
@@ -838,7 +968,7 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   border-bottom: var(--hair) solid var(--line);
   transition: background var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.pick-item:hover { background: rgb(var(--accent-rgb) / .1); border-left-color: var(--accent-ink); }
+.pick-item:hover { background: var(--hover-fill); border-left-color: var(--hover-line); }
 .pick-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick-count { font-family: var(--mono); color: var(--text-3); font-size: calc(11px * var(--scale)); }
 
@@ -982,6 +1112,12 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   gap: 2px;
   background: rgb(var(--bg-rgb) / .6);
   box-shadow: inset 0 0 0 var(--hair) var(--line);
+  /* The one boxed control in the application with square corners, in a sheet
+     whose opening line is that nothing is rounded by accident. It sits beside
+     chamfered buttons on the same toolbar row in Settings and on the Albums
+     view-switcher, which is where the miss shows. */
+  clip-path: var(--nick-ne-sm);
+  border-radius: var(--radius);
 }
 .seg {
   padding: 5px 12px;
@@ -1306,7 +1442,6 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 .rating {
   display: inline-flex;
   gap: 1px;
-  border-radius: var(--r-sm);
   outline-offset: 2px;
 }
 .rating-star {
@@ -1379,15 +1514,19 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   align-items: stretch;
   gap: 1px;
   padding: 6px 3px;
-  /* Quiet, not absent. At .34 over `--text-2` a letter measured 1.06:1 against
-     the page in the light scheme, which is a control you cannot find until you
-     have already found it. The rail is a shortcut, so it may be understated —
-     but it has to be legible enough to aim at, and it strengthens rather than
-     appears when you approach it. */
-  opacity: .62;
-  transition: opacity var(--dur-2) var(--ease);
+  /* Quiet in the ink, not in the alpha.
+   *
+   * The note this replaces said the compounding was gone and that the ink
+   * alone carried the difference. It was half true: the rail kept a .62 and
+   * `.is-empty` kept a .55, and two opacities on the same subtree multiply,
+   * so an empty letter arrived at .341 and measured 1.77:1 against the page
+   * while a live one measured 4.39:1 — under the 4.5:1 that 9px text has to
+   * clear, which made the whole rail fail the rule it was last edited to
+   * pass. Nothing compounds now: the rail is fully opaque and every step of
+   * quiet is a colour that can be measured where it is written. */
+  opacity: 1;
 }
-.az-rail:hover, .az-rail:focus-within { opacity: 1; }
+.az-rail:hover .az-key, .az-rail:focus-within .az-key { color: var(--text); }
 
 .az-key {
   appearance: none;
@@ -1397,21 +1536,24 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
   width: 16px;
   padding: 0;
   font-family: var(--mono);
-  font-size: calc(9px * var(--scale));
+  font-size: calc(9.5px * var(--scale));
   line-height: 1.25;
   letter-spacing: 0;
-  color: var(--text-2);
+  color: var(--text-3);
   transition: color var(--dur-1) linear;
 }
 .az-key:hover { color: var(--accent-ink); }
-.az-key:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 1px; }
+.az-key:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 /* Letters the collection has nothing under stay drawn and go quiet: the gaps
    are information, and a rail that changes shape as the library grows is one
    nobody's hand can learn. */
 /* Compounding one opacity on another put these at .119 effective — drawn in
    the markup and invisible on the screen, which is not the same as quiet. The
    quiet ink alone is the whole difference now. */
-.az-key.is-empty { color: var(--text-3); opacity: .55; cursor: default; }
+.az-key.is-empty {
+  color: color-mix(in srgb, var(--text-3) 62%, rgb(var(--bg-rgb)));
+  cursor: default;
+}
 
 /* No room beside the list, and a 16px target is not a phone control anyway. */
 @media (max-width: 900px) { .az-rail { display: none; } }
@@ -1557,7 +1699,7 @@ select.input { padding-right: 8px; }
   transition: background var(--dur-1) linear, color var(--dur-1) linear;
 }
 .pal-row.is-active { background: rgb(var(--accent-rgb) / .14); color: var(--text); }
-.pal-row:hover { background: rgb(var(--accent-rgb) / .09); }
+.pal-row:hover { background: var(--hover-fill); }
 
 .pal-row-ico { flex: none; display: grid; place-items: center; color: var(--text-3); }
 .pal-row.is-active .pal-row-ico { color: var(--accent-ink); }
@@ -1637,7 +1779,7 @@ select.input { padding-right: 8px; }
   font-size: calc(12.5px * var(--scale));
   letter-spacing: .01em;
   color: var(--text);
-  background: rgb(var(--surface-1-rgb) / .82);
+  background: rgb(var(--surface-rgb) / .82);
   box-shadow: inset 0 0 0 2px rgb(var(--accent-rgb) / .75);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
@@ -1702,7 +1844,7 @@ select.input { padding-right: 8px; }
   color: var(--text-2);
   transition: background var(--dur-1) linear, color var(--dur-1) linear;
 }
-.rack-pick-row:hover { background: rgb(var(--accent-rgb) / .09); color: var(--text); }
+.rack-pick-row:hover { background: var(--hover-fill); color: var(--hover-ink); }
 .rack-pick-row.is-on { background: rgb(var(--accent-rgb) / .14); color: var(--text); }
 .rack-pick-name { flex: 1 1 auto; min-width: 0; font-size: calc(14px * var(--scale)); }
 .rack-pick-note { color: var(--text-3); font-size: calc(11.5px * var(--scale)); }
@@ -1797,7 +1939,6 @@ html.is-dragging-tracks .side-playlist:not(.is-smart),
 html.is-dragging-tracks .nav-item[data-route="favourites"] {
   outline: 1px dashed rgb(var(--accent-rgb) / .38);
   outline-offset: -2px;
-  border-radius: var(--r-sm);
 }
 html.is-dragging-tracks .side-playlist.is-smart { opacity: .45; }
 
@@ -1821,7 +1962,7 @@ html.is-dragging-tracks .side-playlist.is-smart { opacity: .45; }
   font-family: var(--mono);
   font-size: 13px;
   font-weight: 600;
-  box-shadow: var(--shadow-2);
+  box-shadow: var(--sh-2);
   pointer-events: none;
 }
 

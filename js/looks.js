@@ -198,11 +198,22 @@ export function apply(root = document.documentElement) {
   const tint = clamp(s.tint / 100, 0, 1.2);
   const bump = clamp(s.contrast / 100, 0, 1);
   if (light) {
-    style.setProperty('--bg-rgb', rgb(h1, 0.20 * sat * tint, 0.945 - bump * 0.045));
-    style.setProperty('--bg-2-rgb', rgb(h1, 0.24 * sat * tint, 0.905 - bump * 0.05));
-    style.setProperty('--surface-rgb', rgb(h1, 0.10 * sat * tint, 1 - bump * 0.015));
-    style.setProperty('--surface-2-rgb', rgb(h1, 0.18 * sat * tint, 0.965 - bump * 0.03));
-    style.setProperty('--surface-3-rgb', rgb(h1, 0.22 * sat * tint, 0.925 - bump * 0.04));
+    /* The light ramp had been drawn inside a nine-point band — every one of
+       the five surfaces between L .905 and L 1.0 — so the chrome measured
+       1.05:1 against the page it frames while the dark scheme, whose ramp
+       spans a fourfold range at the bottom of the curve, measured 1.36:1.
+       Fourteen per cent of the separation, which is the whole of why the
+       light theme reads as one flat sheet with lines drawn on it.
+
+       The board is now well below the paper and the paper stays white, so
+       a dialog is still the brightest thing on screen and the note above
+       about the sheet pinned to the drafting table is finally true of the
+       pixels rather than only of the ordering. */
+    style.setProperty('--bg-rgb', rgb(h1, 0.20 * sat * tint, 0.930 - bump * 0.045));
+    style.setProperty('--bg-2-rgb', rgb(h1, 0.26 * sat * tint, 0.845 - bump * 0.050));
+    style.setProperty('--surface-rgb', rgb(h1, 0.08 * sat * tint, 1 - bump * 0.015));
+    style.setProperty('--surface-2-rgb', rgb(h1, 0.16 * sat * tint, 0.962 - bump * 0.030));
+    style.setProperty('--surface-3-rgb', rgb(h1, 0.24 * sat * tint, 0.858 - bump * 0.045));
   } else {
     style.setProperty('--bg-rgb', rgb(h1, 0.52 * sat * tint, 0.035 - bump * 0.02));
     style.setProperty('--bg-2-rgb', rgb(h1 + 6, 0.50 * sat * tint, 0.058 - bump * 0.028));

@@ -3,6 +3,7 @@
 import * as lib from '../library.js';
 import { enter } from '../motion.js';
 import { el, fmtCount, fmtTotal, ico } from '../util.js';
+import { emptyState } from '../ui.js';
 import { columnHeader, decode, letterRail, pageFilter, playAll, shuffleAll, trackTable } from './shared.js';
 
 /* ------------------------------------------------------------------ SONGS */
@@ -12,6 +13,27 @@ const songSort = { key: 'title', dir: 1 };
 export function viewSongs(host) {
   const columns = ['index', 'art', 'title', 'album', 'dr', 'plays', 'played', 'rating', 'duration'];
   const all = lib.allTracks();
+
+  /* An empty library is not a table with no rows in it.
+   *
+   * Every other list in the application says why it is empty and what to
+   * do about it. This one printed a title, a live Play all, a Shuffle, a
+   * row of column headers and then nothing — a dead table with two
+   * working buttons over it and a subtitle reading "0 tracks ·" with the
+   * separator still attached. Songs is the second entry in the sidebar,
+   * so on a fresh install it is one of the first places anybody looks.
+   *
+   * Only the library being empty is caught here. A filter that matches
+   * nothing is different news — you have tracks, just not those — and the
+   * toolbar already reports that itself. */
+  if (!all.length) {
+    host.appendChild(emptyState({
+      icon: 'music', title: 'No tracks yet',
+      note: 'Every track Sonora finds is listed here, whatever folder it came from. Point it at a folder of music to start.',
+      action: { label: 'Add music folder', onSelect: () => document.dispatchEvent(new CustomEvent('sonora:add')) },
+    }));
+    return () => {};
+  }
   const head = el('header', { class: 'page-head' },
     el('h1', { class: 'page-title', text: 'Songs' }),
     el('p', { class: 'page-sub', text: `${fmtCount(all.length, 'track')} · ${fmtTotal(all.reduce((s, t) => s + (t.duration || 0), 0))}` }));
