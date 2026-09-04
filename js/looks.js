@@ -198,17 +198,20 @@ export function apply(root = document.documentElement) {
   const tint = clamp(s.tint / 100, 0, 1.2);
   const bump = clamp(s.contrast / 100, 0, 1);
   if (light) {
-    /* The light ramp had been drawn inside a nine-point band — every one of
-       the five surfaces between L .905 and L 1.0 — so the chrome measured
-       1.05:1 against the page it frames while the dark scheme, whose ramp
-       spans a fourfold range at the bottom of the curve, measured 1.36:1.
-       Fourteen per cent of the separation, which is the whole of why the
-       light theme reads as one flat sheet with lines drawn on it.
+    /* The light ramp had been drawn inside a nine-point band — all five of
+       its surfaces between L .905 and L 1.0 — where the dark ramp spans a
+       fourfold range at the bottom of the curve, which is a great deal of
+       separation down there. Measured as `--surface-3` against `--bg`, both
+       raw tokens: 1.05:1 light against 1.27:1 dark. That is the whole of why
+       the light theme read as one flat sheet with lines drawn on it.
 
-       The board is now well below the paper and the paper stays white, so
-       a dialog is still the brightest thing on screen and the note above
-       about the sheet pinned to the drafting table is finally true of the
-       pixels rather than only of the ordering. */
+       The board sits well below the paper now and the paper stays white, so
+       a dialog is still the brightest thing on screen and the note in
+       `base.css` about the sheet pinned to the drafting table is true of the
+       pixels rather than only of the ordering. Composited — the sidebar over
+       the page, which is what an eye actually sees — it moves 1.05:1 to
+       1.15:1. Both figures are quoted because they are different questions
+       and the raw one flatters. */
     style.setProperty('--bg-rgb', rgb(h1, 0.20 * sat * tint, 0.930 - bump * 0.045));
     style.setProperty('--bg-2-rgb', rgb(h1, 0.26 * sat * tint, 0.845 - bump * 0.050));
     style.setProperty('--surface-rgb', rgb(h1, 0.08 * sat * tint, 1 - bump * 0.015));

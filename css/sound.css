@@ -231,7 +231,7 @@
   background:
     linear-gradient(to right,
       transparent calc(50% - var(--hair)),
-      rgb(var(--bg-rgb) / .55) calc(50% - var(--hair)) calc(50% + var(--hair)),
+      var(--line-2) calc(50% - var(--hair)) calc(50% + var(--hair)),
       transparent calc(50% + var(--hair))),
     linear-gradient(to bottom, var(--surface-3), var(--surface-2));
 }
@@ -607,4 +607,31 @@
      the curve inside keeps its own width because it is drawn to the SVG's
      viewBox, not to the padding box. */
   .eq-stage { padding-left: 14px; padding-right: 14px; }
+}
+
+/* Firefox drives a vertical range from `writing-mode` too, but its track and
+   thumb are separate pseudo-elements from WebKit's and inherit none of the
+   rules above. Without these the equaliser's slot is a six-pixel stub and the
+   fill — the whole reading this control was drawn for — never appears at all. */
+.fader input[type="range"]::-moz-range-track {
+  width: var(--slot-t);
+  height: 100%;
+  background-image:
+    linear-gradient(to top,
+      transparent calc(var(--lo) * 100%),
+      var(--slot-fill) calc(var(--lo) * 100%) calc(var(--hi) * 100%),
+      transparent calc(var(--hi) * 100%)),
+    linear-gradient(to top,
+      transparent calc(var(--n) * 100% - var(--hair)),
+      var(--line-3) calc(var(--n) * 100% - var(--hair)) calc(var(--n) * 100%),
+      transparent calc(var(--n) * 100%));
+}
+
+.fader input[type="range"]::-moz-range-thumb {
+  background:
+    linear-gradient(to right,
+      transparent calc(50% - var(--hair)),
+      var(--line-2) calc(50% - var(--hair)) calc(50% + var(--hair)),
+      transparent calc(50% + var(--hair))),
+    linear-gradient(to bottom, var(--surface-3), var(--surface-2));
 }

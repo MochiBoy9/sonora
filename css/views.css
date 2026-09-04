@@ -154,14 +154,22 @@
 }
 
 @media (min-width: 1080px) {
-  .album-body {
-    grid-template-columns: minmax(0, 760px);
-    gap: 26px 34px;
-  }
+  .album-body { gap: 26px 34px; }
   .album-body.has-aside {
     grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
   }
 }
+
+/* Bound the row, not the list.
+
+   Capping the container shortened the gap between a title and its duration
+   without closing it — the duration still sat at the right edge of whatever
+   the container was, five hundred pixels from the title on a wide screen —
+   and it left the list ending short of the hero above it and the shelf below.
+   `.trow-main` is the elastic cell, so bounding *that* stops the title block
+   growing and the duration comes to rest beside it, while the row itself
+   still spans the page and lines up with everything else on it. */
+.plain-list .trow-main { max-width: 32em; }
 
 /* ------------------------------------------------------------------ home */
 
@@ -859,7 +867,10 @@
 }
 .rail-nav[hidden] { display: none; }
 .rail-wrap:hover .rail-nav { opacity: 1; transform: none; }
-.rail-nav:hover { background: rgb(var(--accent-rgb) / .2); }
+/* A hover was the loudest accent fill in the application — .2 against .16 for
+   a selected segment and .12 for the current queue row, so the transient thing
+   shouted over every persistent one. */
+.rail-nav:hover { background: var(--hover-fill); }
 .rail-nav.prev { left: calc(var(--gutter) - 17px); }
 .rail-nav.next { right: calc(var(--gutter) - 17px); }
 .rail-nav .ico { width: 16px; height: 16px; }
@@ -981,7 +992,7 @@
   cursor: pointer;
 }
 .settings-select:hover { border-color: var(--line-2); }
-.settings-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.settings-select:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 
 /* Below this the text and the control stop fitting side by side, so the
    control drops under the text instead of squeezing it. */
@@ -1196,7 +1207,7 @@
 /* The fold. A link rather than a button with a box, because it belongs to the
    summary line beside it. */
 .queue-past { flex: none; }
-.qrow:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: -2px; }
+.qrow:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
 .qrow-time { font-family: var(--mono); color: var(--text-3); font-size: calc(11px * var(--scale)); font-variant-numeric: tabular-nums; flex: none; }
 .qrow-remove { opacity: 0; transition: opacity var(--dur-1) linear; }
 .qrow:hover .qrow-remove { opacity: 1; }
@@ -1237,7 +1248,7 @@
 
 .circle-node { cursor: pointer; }
 .circle-node:focus { outline: none; }
-.circle-node:focus-visible .circle-ring { stroke: var(--accent); stroke-width: 2; opacity: 1; }
+.circle-node:focus-visible .circle-ring { stroke: var(--accent-ink); stroke-width: 2; opacity: 1; }
 .circle-node.is-dragging { cursor: grabbing; }
 
 /* The fill walks from blue to cyan with the share, so rank is legible without
@@ -2044,7 +2055,7 @@
    records rather than standing up beside them: a sign in a room is a caption,
    and a decade you walk over is a place. */
 .floor { touch-action: pan-y; cursor: grab; }
-.floor:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 6px; }
+.floor:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 6px; }
 .floor.is-walking { cursor: grabbing; }
 .floor.is-walking .floor-card { pointer-events: none; }
 
@@ -2105,7 +2116,7 @@
 }
 .floor-rail-btn:hover { color: var(--text); }
 .floor-rail-btn.is-on { color: var(--accent-ink); border-right-color: var(--accent-ink); }
-.floor-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.floor-rail-btn:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 
 /* ------------------------------------------ the record that is playing (R1) */
 
@@ -2121,7 +2132,7 @@
 }
 .floor-card.is-playing .floor-text b { color: var(--accent-ink); }
 .floor-card:focus-visible { outline: none; }
-.floor-card:focus-visible .floor-art { outline: 2px solid var(--accent); outline-offset: 3px; }
+.floor-card:focus-visible .floor-art { outline: 2px solid var(--accent-ink); outline-offset: 3px; }
 
 @media (prefers-reduced-motion: reduce) {
   .floor-rail-btn { transition: none; }
@@ -2286,8 +2297,8 @@
       rgb(var(--surface-rgb) / .7));
   transition: border-color var(--dur-2) var(--ease), transform var(--dur-2) var(--ease);
 }
-.genre-tile:hover { border-color: var(--accent-line); transform: translateY(-2px); }
-.genre-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.genre-tile:hover { border-color: var(--hover-line); transform: translateY(-2px); }
+.genre-tile:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 .genre-name {
   color: var(--text);
   font-size: calc(15px * var(--scale));
@@ -2360,7 +2371,7 @@
   text-decoration: none;
   font-size: calc(12.5px * var(--scale));
 }
-.attn-album:hover { border-color: var(--accent-line); }
+.attn-album:hover { border-color: var(--hover-line); }
 .attn-album b { color: var(--text); font-weight: 550; }
 .attn-album span { color: var(--text-3); font-size: calc(11px * var(--scale)); }
 
@@ -2439,7 +2450,7 @@
   text-decoration: none;
   font-size: calc(11.5px * var(--scale));
 }
-.over-chip:hover { border-color: var(--accent-line); color: var(--accent-ink); }
+.over-chip:hover { border-color: var(--hover-line); color: var(--hover-ink); }
 
 
 /* R6: the cover, looked at.
@@ -2724,7 +2735,7 @@ body.lb-open { overflow: hidden; }
   line-height: 1.5;
   transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
 }
-.noticed:hover { color: var(--text); border-left-color: var(--accent-ink); }
+.noticed:hover { color: var(--hover-ink); border-left-color: var(--hover-line); }
 .noticed-mark { color: var(--accent-ink); opacity: .7; align-self: center; }
 .noticed-mark svg { width: 14px; height: 14px; display: block; }
 

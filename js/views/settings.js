@@ -1376,6 +1376,13 @@ function looksPanel() {
           const v = looks.state[spec.id];
           if (document.activeElement !== input) input.value = String(v);
           val.textContent = v + (spec.unit || '');
+          /* The Look sliders are drawn by the same rule as the rack's, so they
+             need the same two numbers written on them — and the same value read
+             out. These were missed when the fader was drawn, which left twelve
+             of them showing an empty slot whatever they were set to. Most run
+             from nothing upwards, so the fill starts at the minimum. */
+          paintRange(input, spec.min);
+          input.setAttribute('aria-valuetext', v + (spec.unit || ''));
         };
       } else if (spec.kind === 'toggle') {
         const btn = el('button', {

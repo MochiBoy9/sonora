@@ -13,6 +13,13 @@ const songSort = { key: 'title', dir: 1 };
 export function viewSongs(host) {
   const columns = ['index', 'art', 'title', 'album', 'dr', 'plays', 'played', 'rating', 'duration'];
   const all = lib.allTracks();
+  const head = el('header', { class: 'page-head' },
+    el('h1', { class: 'page-title', text: 'Songs' }),
+    el('p', { class: 'page-sub', text: all.length
+      ? `${fmtCount(all.length, 'track')} · ${fmtTotal(all.reduce((s, t) => s + (t.duration || 0), 0))}`
+      : fmtCount(0, 'track') }));
+  host.appendChild(head);
+  decode(head.querySelector('.page-title'), 'Songs');
 
   /* An empty library is not a table with no rows in it.
    *
@@ -34,9 +41,6 @@ export function viewSongs(host) {
     }));
     return () => {};
   }
-  const head = el('header', { class: 'page-head' },
-    el('h1', { class: 'page-title', text: 'Songs' }),
-    el('p', { class: 'page-sub', text: `${fmtCount(all.length, 'track')} · ${fmtTotal(all.reduce((s, t) => s + (t.duration || 0), 0))}` }));
   /* D6: the list, narrowed to whatever is typed in the toolbar. Play all and
      Shuffle read the same function, so they act on what is on screen — which
      is the only reading that makes sense once a filter is showing. */
@@ -48,9 +52,7 @@ export function viewSongs(host) {
     el('button', { class: 'btn ghost', html: ico('shuffle') + '<span>Shuffle</span>', onclick: () => shuffleAll(get(), { type: 'all', label: 'All songs' }) }),
     filter.node);
 
-  host.appendChild(head);
   host.appendChild(bar);
-  decode(head.querySelector('.page-title'), 'Songs');
 
   const header = columnHeader(columns, songSort, () => { table.update(); syncRail(); });
   host.appendChild(header);

@@ -483,7 +483,7 @@ body.stage-open .app { filter: brightness(.6) saturate(.7); }
 /* While it is being pulled it follows the pointer with no easing: a control
    that lags the hand dragging it does not feel like a control. */
 .deck.is-cued .deck-arm { transition: none; cursor: grabbing; }
-.deck-arm:focus-visible { outline: var(--hair) solid var(--accent); outline-offset: 5px; border-radius: 50%; }
+.deck-arm:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 5px; border-radius: 50%; }
 
 /* The tube runs down and to the left from the pivot, toward the record. */
 .deck-arm-tube {

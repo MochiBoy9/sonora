@@ -571,13 +571,13 @@ body:has(.playerbar:not(.is-playing)) .eq i { animation-play-state: paused; }
 /* ---------------------------------------------------------------- the fader
 
    Every value you set with a pointer in this application is an
-   `input[type="range"]`, and until now the browser drew all twenty-two of
-   them: the whole equaliser, Tone, Pitch & Speed, Stereo and Dynamics, each
-   one a stock widget with a pale grey track that belongs to no scheme here,
-   sitting inside an interface whose whole premise is that it is drawn rather
-   than assembled. The transport's scrubber and volume have been hand-drawn
-   from the start. The rack — the densest screen in the product, and the one
-   people open on purpose — was the single place the default showed through.
+   `input[type="range"]`, and until now the browser drew all thirty-eight of
+   them: the whole equaliser, Tone, Pitch & Speed, Stereo and Dynamics on the
+   rack, and the fifteen dials plus the crossfade in Settings — every one a
+   stock widget with a pale grey track belonging to no scheme here, sitting
+   inside an interface whose whole premise is that it is drawn rather than
+   assembled. The transport's scrubber and volume have been hand-drawn from
+   the start; these were the two screens where the default still showed.
 
    So: `appearance: none`, and draw it. The element stays a real range input,
    which is the entire point. The arrow keys, Home and End, Page Up and Page
@@ -632,7 +632,7 @@ input[type="range"]::-webkit-slider-runnable-track {
       transparent calc(var(--n) * 100% - var(--hair)),
       var(--line-3) calc(var(--n) * 100% - var(--hair)) calc(var(--n) * 100%),
       transparent calc(var(--n) * 100%));
-  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  box-shadow: inset 0 0 0 var(--hair) var(--line-3);
 }
 input[type="range"]::-moz-range-track {
   height: var(--slot-t);
@@ -641,8 +641,12 @@ input[type="range"]::-moz-range-track {
     linear-gradient(to right,
       transparent calc(var(--lo) * 100%),
       var(--slot-fill) calc(var(--lo) * 100%) calc(var(--hi) * 100%),
-      transparent calc(var(--hi) * 100%));
-  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+      transparent calc(var(--hi) * 100%)),
+    linear-gradient(to right,
+      transparent calc(var(--n) * 100% - var(--hair)),
+      var(--line-3) calc(var(--n) * 100% - var(--hair)) calc(var(--n) * 100%),
+      transparent calc(var(--n) * 100%));
+  box-shadow: inset 0 0 0 var(--hair) var(--line-3);
 }
 
 /* The cap. A machined part, not a bead: chamfered like every other corner in
@@ -657,11 +661,27 @@ input[type="range"]::-webkit-slider-thumb {
   background:
     linear-gradient(to bottom,
       transparent calc(50% - var(--hair)),
-      rgb(var(--bg-rgb) / .55) calc(50% - var(--hair)) calc(50% + var(--hair)),
+      var(--line-2) calc(50% - var(--hair)) calc(50% + var(--hair)),
       transparent calc(50% + var(--hair))),
     linear-gradient(to bottom, var(--surface-3), var(--surface-2));
   box-shadow: inset 0 0 0 var(--hair) var(--line-3), var(--spec), var(--sh-1);
-  clip-path: var(--nick-all-sm);
+  /* The cap gets its own cut, not the small family's.
+   *
+   * `--nick-all-sm` cuts all four corners at `--cut-sm`, which `looks.js`
+   * derives as 56% of the Corner size — 5px at the default and 12px at the
+   * top of the slider. The cap is 11px across. Two 5px cuts leave a 1px
+   * top edge and anything above the default inverts the polygon into a
+   * bow tie, so the machined part this comment promises was a pinched
+   * crystal at rest and broken outright the moment somebody moved the
+   * Corner dial. The small family was sized for boxes of 24px and up.
+   *
+   * Clamped to a quarter of the short side, which holds the chamfer
+   * readable at every setting and still goes square when the Look does. */
+  --cap-cut: min(var(--cut-sm), calc(var(--cap-l) / 4), calc(var(--cap-t) / 4));
+  clip-path: polygon(
+    var(--cap-cut) 0, calc(100% - var(--cap-cut)) 0, 100% var(--cap-cut),
+    100% calc(100% - var(--cap-cut)), calc(100% - var(--cap-cut)) 100%,
+    var(--cap-cut) 100%, 0 calc(100% - var(--cap-cut)), 0 var(--cap-cut));
   border-radius: var(--radius);
   transition: box-shadow var(--dur-1) var(--ease);
 }
@@ -682,7 +702,7 @@ input[type="range"]:hover::-webkit-slider-thumb {
 }
 input[type="range"]:active::-webkit-slider-thumb,
 input[type="range"]:focus-visible::-webkit-slider-thumb {
-  box-shadow: inset 0 0 0 2px var(--accent), var(--spec);
+  box-shadow: inset 0 0 0 2px var(--accent-ink), var(--spec);
 }
 /* The ring stays an `outline` on the element, which is the floor `base.css`
    sets for everything and the only thing that survives here: the cap is cut
@@ -690,10 +710,40 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
    drawn on it away with the corner. A ring painted on the cap would be a ring
    nobody can see — which is the one failure a focus ring cannot have. */
 
-input[type="range"]:disabled { cursor: default; }
-input[type="range"]:disabled::-webkit-slider-runnable-track { background-image: none; }
-input[type="range"]:disabled::-webkit-slider-thumb {
+
+/* Firefox draws its own progress fill from the low end of the range — the
+   "more is more" reading this control exists to replace — and `accent-color`
+   is no longer here to colour it. Blank it and let the track's own gradient,
+   which knows where neutral is, do the drawing. */
+input[type="range"]:hover::-moz-range-thumb {
+  box-shadow: inset 0 0 0 var(--hair) var(--accent-line), var(--spec), var(--sh-1);
+}
+input[type="range"]:active::-moz-range-thumb,
+input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow: inset 0 0 0 2px var(--accent-ink), var(--spec);
+}
+input[type="range"]:disabled::-moz-range-track { filter: saturate(.2) opacity(.55); }
+input[type="range"]:disabled::-moz-range-thumb {
   box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  background: var(--surface-2);
+}
+
+input[type="range"]::-moz-range-progress { background: transparent; }
+
+/* The ring belongs on the drawn slot, not on the pointer target. The element
+   is 22px of paint inside 44px of padding so a finger gets the whole row, and
+   an outline follows the border box — which put a ring 13px clear of a 22px
+   control, reading as a box around empty space. Pulled back onto the slot. */
+input[type="range"]:focus-visible { outline-offset: -11px; }
+.fader input[type="range"]:focus-visible { outline-offset: -11px; }
+
+input[type="range"]:disabled { cursor: default; }
+/* A disabled control is still telling you what the setting is. Blanking the
+   background took the fill and the detent with it, so a disabled Crossfade at
+   six seconds drew a flat slot beside a readout saying 6s. Dimmed, not erased. */
+input[type="range"]:disabled::-webkit-slider-runnable-track { filter: saturate(.2) opacity(.55); }
+input[type="range"]:disabled::-webkit-slider-thumb {
+  box-shadow: inset 0 0 0 var(--hair) var(--line-3);
   background: var(--surface-2);
 }
 
@@ -947,7 +997,7 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   padding: 0 12px;
   border: 0;
   background: rgb(var(--bg-rgb) / .6);
-  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  box-shadow: inset 0 0 0 var(--hair) var(--line-3);
   color: var(--text);
   outline: none;
   transition: box-shadow var(--dur-2) var(--ease);
@@ -1085,7 +1135,7 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   position: relative;
   width: 44px; height: 22px;
   background: rgb(var(--bg-rgb) / .8);
-  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  box-shadow: inset 0 0 0 var(--hair) var(--line-3);
   flex: none;
   transition: box-shadow var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
   clip-path: var(--nick-ne-sm);
@@ -1526,7 +1576,12 @@ input[type="range"]:disabled::-webkit-slider-thumb {
    * quiet is a colour that can be measured where it is written. */
   opacity: 1;
 }
-.az-rail:hover .az-key, .az-rail:focus-within .az-key { color: var(--text); }
+/* `:not(.is-empty)` because a descendant selector outranks both the rules below
+   it — the accent hover on the letter under the pointer never appeared, and
+   every empty letter jumped to full ink at the exact moment somebody was using
+   the rail, which is when the gaps carry the most information. */
+.az-rail:hover .az-key:not(.is-empty),
+.az-rail:focus-within .az-key:not(.is-empty) { color: var(--text); }
 
 .az-key {
   appearance: none;
@@ -1542,14 +1597,11 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   color: var(--text-3);
   transition: color var(--dur-1) linear;
 }
-.az-key:hover { color: var(--accent-ink); }
+.az-rail:hover .az-key:hover { color: var(--accent-ink); }
 .az-key:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 /* Letters the collection has nothing under stay drawn and go quiet: the gaps
    are information, and a rail that changes shape as the library grows is one
    nobody's hand can learn. */
-/* Compounding one opacity on another put these at .119 effective — drawn in
-   the markup and invisible on the screen, which is not the same as quiet. The
-   quiet ink alone is the whole difference now. */
 .az-key.is-empty {
   color: color-mix(in srgb, var(--text-3) 62%, rgb(var(--bg-rgb)));
   cursor: default;
@@ -1724,7 +1776,7 @@ select.input { padding-right: 8px; }
   letter-spacing: .06em;
   color: var(--text-3);
   padding: 2px 7px;
-  box-shadow: inset 0 0 0 var(--hair) var(--line-2);
+  box-shadow: inset 0 0 0 var(--hair) var(--line-3);
 }
 .pal-meta, .pal-kind {
   flex: none;
@@ -1873,7 +1925,7 @@ select.input { padding-right: 8px; }
 /* A4: a keycap you can press to change. */
 .keys-edit { cursor: pointer; border-radius: 4px; }
 .keys-edit:hover kbd { border-color: var(--accent-line); color: var(--accent-ink); }
-.keys-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.keys-edit:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 /* Armed: the next keystroke becomes the binding, so it says so where the
    keycap was rather than somewhere else on the sheet. */
 .keys-edit.is-capturing {

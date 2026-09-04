@@ -103,11 +103,17 @@
   --accent-glow: rgb(var(--accent-rgb) / calc(.40 * var(--glow)));
   --accent-grad: linear-gradient(115deg, rgb(var(--accent-rgb)), rgb(var(--accent-2-rgb)));
 
-  /* The fader slot: a recess cut into the panel, and the light sitting in it.
-     Both flip with the scheme, because a channel reads as darker than its
-     panel on a dark ground *and* on a light one — which is the one thing a
-     single tinted hairline cannot express. */
-  --slot:      rgb(0 0 0 / .42);
+  /* The fader slot, and the light sitting in it.
+   *
+   * This first said the channel reads as darker than its panel on a dark
+   * ground and on a light one. Measured, that was only true of the light
+   * scheme: black at 42% over a near-black panel is 1.05:1, a recess
+   * nobody can see, and the rim was carrying the control on its own. On
+   * dark the slot is now cut the way `--surface-hi` is — light taken *out*
+   * of the ground rather than shadow laid over it — and the rim is
+   * `--line-3` in both schemes, because the edge is what identifies the
+   * control and the edge is the part that has to clear 3:1. */
+  --slot:      rgb(120 200 255 / .10);
   --slot-fill: rgb(var(--accent-rgb) / .9);
 
   /* Both of these are *ink* as well as fill — `.btn.danger` sets `--danger` as
@@ -254,11 +260,11 @@
 /* Not "the dark theme inverted": a drafting-table light theme — ice white,
    ink-blue hairlines, the same cyan doing the same job. */
 :root[data-theme="light"] {
-  --bg-rgb:        238 243 248;
-  --bg-2-rgb:      228 236 244;
+  --bg-rgb:        234 239 241;
+  --bg-2-rgb:      205 222 226;
   --surface-rgb:   255 255 255;
-  --surface-2-rgb: 243 247 251;
-  --surface-3-rgb: 229 237 245;
+  --surface-2-rgb: 244 246 247;
+  --surface-3-rgb: 210 224 227;
 
   --surface-hi: rgb(10 60 100 / .07);
   /* Ink, and enough of it to be a line.
@@ -313,11 +319,11 @@
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg-rgb:        238 243 248;
-    --bg-2-rgb:      228 236 244;
+    --bg-rgb:        234 239 241;
+    --bg-2-rgb:      205 222 226;
     --surface-rgb:   255 255 255;
-    --surface-2-rgb: 243 247 251;
-    --surface-3-rgb: 229 237 245;
+    --surface-2-rgb: 244 246 247;
+    --surface-3-rgb: 210 224 227;
 
     --surface-hi: rgb(10 60 100 / .07);
     /* Ink, and enough of it to be a line.
